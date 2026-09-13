@@ -1,0 +1,9 @@
+services:
+  pixelpilot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_PATH: /app/data/pixelpilot.sqlite3
+    volumes:
+      - ./data:/app/data

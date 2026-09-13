@@ -1,0 +1,195 @@
+from __future__ import annotations
+
+from html import escape
+
+from aiogram import Router
+from aiogram.types import CallbackQuery
+
+from pixelpilot.bot.keyboards import destroy_confirm_keyboard, main_menu, offer_confirm_keyboard, offers_keyboard
+from pixelpilot.preflight import format_preflight, run_external_preflight, run_local_preflight
+from pixelpilot.services.orchestrator import Orchestrator
+
+router = Router(name="servers")
+_orchestrator: Orchestrator | None = None
+
+
+def configure(orchestrator: Orchestrator) -> None:
+    global _orchestrator
+    _orchestrator = orchestrator
+
+
+def orch() -> Orchestrator:
+    if _orchestrator is None:
+        raise RuntimeError("Server router not configured")
+    return _orchestrator
+
+
+@router.callback_query(lambda q: q.data == "servers:preflight")
+async def preflight(callback: CallbackQuery) -> None:
+    await callback.answer()
+    checks = run_local_preflight(orch().settings)
+    if all(item.ok for item in checks):
+        checks.extend(await run_external_preflight(orch().settings))
+    text = format_preflight(checks)
+    if all(item.ok for item in checks):
+        try:
+            offers = await orch().offers()
+            text += f"\n\n✅ Vast API والبحث يعملان — {len(offers)} عرض مطابق حاليًا."
+        except Exception as exc:
+            text += f"\n\n❌ فشل اختبار Vast API: <code>{escape(str(exc))}</code>"
+    await callback.message.edit_text(text, reply_markup=main_menu())
+
+
+@router.callback_query(lambda q: q.data == "servers:search")
+async def search(callback: CallbackQuery) -> None:
+    await callback.answer("جاري البحث...")
+    await callback.message.edit_text("🔎 أبحث عن أفضل عروض Vast المناسبة...")
+    try:
+        offers = await orch().offers()
+    except Exception as exc:
+        await callback.message.edit_text(f"❌ فشل البحث:\n<code>{escape(str(exc))}</code>", reply_markup=main_menu())
+        return
+    if not offers:
+        await callback.message.edit_text(
+            "لا توجد عروض مطابقة حاليًا. جرّب لاحقًا أو ارفع الحد الأقصى للسعر من الإعدادات.",
+            reply_markup=main_menu(),
+        )
+        return
+    await callback.message.edit_text(
+        "🧾 <b>العروض المطابقة</b>\n"
+        "مرتبة من الأرخص مع مراعاة حد VRAM والموثوقية وسرعة الشبكة. اختر عرضًا لمراجعة التفاصيل:",
+        reply_markup=offers_keyboard(offers),
+    )
+
+
+@router.callback_query(lambda q: q.data and q.data.startswith("servers:offer:"))
+async def offer_details(callback: CallbackQuery) -> None:
+    offer_id = int(callback.data.rsplit(":", 1)[1])
+    offer = await orch().cached_offer(offer_id)
+    await callback.answer()
+    if offer is None:
+        await callback.message.edit_text("العرض لم يعد موجودًا في آخر نتائج البحث.", reply_markup=main_menu())
+        return
+    lines = [
+        "🖥 <b>تفاصيل العرض</b>",
+        f"GPU: <b>{escape(offer.gpu_name)}</b>",
+        f"VRAM: <b>{offer.gpu_ram_gb:.0f} GB</b>",
+        f"السعر: <b>${offer.price_per_hour:.3f}/ساعة</b>",
+        f"الموثوقية: <b>{'?' if offer.reliability is None else f'{offer.reliability * 100:.1f}%'} </b>",
+    ]
+    if offer.inet_down_mbps:
+        lines.append(f"سرعة التنزيل: <b>{offer.inet_down_mbps:.0f} Mbps</b>")
+    if offer.location:
+        lines.append(f"الموقع: <b>{escape(offer.location)}</b>")
+    lines.extend([
+        "",
+        "⚠️ عند الضغط على استئجار يبدأ احتساب Vast، ثم يقوم PixelPilot بالتجهيز تلقائيًا.",
+        "إذا فشل التجهيز فالإعداد الافتراضي يحذف الـInstance تلقائيًا لمنع استمرار التكلفة.",
+    ])
+    await callback.message.edit_text("\n".join(lines), reply_markup=offer_confirm_keyboard(offer_id))
+
+
+@router.callback_query(lambda q: q.data and q.data.startswith("servers:rent:"))
+async def rent(callback: CallbackQuery) -> None:
+    offer_id = int(callback.data.rsplit(":", 1)[1])
+    await callback.answer("بدء الاستئجار")
+    await callback.message.edit_text("🚀 جاري إنشاء السيرفر...")
+
+    async def progress(text: str) -> None:
+        try:
+            await callback.message.edit_text(f"⏳ <b>تجهيز PixelPilot</b>\n\n{text}")
+        except Exception:
+            pass
+
+    try:
+        result = await orch().rent_and_prepare(offer_id, progress=progress)
+    except Exception as exc:
+        await callback.message.edit_text(
+            f"❌ فشل الاستئجار/التجهيز:\n<code>{escape(str(exc))}</code>\n\n"
+            "إذا كان الحذف التلقائي مفعّلًا فتمت محاولة تنظيف السيرفر لمنع استمرار التكلفة.",
+            reply_markup=main_menu(),
+        )
+        return
+    await callback.message.edit_text(
+        f"✅ <b>PixelPilot جاهز بالكامل</b>\n"
+        f"Instance: <code>{result['instance_id']}</code>\n\n"
+        "تقدر الآن تولّد الصور من البوت.",
+        reply_markup=main_menu(),
+    )
+
+
+@router.callback_query(lambda q: q.data == "servers:destroy_confirm")
+async def destroy_confirm(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.edit_text(
+        "⚠️ الحذف نهائي وسيحذف بيانات الـInstance بالكامل، بما فيها الصور التي لم تحفظها خارج السيرفر.\nهل أنت متأكد؟",
+        reply_markup=destroy_confirm_keyboard(),
+    )
+
+
+@router.callback_query(lambda q: q.data == "servers:destroy")
+async def destroy(callback: CallbackQuery) -> None:
+    await callback.answer("جاري الحذف...")
+    try:
+        destroyed = await orch().destroy_current()
+    except Exception as exc:
+        await callback.message.edit_text(f"❌ فشل الحذف:\n<code>{escape(str(exc))}</code>", reply_markup=main_menu())
+        return
+    text = "🗑 تم حذف السيرفر نهائيًا." if destroyed else "لا يوجد سيرفر حالي محفوظ."
+    await callback.message.edit_text(text, reply_markup=main_menu())
+
+
+@router.callback_query(lambda q: q.data == "servers:stop")
+async def stop(callback: CallbackQuery) -> None:
+    await callback.answer("جاري الإيقاف...")
+    try:
+        stopped = await orch().stop_current()
+    except Exception as exc:
+        await callback.message.edit_text(f"❌ فشل الإيقاف:\n<code>{escape(str(exc))}</code>", reply_markup=main_menu())
+        return
+    text = "⏹ تم إيقاف السيرفر. تذكير: رسوم التخزين في Vast تستمر أثناء التوقف." if stopped else "لا يوجد سيرفر حالي."
+    await callback.message.edit_text(text, reply_markup=main_menu())
+
+
+@router.callback_query(lambda q: q.data == "servers:start")
+async def start_instance(callback: CallbackQuery) -> None:
+    await callback.answer("جاري التشغيل...")
+    await callback.message.edit_text("▶️ جاري تشغيل السيرفر والتحقق من PixelPilot...")
+
+    async def progress(text: str) -> None:
+        try:
+            await callback.message.edit_text(f"⏳ <b>إعادة التشغيل</b>\n\n{text}")
+        except Exception:
+            pass
+
+    try:
+        started = await orch().start_current(progress=progress)
+    except Exception as exc:
+        await callback.message.edit_text(f"❌ فشل التشغيل:\n<code>{escape(str(exc))}</code>", reply_markup=main_menu())
+        return
+    text = "✅ السيرفر جاهز للتوليد." if started else "لا يوجد سيرفر حالي."
+    await callback.message.edit_text(text, reply_markup=main_menu())
+
+
+@router.callback_query(lambda q: q.data == "servers:status")
+async def status(callback: CallbackQuery) -> None:
+    await callback.answer()
+    try:
+        state = await orch().current_state(probe_worker=True)
+    except Exception as exc:
+        await callback.message.edit_text(f"❌ تعذر قراءة الحالة:\n<code>{escape(str(exc))}</code>", reply_markup=main_menu())
+        return
+    if not state.get("instance_id"):
+        await callback.message.edit_text("📊 لا يوجد سيرفر حالي.\nالحالة: <b>NONE</b>", reply_markup=main_menu())
+        return
+    lines = [
+        f"📊 Instance: <code>{state['instance_id']}</code>",
+        f"PixelPilot: <b>{escape(str(state.get('phase')))}</b>",
+        f"Vast: <b>{escape(str(state.get('vast_status', '?')))}</b>",
+    ]
+    offer = state.get("offer")
+    if isinstance(offer, dict) and offer.get("price_per_hour") is not None:
+        lines.append(f"السعر المتعاقد: <b>${float(offer['price_per_hour']):.3f}/ساعة</b>")
+    if "worker_ready" in state:
+        lines.append(f"Worker: <b>{'READY ✅' if state['worker_ready'] else 'NOT READY ⏳'}</b>")
+    await callback.message.edit_text("\n".join(lines), reply_markup=main_menu())
