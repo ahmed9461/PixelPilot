@@ -5,6 +5,7 @@ from html import escape
 from aiogram import Router
 from aiogram.types import CallbackQuery
 
+from pixelpilot.bot.callbacks import safe_callback_answer
 from pixelpilot.bot.keyboards import destroy_confirm_keyboard, main_menu, offer_confirm_keyboard, offers_keyboard
 from pixelpilot.preflight import format_preflight, run_external_preflight, run_local_preflight
 from pixelpilot.services.orchestrator import Orchestrator
@@ -26,7 +27,7 @@ def orch() -> Orchestrator:
 
 @router.callback_query(lambda q: q.data == "servers:preflight")
 async def preflight(callback: CallbackQuery) -> None:
-    await callback.answer()
+    await safe_callback_answer(callback)
     checks = run_local_preflight(orch().settings)
     if all(item.ok for item in checks):
         checks.extend(await run_external_preflight(orch().settings))
@@ -42,7 +43,7 @@ async def preflight(callback: CallbackQuery) -> None:
 
 @router.callback_query(lambda q: q.data == "servers:search")
 async def search(callback: CallbackQuery) -> None:
-    await callback.answer("جاري البحث...")
+    await safe_callback_answer(callback, "جاري البحث...")
     await callback.message.edit_text("🔎 أبحث عن أفضل عروض Vast المناسبة...")
     try:
         offers = await orch().offers()
@@ -66,7 +67,7 @@ async def search(callback: CallbackQuery) -> None:
 async def offer_details(callback: CallbackQuery) -> None:
     offer_id = int(callback.data.rsplit(":", 1)[1])
     offer = await orch().cached_offer(offer_id)
-    await callback.answer()
+    await safe_callback_answer(callback)
     if offer is None:
         await callback.message.edit_text("العرض لم يعد موجودًا في آخر نتائج البحث.", reply_markup=main_menu())
         return
@@ -92,7 +93,7 @@ async def offer_details(callback: CallbackQuery) -> None:
 @router.callback_query(lambda q: q.data and q.data.startswith("servers:rent:"))
 async def rent(callback: CallbackQuery) -> None:
     offer_id = int(callback.data.rsplit(":", 1)[1])
-    await callback.answer("بدء الاستئجار")
+    await safe_callback_answer(callback, "بدء الاستئجار")
     await callback.message.edit_text("🚀 جاري إنشاء السيرفر...")
 
     async def progress(text: str) -> None:
@@ -120,7 +121,7 @@ async def rent(callback: CallbackQuery) -> None:
 
 @router.callback_query(lambda q: q.data == "servers:destroy_confirm")
 async def destroy_confirm(callback: CallbackQuery) -> None:
-    await callback.answer()
+    await safe_callback_answer(callback)
     await callback.message.edit_text(
         "⚠️ الحذف نهائي وسيحذف بيانات الـInstance بالكامل، بما فيها الصور التي لم تحفظها خارج السيرفر.\nهل أنت متأكد؟",
         reply_markup=destroy_confirm_keyboard(),
@@ -129,7 +130,7 @@ async def destroy_confirm(callback: CallbackQuery) -> None:
 
 @router.callback_query(lambda q: q.data == "servers:destroy")
 async def destroy(callback: CallbackQuery) -> None:
-    await callback.answer("جاري الحذف...")
+    await safe_callback_answer(callback, "جاري الحذف...")
     try:
         destroyed = await orch().destroy_current()
     except Exception as exc:
@@ -141,7 +142,7 @@ async def destroy(callback: CallbackQuery) -> None:
 
 @router.callback_query(lambda q: q.data == "servers:stop")
 async def stop(callback: CallbackQuery) -> None:
-    await callback.answer("جاري الإيقاف...")
+    await safe_callback_answer(callback, "جاري الإيقاف...")
     try:
         stopped = await orch().stop_current()
     except Exception as exc:
@@ -153,7 +154,7 @@ async def stop(callback: CallbackQuery) -> None:
 
 @router.callback_query(lambda q: q.data == "servers:start")
 async def start_instance(callback: CallbackQuery) -> None:
-    await callback.answer("جاري التشغيل...")
+    await safe_callback_answer(callback, "جاري التشغيل...")
     await callback.message.edit_text("▶️ جاري تشغيل السيرفر والتحقق من PixelPilot...")
 
     async def progress(text: str) -> None:
@@ -173,7 +174,7 @@ async def start_instance(callback: CallbackQuery) -> None:
 
 @router.callback_query(lambda q: q.data == "servers:status")
 async def status(callback: CallbackQuery) -> None:
-    await callback.answer()
+    await safe_callback_answer(callback)
     try:
         state = await orch().current_state(probe_worker=True)
     except Exception as exc:
