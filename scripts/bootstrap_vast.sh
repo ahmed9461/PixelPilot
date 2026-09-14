@@ -9,12 +9,17 @@ WORKER_PORT="${PIXELPILOT_WORKER_PORT:-18190}"
 COMFYUI_REF="${COMFYUI_REF:-v0.35.0}"
 LOG_FILE="${LOG_FILE:-$WORKSPACE/pixelpilot-bootstrap.log}"
 COMFY_LOG="${COMFY_LOG:-$WORKSPACE/comfyui.log}"
-VENV_DIR="${PIXELPILOT_VENV_DIR:-$WORKSPACE/pixelpilot-venv}"
 
 mkdir -p "$WORKSPACE"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
-trap 'rc=$?; echo "[PixelPilot] ERROR: bootstrap failed at line $LINENO (exit=$rc)" >&2; exit $rc' ERR
+on_error() {
+  local exit_code=$?
+  local line_no=${BASH_LINENO[0]:-unknown}
+  echo "[PixelPilot] ERROR: bootstrap failed at line ${line_no} (exit=${exit_code})" >&2
+  exit "$exit_code"
+}
+trap on_error ERR
 
 echo "[PixelPilot] bootstrap started: $(date -Is)"
 echo "[PixelPilot] repo=$PIXELPILOT_ROOT comfy=$COMFY_DIR ref=$COMFYUI_REF"
@@ -24,65 +29,65 @@ if [[ ! -f "$PIXELPILOT_ROOT/pyproject.toml" ]]; then
   exit 20
 fi
 
-# Prefer an existing Vast/conda virtual environment when the image provides one.
-# If the image exposes only distro-managed Python, create our own venv so pip never
-# attempts to modify/uninstall Debian/Ubuntu-owned packages.
+# A manual rerun over SSH/tmux may not inherit the container environment that
+# Vast injected at creation time. Recover only the PixelPilot runtime variables
+# from PID 1 without printing their values. This keeps HF/Worker tokens out of
+# logs while allowing an in-place repair on the same paid instance.
+if [[ -r /proc/1/environ ]]; then
+  while IFS= read -r -d '' entry; do
+    key="${entry%%=*}"
+    case "$key" in
+      HF_TOKEN|PIXELPILOT_WORKER_TOKEN|OPEN_BUTTON_TOKEN|OPEN_BUTTON_PORT|PORTAL_CONFIG|PIXELPILOT_TRUST_PROXY|PIXELPILOT_WORKER_PORT|COMFY_PORT|COMFY_URL|COMFYUI_REF|GENERATION_MAX_BATCH|GENERATION_MAX_STEPS|DATA_DIRECTORY|PIXELPILOT_REPO_URL|PIXELPILOT_REPO_REF)
+        if [[ -z "${!key:-}" ]]; then
+          export "$entry"
+        fi
+        ;;
+    esac
+  done < /proc/1/environ
+fi
+
+if [[ -z "${HF_TOKEN:-}" ]]; then
+  echo "[PixelPilot] ERROR: HF_TOKEN is unavailable in shell and PID 1 environment" >&2
+  exit 23
+fi
+if [[ -z "${PIXELPILOT_WORKER_TOKEN:-}" ]]; then
+  echo "[PixelPilot] ERROR: PIXELPILOT_WORKER_TOKEN is unavailable in shell and PID 1 environment" >&2
+  exit 24
+fi
+echo "[PixelPilot] runtime secrets recovered (values hidden)"
+
+# Vast images do not all expose the interpreter under the same command. Prefer
+# their managed Python environment, and only fall back to system Python through
+# an isolated venv so Debian-owned packages are never modified in place.
 PYTHON_BIN="${PYTHON_BIN:-}"
 if [[ -z "$PYTHON_BIN" ]]; then
-  for candidate in /venv/main/bin/python /opt/conda/bin/python python; do
-    if [[ "$candidate" == */* ]]; then
-      resolved="$candidate"
-    else
-      resolved="$(command -v "$candidate" 2>/dev/null || true)"
-    fi
-    if [[ -n "$resolved" && -x "$resolved" ]] && "$resolved" -m pip --version >/dev/null 2>&1; then
-      PYTHON_BIN="$resolved"
+  for candidate in /venv/main/bin/python /opt/conda/bin/python python python3 /usr/bin/python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      PYTHON_BIN="$(command -v "$candidate")"
       break
     fi
   done
 fi
+if [[ -z "$PYTHON_BIN" || ! -x "$PYTHON_BIN" ]]; then
+  echo "[PixelPilot] ERROR: no Python interpreter found in Vast image" >&2
+  exit 21
+fi
 
-if [[ -z "$PYTHON_BIN" ]]; then
-  BASE_PYTHON="$(command -v python3 2>/dev/null || true)"
-  if [[ -z "$BASE_PYTHON" && -x /usr/bin/python3 ]]; then
-    BASE_PYTHON=/usr/bin/python3
-  fi
-  if [[ -z "$BASE_PYTHON" || ! -x "$BASE_PYTHON" ]]; then
-    echo "[PixelPilot] ERROR: no usable Python interpreter found in Vast image" >&2
-    exit 21
-  fi
-
+if [[ "$PYTHON_BIN" == "/usr/bin/python3" || "$PYTHON_BIN" == "/usr/bin/python" ]]; then
+  SYSTEM_PYTHON="$PYTHON_BIN"
+  VENV_DIR="$WORKSPACE/pixelpilot-venv"
   if [[ ! -x "$VENV_DIR/bin/python" ]]; then
     echo "[PixelPilot] creating isolated venv at $VENV_DIR"
-    rm -rf "$VENV_DIR"
-    if ! "$BASE_PYTHON" -m venv "$VENV_DIR"; then
-      if command -v apt-get >/dev/null 2>&1; then
-        echo "[PixelPilot] python venv module missing; installing python3-venv"
-        export DEBIAN_FRONTEND=noninteractive
-        apt-get update
-        apt-get install -y python3-venv
-        rm -rf "$VENV_DIR"
-        "$BASE_PYTHON" -m venv "$VENV_DIR"
-      else
-        echo "[PixelPilot] ERROR: cannot create Python venv and apt-get is unavailable" >&2
-        exit 22
-      fi
-    fi
+    "$SYSTEM_PYTHON" -m venv "$VENV_DIR"
   fi
   PYTHON_BIN="$VENV_DIR/bin/python"
 fi
 
-if [[ ! -x "$PYTHON_BIN" ]]; then
-  echo "[PixelPilot] ERROR: selected Python is not executable: $PYTHON_BIN" >&2
-  exit 23
-fi
+echo "[PixelPilot] python=$PYTHON_BIN ($("$PYTHON_BIN" --version 2>&1))"
 if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
   echo "[PixelPilot] ERROR: pip is unavailable for $PYTHON_BIN" >&2
-  exit 24
+  exit 22
 fi
-
-echo "[PixelPilot] python=$PYTHON_BIN ($("$PYTHON_BIN" --version 2>&1))"
-echo "[PixelPilot] pip=$($PYTHON_BIN -m pip --version)"
 
 if [[ ! -d "$COMFY_DIR/.git" ]]; then
   echo "[PixelPilot] cloning ComfyUI..."
@@ -93,7 +98,7 @@ echo "[PixelPilot] checking out ComfyUI ref $COMFYUI_REF"
 git -C "$COMFY_DIR" fetch --depth 1 origin "$COMFYUI_REF"
 git -C "$COMFY_DIR" checkout --detach FETCH_HEAD
 
-"$PYTHON_BIN" -m pip install -U pip setuptools wheel
+"$PYTHON_BIN" -m pip install -U pip
 "$PYTHON_BIN" -m pip install -r "$COMFY_DIR/requirements.txt"
 "$PYTHON_BIN" -m pip install -e "$PIXELPILOT_ROOT" hf_xet
 
