@@ -21,6 +21,29 @@ if [[ ! -f "$PIXELPILOT_ROOT/pyproject.toml" ]]; then
   exit 20
 fi
 
+# Vast images do not all expose the interpreter under the same command. Some
+# Ubuntu/PyTorch images provide only `python3`, while others expose a venv or
+# conda interpreter. Resolve it once and use the exact executable everywhere.
+PYTHON_BIN="${PYTHON_BIN:-}"
+if [[ -z "$PYTHON_BIN" ]]; then
+  for candidate in python3 python /venv/main/bin/python /opt/conda/bin/python /usr/bin/python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      PYTHON_BIN="$(command -v "$candidate")"
+      break
+    fi
+  done
+fi
+if [[ -z "$PYTHON_BIN" || ! -x "$PYTHON_BIN" ]]; then
+  echo "[PixelPilot] ERROR: no Python interpreter found in Vast image" >&2
+  exit 21
+fi
+
+echo "[PixelPilot] python=$PYTHON_BIN ($("$PYTHON_BIN" --version 2>&1))"
+if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
+  echo "[PixelPilot] ERROR: pip is unavailable for $PYTHON_BIN" >&2
+  exit 22
+fi
+
 if [[ ! -d "$COMFY_DIR/.git" ]]; then
   echo "[PixelPilot] cloning ComfyUI..."
   git clone --filter=blob:none https://github.com/Comfy-Org/ComfyUI.git "$COMFY_DIR"
@@ -30,9 +53,9 @@ echo "[PixelPilot] checking out ComfyUI ref $COMFYUI_REF"
 git -C "$COMFY_DIR" fetch --depth 1 origin "$COMFYUI_REF"
 git -C "$COMFY_DIR" checkout --detach FETCH_HEAD
 
-python -m pip install -U pip
-python -m pip install -r "$COMFY_DIR/requirements.txt"
-python -m pip install -e "$PIXELPILOT_ROOT" hf_xet
+"$PYTHON_BIN" -m pip install -U pip
+"$PYTHON_BIN" -m pip install -r "$COMFY_DIR/requirements.txt"
+"$PYTHON_BIN" -m pip install -e "$PIXELPILOT_ROOT" hf_xet
 
 mkdir -p \
   "$COMFY_DIR/models/diffusion_models" \
@@ -42,11 +65,11 @@ mkdir -p \
 
 export PIXELPILOT_ROOT COMFY_DIR
 export WORKFLOW_PATH="${WORKFLOW_PATH:-$PIXELPILOT_ROOT/resources/workflows/flux_krea_api.json}"
-python "$PIXELPILOT_ROOT/scripts/download_models.py"
+"$PYTHON_BIN" "$PIXELPILOT_ROOT/scripts/download_models.py"
 
 echo "[PixelPilot] starting ComfyUI on localhost:$COMFY_PORT"
 cd "$COMFY_DIR"
-python main.py --listen 127.0.0.1 --port "$COMFY_PORT" >"$COMFY_LOG" 2>&1 &
+"$PYTHON_BIN" main.py --listen 127.0.0.1 --port "$COMFY_PORT" >"$COMFY_LOG" 2>&1 &
 COMFY_PID=$!
 
 cleanup() {
@@ -56,7 +79,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-python - <<'PY'
+"$PYTHON_BIN" - <<'PY'
 import os, sys, time, urllib.request
 port = int(os.environ.get('COMFY_PORT', '8188'))
 timeout = int(os.environ.get('COMFY_READY_TIMEOUT_SECONDS', '1200'))
@@ -76,4 +99,4 @@ PY
 
 echo "[PixelPilot] starting Worker on localhost:$WORKER_PORT"
 cd "$PIXELPILOT_ROOT"
-exec python -m uvicorn pixelpilot.worker:app --host 127.0.0.1 --port "$WORKER_PORT" --log-level info
+exec "$PYTHON_BIN" -m uvicorn pixelpilot.worker:app --host 127.0.0.1 --port "$WORKER_PORT" --log-level info
