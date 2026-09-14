@@ -23,11 +23,14 @@ def build_offer_query(
     min_direct_ports: int = 2,
     min_inet_down_mbps: float = 0,
 ) -> str:
-    min_ram_mb = int(min_gpu_ram_gb * 1000)
+    # Vast's CLI/SDK query language expresses gpu_ram in GiB-like user units
+    # (for example: gpu_ram>=48), even though raw offer payloads expose
+    # gpu_ram in MB. Do not multiply the query threshold by 1000 here.
+    min_ram_gb = int(min_gpu_ram_gb)
     terms = [
         "num_gpus=1",
         "rentable=true",
-        f"gpu_ram>={min_ram_mb}",
+        f"gpu_ram>={min_ram_gb}",
         f"reliability>={min_reliability:.4f}",
         f"dph_total<={max_price_usd_hour:.4f}",
         f"disk_space>={int(disk_gb)}",
