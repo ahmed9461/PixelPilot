@@ -85,7 +85,7 @@ async def offer_details(callback: CallbackQuery) -> None:
     lines.extend([
         "",
         "⚠️ عند الضغط على استئجار يبدأ احتساب Vast، ثم يقوم PixelPilot بالتجهيز تلقائيًا.",
-        "إذا فشل التجهيز فالإعداد الافتراضي يحذف الـInstance تلقائيًا لمنع استمرار التكلفة.",
+        "🖐 PixelPilot لن يحذف الـInstance تلقائيًا عند فشل أو انتهاء مهلة التجهيز؛ الحذف بيدك من زر حذف السيرفر.",
     ])
     await callback.message.edit_text("\n".join(lines), reply_markup=offer_confirm_keyboard(offer_id))
 
@@ -107,7 +107,7 @@ async def rent(callback: CallbackQuery) -> None:
     except Exception as exc:
         await callback.message.edit_text(
             f"❌ فشل الاستئجار/التجهيز:\n<code>{escape(str(exc))}</code>\n\n"
-            "إذا كان الحذف التلقائي مفعّلًا فتمت محاولة تنظيف السيرفر لمنع استمرار التكلفة.",
+            "الـInstance لن يُحذف تلقائيًا. راجع حالته ثم احذفه يدويًا عندما تريد إيقاف التكلفة.",
             reply_markup=main_menu(),
         )
         return
