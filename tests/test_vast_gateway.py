@@ -11,7 +11,8 @@ def test_build_query_contains_cost_ram_and_safety_filters():
         min_direct_ports=2,
         min_inet_down_mbps=100,
     )
-    assert "gpu_ram>=48000" in q
+    assert "gpu_ram>=48" in q
+    assert "gpu_ram>=48000" not in q
     assert "reliability>=0.9800" in q
     assert "dph_total<=1.5000" in q
     assert "num_gpus=1" in q
