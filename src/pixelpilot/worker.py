@@ -16,7 +16,6 @@ from pixelpilot.workflow import build_flux_krea_workflow, load_workflow
 app = FastAPI(title="PixelPilot Worker", version="0.3.0")
 
 WORKER_TOKEN = os.environ.get("PIXELPILOT_WORKER_TOKEN", "")
-TRUST_PROXY = os.environ.get("PIXELPILOT_TRUST_PROXY", "0").lower() in {"1", "true", "yes"}
 COMFY_URL = os.environ.get("COMFY_URL", "http://127.0.0.1:8188")
 REPO_ROOT = Path(os.environ.get("PIXELPILOT_ROOT", Path(__file__).resolve().parents[2]))
 WORKFLOW_PATH = Path(os.environ.get("WORKFLOW_PATH", REPO_ROOT / "resources/workflows/flux_krea_api.json"))
@@ -66,10 +65,9 @@ class GenerateRequest(BaseModel):
 
 
 def require_token(authorization: Annotated[str | None, Header()] = None) -> None:
-    # When deployed behind Vast base-image Caddy, Caddy authenticates OPEN_BUTTON_TOKEN
-    # and this worker binds only to localhost. Direct deployments keep this extra check.
-    if TRUST_PROXY:
-        return
+    # The Worker may be exposed directly through a Vast mapped TCP port, so it
+    # must authenticate every request itself. Never bypass this check merely
+    # because a proxy-related environment variable is present.
     if not WORKER_TOKEN:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Worker token not configured")
     expected = f"Bearer {WORKER_TOKEN}"
