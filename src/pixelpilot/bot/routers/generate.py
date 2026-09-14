@@ -9,6 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
+from pixelpilot.bot.callbacks import safe_callback_answer
 from pixelpilot.bot.keyboards import (
     count_keyboard,
     generation_image_keyboard,
@@ -63,7 +64,7 @@ def apply_preset(prompt: str, preset: str) -> str:
 
 @router.callback_query(lambda q: q.data == "generate:start")
 async def generate_start(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer()
+    await safe_callback_answer(callback)
     phase = await orch().db.get("instance.phase", InstancePhase.NONE.value)
     if phase != InstancePhase.READY.value:
         await callback.message.edit_text(
@@ -81,10 +82,10 @@ async def generate_start(callback: CallbackQuery, state: FSMContext) -> None:
 async def choose_preset(callback: CallbackQuery, state: FSMContext) -> None:
     preset = callback.data.rsplit(":", 1)[1]
     if preset not in PRESET_SUFFIXES:
-        await callback.answer("اختيار غير معروف", show_alert=True)
+        await safe_callback_answer(callback, "اختيار غير معروف", show_alert=True)
         return
     await state.update_data(preset=preset)
-    await callback.answer()
+    await safe_callback_answer(callback)
     await callback.message.edit_text("📐 اختر أبعاد الصورة:", reply_markup=ratio_keyboard())
 
 
@@ -92,10 +93,10 @@ async def choose_preset(callback: CallbackQuery, state: FSMContext) -> None:
 async def choose_ratio(callback: CallbackQuery, state: FSMContext) -> None:
     ratio = callback.data.rsplit(":", 1)[1]
     if ratio not in RATIOS:
-        await callback.answer("مقاس غير معروف", show_alert=True)
+        await safe_callback_answer(callback, "مقاس غير معروف", show_alert=True)
         return
     await state.update_data(ratio=ratio)
-    await callback.answer()
+    await safe_callback_answer(callback)
     await callback.message.edit_text(
         "🖼 كم صورة تريد في هذه الدفعة؟",
         reply_markup=count_keyboard(orch().settings.generation_max_batch),
@@ -106,11 +107,11 @@ async def choose_ratio(callback: CallbackQuery, state: FSMContext) -> None:
 async def choose_count(callback: CallbackQuery, state: FSMContext) -> None:
     count = int(callback.data.rsplit(":", 1)[1])
     if count < 1 or count > orch().settings.generation_max_batch:
-        await callback.answer("عدد غير مسموح", show_alert=True)
+        await safe_callback_answer(callback, "عدد غير مسموح", show_alert=True)
         return
     await state.update_data(count=count)
     await state.set_state(GenerateStates.waiting_prompt)
-    await callback.answer()
+    await safe_callback_answer(callback)
     await callback.message.edit_text(
         "✍️ أرسل وصف الصورة الآن.\n\n"
         "اكتب ما تريد بشكل طبيعي؛ PixelPilot سيضيف تحسينات خفيفة مناسبة للواقعية حسب النمط الذي اخترته."
@@ -163,14 +164,14 @@ async def receive_prompt(message: Message, state: FSMContext) -> None:
 @router.callback_query(lambda q: q.data == "generate:cancel")
 async def cancel(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await callback.answer("تم الإلغاء")
+    await safe_callback_answer(callback, "تم الإلغاء")
     await callback.message.edit_text("تم إلغاء إنشاء الصورة.", reply_markup=main_menu())
 
 
 @router.callback_query(lambda q: q.data and q.data.startswith("generate:original:"))
 async def original(callback: CallbackQuery) -> None:
     _, _, generation_id, image_index = callback.data.split(":")
-    await callback.answer("جاري إرسال الأصل...")
+    await safe_callback_answer(callback, "جاري إرسال الأصل...")
     try:
         content, ref = await orch().download_generation_image(int(generation_id), int(image_index))
     except Exception as exc:
@@ -185,7 +186,7 @@ async def original(callback: CallbackQuery) -> None:
 @router.callback_query(lambda q: q.data and q.data.startswith("generate:rerun_same:"))
 async def rerun_same(callback: CallbackQuery) -> None:
     generation_id = int(callback.data.rsplit(":", 1)[1])
-    await callback.answer("إعادة بنفس Seed")
+    await safe_callback_answer(callback, "إعادة بنفس Seed")
     progress = await callback.message.answer("⏳ إعادة التوليد بنفس Seed...")
     try:
         result = await orch().regenerate(generation_id, same_seed=True)
@@ -198,7 +199,7 @@ async def rerun_same(callback: CallbackQuery) -> None:
 @router.callback_query(lambda q: q.data and q.data.startswith("generate:rerun_new:"))
 async def rerun_new(callback: CallbackQuery) -> None:
     generation_id = int(callback.data.rsplit(":", 1)[1])
-    await callback.answer("Seed جديد")
+    await safe_callback_answer(callback, "Seed جديد")
     progress = await callback.message.answer("⏳ إعادة التوليد بـ Seed جديد...")
     try:
         result = await orch().regenerate(generation_id, same_seed=False)
