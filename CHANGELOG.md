@@ -18,3 +18,8 @@
 - Expanded preflight and offer validation.
 - Added lifecycle/preflight/security tests; local suite is now 31/31 passing.
 - Updated project memory/runbook for first live acceptance.
+
+## 0.3.1 - 2026-09-14
+
+- Fixed Vast offer-search VRAM query units: SDK/CLI search syntax uses values such as `gpu_ram>=48`; raw offer payloads still report VRAM in MB.
+- Added a regression assertion so `48 GB` can never be emitted as `gpu_ram>=48000` again.
