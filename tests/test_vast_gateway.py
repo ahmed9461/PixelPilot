@@ -74,6 +74,8 @@ def test_show_instance_unwraps_api_instances_object():
     class FakeClient:
         def show_instance(self, id):
             return {"instances": {"id": id, "actual_status": "running", "public_ipaddr": "203.0.113.77", "ports": {"8190/tcp": [{"HostPort": "45555"}]}}}
+        def show_instances(self):
+            return []
     async def scenario():
         gateway = VastSdkGateway("secret")
         gateway._client = FakeClient()
@@ -84,13 +86,48 @@ def test_show_instance_unwraps_api_instances_object():
     asyncio.run(scenario())
 
 
-def test_find_instances_by_label_parses_wrapped_results():
+def test_show_instance_uses_intended_status_when_actual_status_missing():
     import asyncio
     from pixelpilot.services.vast_gateway import VastSdkGateway
     class FakeClient:
-        def show_instances_v1(self, **kwargs):
-            assert kwargs["label"] == ["PixelPilot-abc"]
-            return {"instances": [{"id": 91, "label": "PixelPilot-abc", "actual_status": "loading", "public_ipaddr": "203.0.113.91"}, {"id": 92, "label": "something-else", "actual_status": "running"}]}
+        def show_instance(self, id):
+            return {"id": id, "actual_status": None, "intended_status": "running", "public_ipaddr": "203.0.113.44", "ports": {"8190/tcp": [{"HostPort": "44444"}]}}
+        def show_instances(self):
+            return []
+    async def scenario():
+        gateway = VastSdkGateway("secret")
+        gateway._client = FakeClient()
+        ref = await gateway.show_instance(44)
+        assert ref.status == "running"
+        assert ref.public_ip == "203.0.113.44"
+        assert ref.mapped_port == 44444
+    asyncio.run(scenario())
+
+
+def test_show_instance_reconciles_sparse_direct_response_from_instance_list():
+    import asyncio
+    from pixelpilot.services.vast_gateway import VastSdkGateway
+    class FakeClient:
+        def show_instance(self, id):
+            return {"id": id, "actual_status": None, "public_ipaddr": None, "ports": {}}
+        def show_instances(self):
+            return [{"id": 66, "actual_status": "running", "public_ipaddr": "203.0.113.66", "ports": {"8190/tcp": [{"HostPort": "46666"}]}}]
+    async def scenario():
+        gateway = VastSdkGateway("secret")
+        gateway._client = FakeClient()
+        ref = await gateway.show_instance(66)
+        assert ref.status == "running"
+        assert ref.public_ip == "203.0.113.66"
+        assert ref.mapped_port == 46666
+    asyncio.run(scenario())
+
+
+def test_find_instances_by_label_parses_instance_list():
+    import asyncio
+    from pixelpilot.services.vast_gateway import VastSdkGateway
+    class FakeClient:
+        def show_instances(self):
+            return [{"id": 91, "label": "PixelPilot-abc", "actual_status": "loading", "public_ipaddr": "203.0.113.91"}, {"id": 92, "label": "something-else", "actual_status": "running"}]
     async def scenario():
         gateway = VastSdkGateway("secret")
         gateway._client = FakeClient()
