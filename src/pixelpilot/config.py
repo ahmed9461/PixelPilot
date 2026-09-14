@@ -30,7 +30,9 @@ class Settings(BaseSettings):
     vast_min_direct_ports: int = 2
     vast_min_inet_down_mbps: float = 100.0
     vast_cancel_unavailable: bool = True
-    vast_auto_destroy_on_provision_failure: bool = True
+    # Manual ownership policy: PixelPilot never destroys a paid instance just
+    # because provisioning timed out or failed. The owner decides when to delete.
+    vast_auto_destroy_on_provision_failure: bool = False
 
     # Runtime bundle source copied/cloned into ephemeral GPU instances.
     pixelpilot_repo_url: str = ""
