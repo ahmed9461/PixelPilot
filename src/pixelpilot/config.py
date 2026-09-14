@@ -30,8 +30,6 @@ class Settings(BaseSettings):
     vast_min_direct_ports: int = 2
     vast_min_inet_down_mbps: float = 100.0
     vast_cancel_unavailable: bool = True
-    # Manual ownership policy: PixelPilot never destroys a paid instance just
-    # because provisioning timed out or failed. The owner decides when to delete.
     vast_auto_destroy_on_provision_failure: bool = False
 
     # Runtime bundle source copied/cloned into ephemeral GPU instances.
@@ -41,10 +39,12 @@ class Settings(BaseSettings):
     # Hugging Face; only forwarded to an instance at rent-time, never logged.
     hf_token: str = ""
 
-    # Worker / ComfyUI inside Vast
+    # Worker / ComfyUI inside Vast. The Worker is exposed directly through the
+    # mapped Vast TCP port and authenticates every request with a bearer token,
+    # so the controller talks plain HTTP to that port (no implicit TLS proxy).
     worker_proxy_port: int = 8190
     worker_internal_port: int = 18190
-    worker_use_https: bool = True
+    worker_use_https: bool = False
     worker_verify_tls: bool = False
     worker_request_timeout_seconds: int = 60
     worker_generation_timeout_seconds: int = 900
@@ -85,7 +85,6 @@ class Settings(BaseSettings):
         if value <= 0:
             raise ValueError("value must be > 0")
         return value
-
 
     @field_validator("vast_disk_gb")
     @classmethod
