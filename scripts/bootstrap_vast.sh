@@ -56,6 +56,11 @@ if [[ -z "${PIXELPILOT_WORKER_TOKEN:-}" ]]; then
 fi
 echo "[PixelPilot] runtime secrets recovered (values hidden)"
 
+# Vast exposes OPEN_BUTTON_PORT (8190 by default) to a public mapped host port.
+# Bind the authenticated Worker directly to that container port instead of
+# relying on an optional portal/proxy process. ComfyUI itself remains localhost-only.
+WORKER_BIND_PORT="${OPEN_BUTTON_PORT:-$WORKER_PORT}"
+
 # Vast images do not all expose the interpreter under the same command. Prefer
 # their managed Python environment, and only fall back to system Python through
 # an isolated venv so Debian-owned packages are never modified in place.
@@ -142,6 +147,6 @@ print(f'[PixelPilot] ERROR: ComfyUI not ready after {timeout}s', file=sys.stderr
 raise SystemExit(30)
 PY
 
-echo "[PixelPilot] starting Worker on localhost:$WORKER_PORT"
+echo "[PixelPilot] starting Worker on 0.0.0.0:$WORKER_BIND_PORT (mapped Vast port)"
 cd "$PIXELPILOT_ROOT"
-exec "$PYTHON_BIN" -m uvicorn pixelpilot.worker:app --host 127.0.0.1 --port "$WORKER_PORT" --log-level info
+exec "$PYTHON_BIN" -m uvicorn pixelpilot.worker:app --host 0.0.0.0 --port "$WORKER_BIND_PORT" --log-level info
