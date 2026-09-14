@@ -63,16 +63,19 @@
 
 ## Tests ✅
 
-- 31 tests passing locally.
+- 31 tests passing before the first live preflight; CI is enabled for every push.
 - Includes fake end-to-end lifecycle: search -> rent -> ready -> generate -> download -> stop -> start -> destroy.
 - Includes Worker FastAPI authentication/job/image test.
+- Added regression coverage for Vast `gpu_ram` query units after the first live preflight exposed a `48000` vs `48` mismatch.
 
 ## Live acceptance ⏳
 
-Software البناء مكتمل محليًا. المستخدم أكد إنشاء Telegram Bot Token وVast API Key وHF Token وقبول ترخيص Krea؛ القيم نفسها لا تُحفظ في المستودع. المتبقي:
+Software البناء مكتمل محليًا. المستخدم أكد إنشاء Telegram Bot Token وVast API Key وHF Token وقبول ترخيص Krea؛ القيم نفسها لا تُحفظ في المستودع.
 
 - [x] نشر PixelPilot إلى GitHub العام (`ahmed9461/PixelPilot`).
-- [ ] إدخال الأسرار محليًا عبر `python scripts/configure_secrets.py`.
-- [ ] تشغيل `python scripts/preflight.py` والحصول على PASS.
+- [x] إدخال الأسرار محليًا عبر `python scripts/configure_secrets.py`.
+- [x] تشغيل أول `python scripts/preflight.py`: Telegram/Vast/HF/Git/workflow/manifest/policy كلها PASS.
+- [x] اكتشاف وإصلاح Bug في Vast VRAM query (`gpu_ram>=48` بدل `gpu_ram>=48000`).
+- [ ] سحب الإصلاح محليًا وإعادة preflight للتأكد من ظهور عروض مطابقة.
 - [ ] استئجار GPU حقيقي وتشغيل Live Acceptance مرة واحدة.
 - [ ] قياس زمن cold start والـVRAM الفعلي ثم تعديل policy إن لزم.
