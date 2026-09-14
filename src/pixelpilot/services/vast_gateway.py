@@ -95,6 +95,8 @@ def _coerce_mapping(value: Any) -> dict[str, Any]:
             parsed = json.loads(value)
             if isinstance(parsed, dict):
                 return parsed
+            if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
+                return parsed[0]
         except json.JSONDecodeError:
             match = re.search(r"new_contract[^0-9]+([0-9]+)", value)
             if match:
@@ -132,8 +134,15 @@ def extract_mapped_port(raw: dict[str, Any], internal_port: int) -> int | None:
 
 
 def _instance_ref_from_raw(raw: dict[str, Any], *, worker_proxy_port: int, fallback_id: int = 0) -> InstanceRef:
-    status = str(raw.get("actual_status") or raw.get("status") or raw.get("cur_state") or "unknown")
-    public_ip = raw.get("public_ipaddr") or raw.get("public_ip")
+    status = str(
+        raw.get("actual_status")
+        or raw.get("intended_status")
+        or raw.get("status")
+        or raw.get("cur_state")
+        or raw.get("state")
+        or "unknown"
+    )
+    public_ip = raw.get("public_ipaddr") or raw.get("public_ip") or raw.get("ssh_host")
     instance_id = int(raw.get("id") or raw.get("instance_id") or fallback_id or 0)
     return InstanceRef(
         instance_id=instance_id,
@@ -160,6 +169,15 @@ def _extract_rows(value: Any, *keys: str) -> list[dict[str, Any]]:
             if isinstance(nested, dict):
                 return [nested]
     return []
+
+
+def _merge_nonempty(primary: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
+    """Keep primary values, but fill missing/empty fields from a fallback row."""
+    merged = dict(fallback)
+    for key, value in primary.items():
+        if value not in (None, "", [], {}):
+            merged[key] = value
+    return merged
 
 
 class VastSdkGateway:
@@ -218,17 +236,54 @@ class VastSdkGateway:
             raw_result = await asyncio.to_thread(client.show_instance, id=instance_id)
         except Exception as exc:
             raise VastError(f"Vast show_instance failed: {exc}") from exc
+
         raw = _coerce_mapping(raw_result)
         rows = _extract_rows(raw, "instances", "instance")
         instance_raw = rows[0] if rows else raw
-        ref = _instance_ref_from_raw(instance_raw, worker_proxy_port=self.worker_proxy_port, fallback_id=instance_id)
+        ref = _instance_ref_from_raw(
+            instance_raw,
+            worker_proxy_port=self.worker_proxy_port,
+            fallback_id=instance_id,
+        )
+
+        # During early boot some Vast responses can be sparse even though the
+        # instance list already knows that the contract is running. Reconcile
+        # against show_instances() so "unknown" does not stall provisioning.
+        if ref.status.lower() == "unknown" or not ref.public_ip or not ref.mapped_port:
+            try:
+                all_instances = await asyncio.to_thread(client.show_instances)
+            except Exception:
+                all_instances = []
+            fallback_row = next(
+                (
+                    row
+                    for row in all_instances
+                    if isinstance(row, dict)
+                    and int(row.get("id") or row.get("instance_id") or 0) == int(instance_id)
+                ),
+                None,
+            )
+            if fallback_row:
+                instance_raw = _merge_nonempty(instance_raw, fallback_row)
+                ref = _instance_ref_from_raw(
+                    instance_raw,
+                    worker_proxy_port=self.worker_proxy_port,
+                    fallback_id=instance_id,
+                )
+
         mapped_port = ref.mapped_port or extract_mapped_port(raw, self.worker_proxy_port)
-        return InstanceRef(instance_id=ref.instance_id or instance_id, status=ref.status, public_ip=ref.public_ip, mapped_port=mapped_port, raw=instance_raw)
+        return InstanceRef(
+            instance_id=ref.instance_id or instance_id,
+            status=ref.status,
+            public_ip=ref.public_ip,
+            mapped_port=mapped_port,
+            raw=instance_raw,
+        )
 
     async def find_instances_by_label(self, label: str, limit: int = 5) -> list[InstanceRef]:
         client = self._get_client()
         try:
-            result = await asyncio.to_thread(client.show_instances_v1, label=[label], limit=max(1, min(int(limit), 25)))
+            result = await asyncio.to_thread(client.show_instances)
         except Exception as exc:
             raise VastError(f"Vast instance reconciliation failed: {exc}") from exc
         rows = _extract_rows(result, "instances", "results")
@@ -239,6 +294,8 @@ class VastSdkGateway:
             ref = _instance_ref_from_raw(row, worker_proxy_port=self.worker_proxy_port)
             if ref.instance_id > 0:
                 refs.append(ref)
+            if len(refs) >= max(1, min(int(limit), 25)):
+                break
         return refs
 
     async def start_instance(self, instance_id: int) -> None:
