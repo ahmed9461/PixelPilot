@@ -36,7 +36,9 @@ class Settings(BaseSettings):
     pixelpilot_repo_url: str = ""
     pixelpilot_repo_ref: str = "main"
 
-    # Hugging Face; only forwarded to an instance at rent-time, never logged.
+    # Hugging Face; forwarded only at rent-time and never logged. FLUX.2's
+    # Comfy-Org quantized files are public, but the token remains available for
+    # future gated model profiles.
     hf_token: str = ""
 
     # Worker / ComfyUI inside Vast. The Worker is exposed directly through the
@@ -53,12 +55,12 @@ class Settings(BaseSettings):
     provision_ready_timeout_seconds: int = 1800
     provision_poll_seconds: float = 5.0
     comfyui_ref: str = "v0.35.0"
-    workflow_path: Path = Path("./resources/workflows/flux_krea_api.json")
+    workflow_path: Path = Path("./resources/workflows/flux2_dev_api.json")
 
     # Generation safety limits
     generation_max_batch: int = 4
-    generation_default_steps: int = 20
-    generation_max_steps: int = 40
+    generation_default_steps: int = 28
+    generation_max_steps: int = 50
 
     # Cost guard. Auto-destroy is disabled unless explicitly configured.
     cost_guard_warn_minutes: int = 30
@@ -88,9 +90,9 @@ class Settings(BaseSettings):
 
     @field_validator("vast_disk_gb")
     @classmethod
-    def disk_large_enough_for_full_krea(cls, value: int) -> int:
+    def disk_large_enough_for_flux2(cls, value: int) -> int:
         if value < 70:
-            raise ValueError("VAST_DISK_GB must be >= 70 for the full Krea profile")
+            raise ValueError("VAST_DISK_GB must be >= 70 for the FLUX.2 Dev FP8 profile")
         return value
 
     def validate_runtime(self) -> None:
@@ -106,8 +108,6 @@ class Settings(BaseSettings):
 
     def validate_rent_ready(self) -> None:
         missing: list[str] = []
-        if not self.hf_token:
-            missing.append("HF_TOKEN")
         if not self.pixelpilot_repo_url and not self.vast_template_hash:
             missing.append("PIXELPILOT_REPO_URL or VAST_TEMPLATE_HASH")
         if missing:
