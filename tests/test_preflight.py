@@ -4,15 +4,15 @@ from pixelpilot.config import Settings
 from pixelpilot.preflight import run_local_preflight
 
 
-def test_preflight_passes_project_files(tmp_path):
+def test_preflight_passes_project_files_without_hf_token():
     settings = Settings(
         _env_file=None,
         telegram_bot_token="t",
         owner_telegram_id=1,
         vast_api_key="v",
-        hf_token="h",
+        hf_token="",
         pixelpilot_repo_url="https://example.invalid/PixelPilot.git",
-        workflow_path=Path("resources/workflows/flux_krea_api.json"),
+        workflow_path=Path("resources/workflows/flux2_dev_api.json"),
     )
     checks = run_local_preflight(settings, repo_root=Path.cwd())
     assert all(check.ok for check in checks)
