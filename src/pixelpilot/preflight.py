@@ -24,7 +24,9 @@ def run_local_preflight(settings: Settings, *, repo_root: Path | None = None) ->
     checks.append(Check("Telegram token", bool(settings.telegram_bot_token), "configured" if settings.telegram_bot_token else "missing"))
     checks.append(Check("Owner Telegram ID", settings.owner_telegram_id > 0, str(settings.owner_telegram_id or "missing")))
     checks.append(Check("Vast API key", bool(settings.vast_api_key), "configured" if settings.vast_api_key else "missing"))
-    checks.append(Check("HF read token", bool(settings.hf_token), "configured" if settings.hf_token else "missing"))
+    # The Comfy-Org FLUX.2 quantized files are public. Keep accepting HF_TOKEN
+    # when configured, but do not block renting merely because it is absent.
+    checks.append(Check("HF read token", True, "configured" if settings.hf_token else "optional for FLUX.2 profile"))
     source_ok = bool(settings.pixelpilot_repo_url or settings.vast_template_hash)
     checks.append(
         Check(
@@ -39,15 +41,19 @@ def run_local_preflight(settings: Settings, *, repo_root: Path | None = None) ->
         workflow_path = root / workflow_path
     try:
         load_workflow(workflow_path)
-        checks.append(Check("Krea API workflow", True, str(workflow_path)))
+        checks.append(Check("FLUX.2 API workflow", True, str(workflow_path)))
     except Exception as exc:
-        checks.append(Check("Krea API workflow", False, str(exc)))
+        checks.append(Check("FLUX.2 API workflow", False, str(exc)))
 
     manifest_path = root / "resources/model_manifest.json"
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        names = {item["filename"] for item in manifest.get("files", [])}
-        expected = {"flux1-krea-dev.safetensors", "ae.safetensors", "clip_l.safetensors", "t5xxl_fp16.safetensors"}
+        names = {item.get("target_name") or Path(item["filename"]).name for item in manifest.get("files", [])}
+        expected = {
+            "flux2_dev_fp8mixed.safetensors",
+            "mistral_3_small_flux2_fp8.safetensors",
+            "flux2-vae.safetensors",
+        }
         ok = names == expected
         checks.append(Check("Model manifest", ok, f"{len(names)} files" if ok else f"unexpected files: {sorted(names)}"))
     except Exception as exc:
@@ -55,9 +61,8 @@ def run_local_preflight(settings: Settings, *, repo_root: Path | None = None) ->
 
     disk_ok = settings.vast_disk_gb >= 70
     checks.append(Check("Vast disk", disk_ok, f"{settings.vast_disk_gb} GB"))
-    checks.append(Check("GPU VRAM policy", settings.vast_min_gpu_ram_gb >= 24, f">= {settings.vast_min_gpu_ram_gb} GB"))
+    checks.append(Check("GPU VRAM policy", settings.vast_min_gpu_ram_gb >= 48, f">= {settings.vast_min_gpu_ram_gb} GB"))
     return checks
-
 
 
 def _git_source_check(settings: Settings) -> Check:
@@ -83,30 +88,28 @@ def _git_source_check(settings: Settings) -> Check:
 
 
 def _hf_access_check(settings: Settings) -> Check:
-    if not settings.hf_token:
-        return Check("Krea gated access", False, "HF_TOKEN missing")
     try:
         from huggingface_hub import get_hf_file_metadata, hf_hub_url
 
-        # HEAD/metadata only: verifies authorization to the gated file without downloading 23+ GB.
-        url = hf_hub_url("black-forest-labs/FLUX.1-Krea-dev", "flux1-krea-dev.safetensors")
-        metadata = get_hf_file_metadata(url, token=settings.hf_token, timeout=15)
+        filename = "split_files/diffusion_models/flux2_dev_fp8mixed.safetensors"
+        url = hf_hub_url("Comfy-Org/flux2-dev", filename)
+        metadata = get_hf_file_metadata(url, token=settings.hf_token or None, timeout=15)
         size = int(metadata.size or 0)
         if size <= 0:
-            return Check("Krea gated access", False, "authorized metadata returned no file size")
-        return Check("Krea gated access", True, f"authorized ({size / 1_000_000_000:.1f} GB checkpoint)")
+            return Check("FLUX.2 model access", False, "metadata returned no file size")
+        return Check("FLUX.2 model access", True, f"reachable ({size / 1_000_000_000:.1f} GB checkpoint)")
     except Exception as exc:
-        # Do not include the token or raw request URL in diagnostics.
-        return Check("Krea gated access", False, f"authorization/metadata failed: {type(exc).__name__}")
+        return Check("FLUX.2 model access", False, f"metadata failed: {type(exc).__name__}")
 
 
 async def run_external_preflight(settings: Settings) -> list[Check]:
-    """Network checks that prevent renting a GPU with a broken source/token setup."""
+    """Network checks that prevent renting a GPU with a broken source/model setup."""
     git_check, hf_check = await asyncio.gather(
         asyncio.to_thread(_git_source_check, settings),
         asyncio.to_thread(_hf_access_check, settings),
     )
     return [git_check, hf_check]
+
 
 def format_preflight(checks: list[Check]) -> str:
     lines = ["🧪 <b>PixelPilot Preflight</b>", ""]
