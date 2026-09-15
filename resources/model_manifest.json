@@ -1,34 +1,30 @@
 {
-  "model": "FLUX.1 Krea Dev full",
-  "notes": "Original 12B Krea weights + FP16 T5 encoder for the 48GB VRAM target profile.",
+  "model": "FLUX.2 Dev FP8 Mixed (ComfyUI)",
+  "notes": "Official Comfy-Org quantized FLUX.2 Dev profile for 48GB-class GPUs. Uses FP8 mixed diffusion weights, FP8 Mistral text encoder, and FLUX.2 VAE.",
   "files": [
     {
-      "repo_id": "black-forest-labs/FLUX.1-Krea-dev",
-      "filename": "flux1-krea-dev.safetensors",
+      "repo_id": "Comfy-Org/flux2-dev",
+      "filename": "split_files/diffusion_models/flux2_dev_fp8mixed.safetensors",
+      "target_name": "flux2_dev_fp8mixed.safetensors",
       "target_subdir": "diffusion_models",
-      "requires_hf_token": true,
-      "min_bytes": 20000000000
+      "requires_hf_token": false,
+      "min_bytes": 34000000000
     },
     {
-      "repo_id": "black-forest-labs/FLUX.1-Krea-dev",
-      "filename": "ae.safetensors",
+      "repo_id": "Comfy-Org/flux2-dev",
+      "filename": "split_files/text_encoders/mistral_3_small_flux2_fp8.safetensors",
+      "target_name": "mistral_3_small_flux2_fp8.safetensors",
+      "target_subdir": "text_encoders",
+      "requires_hf_token": false,
+      "min_bytes": 17000000000
+    },
+    {
+      "repo_id": "Comfy-Org/flux2-dev",
+      "filename": "split_files/vae/flux2-vae.safetensors",
+      "target_name": "flux2-vae.safetensors",
       "target_subdir": "vae",
-      "requires_hf_token": true,
+      "requires_hf_token": false,
       "min_bytes": 300000000
-    },
-    {
-      "repo_id": "comfyanonymous/flux_text_encoders",
-      "filename": "clip_l.safetensors",
-      "target_subdir": "text_encoders",
-      "requires_hf_token": false,
-      "min_bytes": 200000000
-    },
-    {
-      "repo_id": "comfyanonymous/flux_text_encoders",
-      "filename": "t5xxl_fp16.safetensors",
-      "target_subdir": "text_encoders",
-      "requires_hf_token": false,
-      "min_bytes": 8000000000
     }
   ]
 }
