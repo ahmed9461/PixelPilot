@@ -21,6 +21,12 @@ NODE_NEGATIVE = "6"
 NODE_SAMPLER = "7"
 NODE_DECODE = "8"
 NODE_SAVE = "9"
+NODE_FLUX_GUIDANCE = "10"
+
+QUALITY_OFFICIAL = "official"
+QUALITY_KREA = "krea_quality"
+QUALITY_PROFILES = {QUALITY_OFFICIAL, QUALITY_KREA}
+KREA_GUIDANCE = 4.5
 
 
 def load_workflow(path: str | Path) -> dict[str, Any]:
@@ -46,13 +52,36 @@ def build_flux_krea_workflow(
         raise WorkflowError("batch_size must be >= 1")
     if spec.steps < 1:
         raise WorkflowError("steps must be >= 1")
+    if spec.quality_profile not in QUALITY_PROFILES:
+        raise WorkflowError(f"Unknown quality profile: {spec.quality_profile}")
 
     wf = copy.deepcopy(base_workflow)
+
+    # PixelPilot never rewrites, decorates, expands, translates, or appends to
+    # the user's prompt. Only surrounding sampling parameters may change.
     wf[NODE_PROMPT]["inputs"]["text"] = spec.prompt.strip()
     wf[NODE_LATENT]["inputs"].update(
         {"width": spec.width, "height": spec.height, "batch_size": spec.batch_size}
     )
     wf[NODE_SAMPLER]["inputs"].update({"seed": spec.seed, "steps": spec.steps})
+
+    if spec.quality_profile == QUALITY_KREA:
+        # Krea's reference inference uses a guidance embedding around 4.5.
+        # In ComfyUI this is FluxGuidance on the positive conditioning; KSampler
+        # CFG remains 1.0 for FLUX. This leaves the prompt text untouched.
+        wf[NODE_FLUX_GUIDANCE] = {
+            "inputs": {
+                "conditioning": [NODE_PROMPT, 0],
+                "guidance": KREA_GUIDANCE,
+            },
+            "class_type": "FluxGuidance",
+            "_meta": {"title": "Krea Guidance"},
+        }
+        wf[NODE_SAMPLER]["inputs"]["positive"] = [NODE_FLUX_GUIDANCE, 0]
+    else:
+        wf.pop(NODE_FLUX_GUIDANCE, None)
+        wf[NODE_SAMPLER]["inputs"]["positive"] = [NODE_PROMPT, 0]
+
     wf[NODE_SAVE]["inputs"]["filename_prefix"] = filename_prefix
     return wf
 
