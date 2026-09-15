@@ -57,9 +57,9 @@ def build_flux_krea_workflow(
 
     wf = copy.deepcopy(base_workflow)
 
-    # PixelPilot never rewrites, decorates, expands, translates, or appends to
-    # the user's prompt. Only surrounding sampling parameters may change.
-    wf[NODE_PROMPT]["inputs"]["text"] = spec.prompt.strip()
+    # PixelPilot never rewrites, decorates, expands, translates, trims, or
+    # appends to the user's prompt. Only sampling parameters may change.
+    wf[NODE_PROMPT]["inputs"]["text"] = spec.prompt
     wf[NODE_LATENT]["inputs"].update(
         {"width": spec.width, "height": spec.height, "batch_size": spec.batch_size}
     )
