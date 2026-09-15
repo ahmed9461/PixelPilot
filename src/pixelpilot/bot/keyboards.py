@@ -52,7 +52,7 @@ def quality_profile_keyboard() -> InlineKeyboardMarkup:
 
 
 def preset_keyboard() -> InlineKeyboardMarkup:
-    # Kept for backward compatibility with older callbacks. New generations do
+    # Kept for backward compatibility with older imports. New generations do
     # not use style presets because PixelPilot must not modify user prompts.
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="إلغاء", callback_data="generate:cancel")],
@@ -89,5 +89,5 @@ def generation_image_keyboard(generation_id: int, image_index: int, *, show_reru
             InlineKeyboardButton(text="♻️ نفس Seed", callback_data=f"generate:rerun_same:{generation_id}"),
             InlineKeyboardButton(text="🎲 Seed جديد", callback_data=f"generate:rerun_new:{generation_id}"),
         ])
-        rows.append([InlineKeyboardButton(text="🎨 صورة جديدة", callback_data="generate:start")])
+    rows.append([InlineKeyboardButton(text="🎨 صورة جديدة", callback_data="generate:start")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
