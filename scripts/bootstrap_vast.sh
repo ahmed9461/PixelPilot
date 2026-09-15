@@ -23,6 +23,7 @@ trap on_error ERR
 
 echo "[PixelPilot] bootstrap started: $(date -Is)"
 echo "[PixelPilot] repo=$PIXELPILOT_ROOT comfy=$COMFY_DIR ref=$COMFYUI_REF"
+echo "[PixelPilot] model profile=FLUX.2 Dev FP8 Mixed"
 
 if [[ ! -f "$PIXELPILOT_ROOT/pyproject.toml" ]]; then
   echo "[PixelPilot] ERROR: project files not found at $PIXELPILOT_ROOT" >&2
@@ -31,8 +32,8 @@ fi
 
 # A manual rerun over SSH/tmux may not inherit the container environment that
 # Vast injected at creation time. Recover only the PixelPilot runtime variables
-# from PID 1 without printing their values. This keeps HF/Worker tokens out of
-# logs while allowing an in-place repair on the same paid instance.
+# from PID 1 without printing their values. HF_TOKEN is optional for the public
+# Comfy-Org FLUX.2 profile, but preserve it when present for future gated files.
 if [[ -r /proc/1/environ ]]; then
   while IFS= read -r -d '' entry; do
     key="${entry%%=*}"
@@ -46,15 +47,11 @@ if [[ -r /proc/1/environ ]]; then
   done < /proc/1/environ
 fi
 
-if [[ -z "${HF_TOKEN:-}" ]]; then
-  echo "[PixelPilot] ERROR: HF_TOKEN is unavailable in shell and PID 1 environment" >&2
-  exit 23
-fi
 if [[ -z "${PIXELPILOT_WORKER_TOKEN:-}" ]]; then
   echo "[PixelPilot] ERROR: PIXELPILOT_WORKER_TOKEN is unavailable in shell and PID 1 environment" >&2
   exit 24
 fi
-echo "[PixelPilot] runtime secrets recovered (values hidden)"
+echo "[PixelPilot] runtime environment recovered (secret values hidden)"
 
 # Vast exposes OPEN_BUTTON_PORT (8190 by default) to a public mapped host port.
 # Bind the authenticated Worker directly to that container port instead of
@@ -114,7 +111,7 @@ mkdir -p \
   "$WORKSPACE/pixelpilot-output"
 
 export PIXELPILOT_ROOT COMFY_DIR
-export WORKFLOW_PATH="${WORKFLOW_PATH:-$PIXELPILOT_ROOT/resources/workflows/flux_krea_api.json}"
+export WORKFLOW_PATH="${WORKFLOW_PATH:-$PIXELPILOT_ROOT/resources/workflows/flux2_dev_api.json}"
 "$PYTHON_BIN" "$PIXELPILOT_ROOT/scripts/download_models.py"
 
 echo "[PixelPilot] starting ComfyUI on localhost:$COMFY_PORT"
