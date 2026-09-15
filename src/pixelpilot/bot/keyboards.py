@@ -45,8 +45,8 @@ def destroy_confirm_keyboard() -> InlineKeyboardMarkup:
 
 def quality_profile_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✨ Krea Quality — 28 خطوة", callback_data="generate:quality:krea_quality")],
-        [InlineKeyboardButton(text="🧪 Comfy Official — 20 خطوة", callback_data="generate:quality:official")],
+        [InlineKeyboardButton(text="⚡ FLUX.2 Balanced — 28 خطوة", callback_data="generate:quality:flux2_balanced")],
+        [InlineKeyboardButton(text="✨ FLUX.2 Quality — 50 خطوة", callback_data="generate:quality:flux2_quality")],
         [InlineKeyboardButton(text="إلغاء", callback_data="generate:cancel")],
     ])
 
