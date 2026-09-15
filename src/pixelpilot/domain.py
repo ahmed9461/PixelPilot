@@ -67,7 +67,8 @@ class GenerationSpec:
     seed: int = 0
     steps: int = 20
     batch_size: int = 1
-    preset: str = "natural"
+    preset: str = "raw"
+    quality_profile: str = "official"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
