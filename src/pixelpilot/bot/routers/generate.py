@@ -37,13 +37,16 @@ RATIOS: dict[str, tuple[int, int]] = {
 }
 
 QUALITY_STEPS: dict[str, int] = {
-    "official": 20,
-    "krea_quality": 28,
+    "flux2_balanced": 28,
+    "flux2_quality": 50,
 }
 
 QUALITY_LABELS: dict[str, str] = {
-    "official": "Comfy Official",
-    "krea_quality": "Krea Quality",
+    "flux2_balanced": "FLUX.2 Balanced",
+    "flux2_quality": "FLUX.2 Quality",
+    # Historical rows can still be re-run after the migration.
+    "official": "FLUX.2 Legacy",
+    "krea_quality": "FLUX.2 Legacy",
 }
 
 
@@ -72,10 +75,10 @@ async def generate_start(callback: CallbackQuery, state: FSMContext) -> None:
         return
     await state.clear()
     await callback.message.edit_text(
-        "🎨 <b>اختر وضع التوليد</b>\n\n"
-        "✨ <b>Krea Quality</b>: 28 خطوة + Krea guidance 4.5\n"
-        "🧪 <b>Comfy Official</b>: إعداد ComfyUI الرسمي، 20 خطوة\n\n"
-        "🔒 <b>مهم:</b> PixelPilot سيرسل البرومبت الذي تكتبه كما هو حرفيًا، بدون إضافة وصف أو تحسين أو ترجمة.",
+        "🎨 <b>اختر وضع FLUX.2</b>\n\n"
+        "⚡ <b>Balanced</b>: 28 خطوة + guidance 4.0 — أسرع للاستخدام اليومي\n"
+        "✨ <b>Quality</b>: 50 خطوة + guidance 4.0 — أقصى جودة للاختبار والنتيجة النهائية\n\n"
+        "🔒 <b>مهم:</b> PixelPilot سيرسل البرومبت الذي تكتبه كما هو حرفيًا، بدون إضافة أو تحسين أو ترجمة.",
         reply_markup=quality_profile_keyboard(),
     )
 
@@ -100,7 +103,7 @@ async def legacy_preset(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await safe_callback_answer(callback, "تم إلغاء أنماط تعديل البرومبت")
     await callback.message.edit_text(
-        "تم إلغاء أنماط تعديل البرومبت. اختر وضع التوليد الجديد:",
+        "تم إلغاء أنماط تعديل البرومبت. اختر وضع FLUX.2:",
         reply_markup=quality_profile_keyboard(),
     )
 
@@ -134,14 +137,14 @@ async def choose_count(callback: CallbackQuery, state: FSMContext) -> None:
     await safe_callback_answer(callback)
     await callback.message.edit_text(
         "✍️ أرسل البرومبت الآن.\n\n"
-        "🔒 سيتم تمريره إلى Krea <b>كما كتبته بالضبط</b>، بدون suffix أو تحسين تلقائي أو ترجمة."
+        "🔒 سيتم تمريره إلى FLUX.2 <b>كما كتبته بالضبط</b>، بدون suffix أو تحسين تلقائي أو ترجمة."
     )
 
 
 @router.message(GenerateStates.waiting_prompt, F.text)
 async def receive_prompt(message: Message, state: FSMContext) -> None:
-    # Preserve the user's prompt exactly. We only use strip() to reject a
-    # whitespace-only message; the value sent to the model remains unchanged.
+    # Preserve the user's prompt exactly. strip() is used only to reject a
+    # whitespace-only message; the model receives raw_prompt unchanged.
     raw_prompt = message.text or ""
     if not raw_prompt.strip():
         await message.answer("أرسل وصفًا نصيًا للصورة.")
@@ -151,11 +154,11 @@ async def receive_prompt(message: Message, state: FSMContext) -> None:
         return
 
     data = await state.get_data()
-    quality_profile = str(data.get("quality_profile") or "official")
+    quality_profile = str(data.get("quality_profile") or "flux2_balanced")
     ratio = str(data.get("ratio") or "1x1")
     count = int(data.get("count") or 1)
     if quality_profile not in QUALITY_STEPS:
-        quality_profile = "official"
+        quality_profile = "flux2_balanced"
     width, height = RATIOS[ratio]
 
     spec = GenerationSpec(
@@ -170,7 +173,7 @@ async def receive_prompt(message: Message, state: FSMContext) -> None:
     )
     await state.clear()
     status_message = await message.answer(
-        "⏳ <b>جاري التوليد...</b>\n"
+        "⏳ <b>جاري التوليد بـ FLUX.2...</b>\n"
         f"الوضع: {QUALITY_LABELS[quality_profile]}\n"
         f"المقاس: {width}×{height}\n"
         f"الخطوات: {spec.steps}\n"
@@ -198,8 +201,6 @@ async def cancel(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(lambda q: q.data and q.data.startswith("generate:original:"))
 async def original(callback: CallbackQuery) -> None:
-    # Backward compatibility for buttons on older generations. New generations
-    # are already delivered as original documents by default.
     _, _, generation_id, image_index = callback.data.split(":")
     await safe_callback_answer(callback, "جاري إرسال الأصل...")
     try:
@@ -245,6 +246,7 @@ async def _deliver_result(message: Message, result: GenerationResult) -> None:
         quality_label = QUALITY_LABELS.get(result.spec.quality_profile, result.spec.quality_profile)
         caption = (
             f"✨ Generation <code>#{result.generation_id}</code>\n"
+            f"Model: <b>FLUX.2 Dev</b>\n"
             f"Mode: <b>{escape(quality_label)}</b>\n"
             f"Seed: <code>{result.spec.seed}</code>\n"
             f"{result.spec.width}×{result.spec.height}\n"
