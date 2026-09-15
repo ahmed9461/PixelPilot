@@ -10,22 +10,22 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, st
 from pydantic import BaseModel, Field, field_validator
 
 from pixelpilot.domain import GenerationSpec
-from pixelpilot.services.comfy_client import ComfyClient, ComfyError
-from pixelpilot.workflow import build_flux_krea_workflow, load_workflow
+from pixelpilot.services.comfy_client import ComfyClient
+from pixelpilot.workflow import build_flux2_workflow, load_workflow
 
-app = FastAPI(title="PixelPilot Worker", version="0.4.0")
+app = FastAPI(title="PixelPilot Worker", version="0.5.0")
 
 WORKER_TOKEN = os.environ.get("PIXELPILOT_WORKER_TOKEN", "")
 COMFY_URL = os.environ.get("COMFY_URL", "http://127.0.0.1:8188")
 REPO_ROOT = Path(os.environ.get("PIXELPILOT_ROOT", Path(__file__).resolve().parents[2]))
-WORKFLOW_PATH = Path(os.environ.get("WORKFLOW_PATH", REPO_ROOT / "resources/workflows/flux_krea_api.json"))
+WORKFLOW_PATH = Path(os.environ.get("WORKFLOW_PATH", REPO_ROOT / "resources/workflows/flux2_dev_api.json"))
 MAX_BATCH = int(os.environ.get("GENERATION_MAX_BATCH", "4"))
-MAX_STEPS = int(os.environ.get("GENERATION_MAX_STEPS", "40"))
+MAX_STEPS = int(os.environ.get("GENERATION_MAX_STEPS", "50"))
 
 EXPECTED_MODELS = {
-    "diffusion_models": {"flux1-krea-dev.safetensors"},
-    "text_encoders": {"clip_l.safetensors", "t5xxl_fp16.safetensors"},
-    "vae": {"ae.safetensors"},
+    "diffusion_models": {"flux2_dev_fp8mixed.safetensors"},
+    "text_encoders": {"mistral_3_small_flux2_fp8.safetensors"},
+    "vae": {"flux2-vae.safetensors"},
 }
 
 comfy = ComfyClient(COMFY_URL)
@@ -37,10 +37,13 @@ class GenerateRequest(BaseModel):
     width: int = Field(default=1024, ge=256, le=2048)
     height: int = Field(default=1024, ge=256, le=2048)
     seed: int = Field(default=0, ge=0, le=2**63 - 1)
-    steps: int = Field(default=20, ge=1)
+    steps: int = Field(default=28, ge=1)
     batch_size: int = Field(default=1, ge=1)
     preset: str = Field(default="raw", max_length=64)
-    quality_profile: str = Field(default="official", pattern="^(official|krea_quality)$")
+    quality_profile: str = Field(
+        default="flux2_balanced",
+        pattern="^(flux2_balanced|flux2_quality|official|krea_quality)$",
+    )
     filename_prefix: str = Field(default="PixelPilot", min_length=1, max_length=128)
 
     @field_validator("width", "height")
@@ -66,9 +69,6 @@ class GenerateRequest(BaseModel):
 
 
 def require_token(authorization: Annotated[str | None, Header()] = None) -> None:
-    # The Worker may be exposed directly through a Vast mapped TCP port, so it
-    # must authenticate every request itself. Never bypass this check merely
-    # because a proxy-related environment variable is present.
     if not WORKER_TOKEN:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Worker token not configured")
     expected = f"Bearer {WORKER_TOKEN}"
@@ -123,7 +123,7 @@ async def submit_job(request: GenerateRequest, _: None = Depends(require_token))
         preset=request.preset,
         quality_profile=request.quality_profile,
     )
-    workflow = build_flux_krea_workflow(base_workflow, spec, filename_prefix=request.filename_prefix)
+    workflow = build_flux2_workflow(base_workflow, spec, filename_prefix=request.filename_prefix)
     try:
         prompt_id = await comfy.submit(workflow, client_id=f"pixelpilot-{uuid.uuid4().hex}")
     except Exception as exc:
