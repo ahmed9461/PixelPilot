@@ -43,20 +43,18 @@ def destroy_confirm_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-def preset_keyboard() -> InlineKeyboardMarkup:
+def quality_profile_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="📷 طبيعي", callback_data="generate:preset:natural"),
-            InlineKeyboardButton(text="👤 بورتريه", callback_data="generate:preset:portrait"),
-        ],
-        [
-            InlineKeyboardButton(text="🧍 كامل الجسم", callback_data="generate:preset:full_body"),
-            InlineKeyboardButton(text="👗 أزياء", callback_data="generate:preset:fashion"),
-        ],
-        [
-            InlineKeyboardButton(text="🌿 خارجي", callback_data="generate:preset:outdoor"),
-            InlineKeyboardButton(text="📦 منتج", callback_data="generate:preset:product"),
-        ],
+        [InlineKeyboardButton(text="✨ Krea Quality — 28 خطوة", callback_data="generate:quality:krea_quality")],
+        [InlineKeyboardButton(text="🧪 Comfy Official — 20 خطوة", callback_data="generate:quality:official")],
+        [InlineKeyboardButton(text="إلغاء", callback_data="generate:cancel")],
+    ])
+
+
+def preset_keyboard() -> InlineKeyboardMarkup:
+    # Kept for backward compatibility with older callbacks. New generations do
+    # not use style presets because PixelPilot must not modify user prompts.
+    return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="إلغاء", callback_data="generate:cancel")],
     ])
 
@@ -85,10 +83,7 @@ def count_keyboard(max_batch: int = 4) -> InlineKeyboardMarkup:
 
 
 def generation_image_keyboard(generation_id: int, image_index: int, *, show_rerun: bool = False) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(
-        text="📄 إرسال الأصل",
-        callback_data=f"generate:original:{generation_id}:{image_index}",
-    )]]
+    rows: list[list[InlineKeyboardButton]] = []
     if show_rerun:
         rows.append([
             InlineKeyboardButton(text="♻️ نفس Seed", callback_data=f"generate:rerun_same:{generation_id}"),
