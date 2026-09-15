@@ -16,29 +16,49 @@ NODE_UNET = "1"
 NODE_CLIP = "2"
 NODE_VAE = "3"
 NODE_PROMPT = "4"
-NODE_LATENT = "5"
-NODE_NEGATIVE = "6"
-NODE_SAMPLER = "7"
-NODE_DECODE = "8"
-NODE_SAVE = "9"
-NODE_FLUX_GUIDANCE = "10"
+NODE_GUIDANCE = "5"
+NODE_LATENT = "6"
+NODE_NOISE = "7"
+NODE_SAMPLER_SELECT = "8"
+NODE_SCHEDULER = "9"
+NODE_GUIDER = "10"
+NODE_SAMPLER = "11"
+NODE_DECODE = "12"
+NODE_SAVE = "13"
 
-QUALITY_OFFICIAL = "official"
-QUALITY_KREA = "krea_quality"
-QUALITY_PROFILES = {QUALITY_OFFICIAL, QUALITY_KREA}
-KREA_GUIDANCE = 4.5
+QUALITY_BALANCED = "flux2_balanced"
+QUALITY_MAX = "flux2_quality"
+# Old profile names remain accepted so historical generations can still be
+# re-run after upgrading the controller. They use the FLUX.2 workflow now.
+LEGACY_PROFILES = {"official", "krea_quality"}
+QUALITY_PROFILES = {QUALITY_BALANCED, QUALITY_MAX, *LEGACY_PROFILES}
+FLUX2_GUIDANCE = 4.0
 
 
 def load_workflow(path: str | Path) -> dict[str, Any]:
     workflow = json.loads(Path(path).read_text(encoding="utf-8"))
-    required = {NODE_UNET, NODE_CLIP, NODE_VAE, NODE_PROMPT, NODE_LATENT, NODE_NEGATIVE, NODE_SAMPLER, NODE_DECODE, NODE_SAVE}
+    required = {
+        NODE_UNET,
+        NODE_CLIP,
+        NODE_VAE,
+        NODE_PROMPT,
+        NODE_GUIDANCE,
+        NODE_LATENT,
+        NODE_NOISE,
+        NODE_SAMPLER_SELECT,
+        NODE_SCHEDULER,
+        NODE_GUIDER,
+        NODE_SAMPLER,
+        NODE_DECODE,
+        NODE_SAVE,
+    }
     missing = required.difference(workflow)
     if missing:
         raise WorkflowError(f"Workflow missing nodes: {sorted(missing)}")
     return workflow
 
 
-def build_flux_krea_workflow(
+def build_flux2_workflow(
     base_workflow: dict[str, Any],
     spec: GenerationSpec,
     *,
@@ -57,33 +77,24 @@ def build_flux_krea_workflow(
 
     wf = copy.deepcopy(base_workflow)
 
-    # PixelPilot never rewrites, decorates, expands, translates, trims, or
-    # appends to the user's prompt. Only sampling parameters may change.
+    # Absolute rule: the text sent by the user is the text encoded by FLUX.2.
+    # PixelPilot never trims, rewrites, translates, expands, or appends to it.
     wf[NODE_PROMPT]["inputs"]["text"] = spec.prompt
+    wf[NODE_GUIDANCE]["inputs"]["guidance"] = FLUX2_GUIDANCE
     wf[NODE_LATENT]["inputs"].update(
         {"width": spec.width, "height": spec.height, "batch_size": spec.batch_size}
     )
-    wf[NODE_SAMPLER]["inputs"].update({"seed": spec.seed, "steps": spec.steps})
-
-    if spec.quality_profile == QUALITY_KREA:
-        # Krea's reference inference uses a guidance embedding around 4.5.
-        # In ComfyUI this is FluxGuidance on the positive conditioning; KSampler
-        # CFG remains 1.0 for FLUX. This leaves the prompt text untouched.
-        wf[NODE_FLUX_GUIDANCE] = {
-            "inputs": {
-                "conditioning": [NODE_PROMPT, 0],
-                "guidance": KREA_GUIDANCE,
-            },
-            "class_type": "FluxGuidance",
-            "_meta": {"title": "Krea Guidance"},
-        }
-        wf[NODE_SAMPLER]["inputs"]["positive"] = [NODE_FLUX_GUIDANCE, 0]
-    else:
-        wf.pop(NODE_FLUX_GUIDANCE, None)
-        wf[NODE_SAMPLER]["inputs"]["positive"] = [NODE_PROMPT, 0]
-
+    wf[NODE_NOISE]["inputs"]["noise_seed"] = spec.seed
+    wf[NODE_SCHEDULER]["inputs"].update(
+        {"steps": spec.steps, "width": spec.width, "height": spec.height}
+    )
     wf[NODE_SAVE]["inputs"]["filename_prefix"] = filename_prefix
     return wf
+
+
+# Compatibility alias for code or historical tests importing the old name.
+# It intentionally builds the FLUX.2 workflow; Krea is no longer used.
+build_flux_krea_workflow = build_flux2_workflow
 
 
 def extract_history_images(history_item: dict[str, Any]) -> list[dict[str, str]]:
