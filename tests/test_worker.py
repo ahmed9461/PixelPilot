@@ -9,17 +9,18 @@ class FakeComfy:
 
     async def models(self, folder):
         mapping = {
-            "diffusion_models": ["flux1-krea-dev.safetensors"],
-            "text_encoders": ["clip_l.safetensors", "t5xxl_fp16.safetensors"],
-            "vae": ["ae.safetensors"],
+            "diffusion_models": ["flux2_dev_fp8mixed.safetensors"],
+            "text_encoders": ["mistral_3_small_flux2_fp8.safetensors"],
+            "vae": ["flux2-vae.safetensors"],
         }
         return mapping[folder]
 
     async def submit(self, workflow, client_id):
         assert workflow["4"]["inputs"]["text"] == "A natural photo"
-        assert workflow["10"]["class_type"] == "FluxGuidance"
-        assert workflow["10"]["inputs"]["guidance"] == 4.5
-        assert workflow["7"]["inputs"]["positive"] == ["10", 0]
+        assert workflow["5"]["class_type"] == "FluxGuidance"
+        assert workflow["5"]["inputs"]["guidance"] == 4.0
+        assert workflow["7"]["inputs"]["noise_seed"] == 1
+        assert workflow["9"]["inputs"]["steps"] == 50
         return "pid-1"
 
     async def job_status(self, prompt_id):
@@ -51,10 +52,10 @@ def test_worker_auth_health_and_generation(monkeypatch):
             "width": 1024,
             "height": 1024,
             "seed": 1,
-            "steps": 28,
+            "steps": 50,
             "batch_size": 1,
             "preset": "raw",
-            "quality_profile": "krea_quality",
+            "quality_profile": "flux2_quality",
             "filename_prefix": "PixelPilot/test",
         },
     )
