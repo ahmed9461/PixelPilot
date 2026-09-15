@@ -24,18 +24,21 @@ def main() -> int:
     if not files:
         raise RuntimeError("Model manifest is empty")
 
+    print(f"[PixelPilot] model profile: {manifest.get('model', 'unknown')}")
+
     for index, item in enumerate(files, start=1):
         repo_id = item["repo_id"]
-        filename = item["filename"]
+        source_filename = item["filename"]
+        target_name = item.get("target_name") or Path(source_filename).name
         target_subdir = item["target_subdir"]
         gated = bool(item.get("requires_hf_token"))
         min_bytes = int(item.get("min_bytes") or 1)
         if gated and not hf_token:
-            raise RuntimeError(f"HF_TOKEN is required for gated file {repo_id}/{filename}")
+            raise RuntimeError(f"HF_TOKEN is required for gated file {repo_id}/{source_filename}")
 
         target_dir = comfy_dir / "models" / target_subdir
         target_dir.mkdir(parents=True, exist_ok=True)
-        target_file = target_dir / Path(filename).name
+        target_file = target_dir / target_name
         if target_file.exists():
             current_size = target_file.stat().st_size
             if current_size >= min_bytes:
@@ -47,27 +50,40 @@ def main() -> int:
             )
             target_file.unlink()
 
-        print(f"[{index}/{len(files)}] downloading {repo_id}/{filename} -> {target_dir}")
-        downloaded = Path(
-            hf_hub_download(
-                repo_id=repo_id,
-                filename=filename,
-                token=hf_token,
-                local_dir=target_dir,
+        # Hugging Face repositories often keep ComfyUI files under split_files/.
+        # Download into a staging directory and MOVE the finished file into the
+        # exact ComfyUI model directory. Moving avoids keeping a second 35GB+
+        # copy on the paid Vast disk.
+        staging_dir = target_dir / ".pixelpilot-download"
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir)
+        staging_dir.mkdir(parents=True, exist_ok=True)
+
+        print(f"[{index}/{len(files)}] downloading {repo_id}/{source_filename} -> {target_file}")
+        try:
+            downloaded = Path(
+                hf_hub_download(
+                    repo_id=repo_id,
+                    filename=source_filename,
+                    token=hf_token,
+                    local_dir=staging_dir,
+                )
             )
-        )
-        if downloaded.resolve() != target_file.resolve():
-            # Compatibility fallback across huggingface_hub versions. Stream/copy on disk
-            # instead of loading multi-gigabyte model files into RAM.
-            shutil.copy2(downloaded, target_file)
+            if not downloaded.exists():
+                raise RuntimeError(f"Hugging Face download returned missing path: {downloaded}")
+            shutil.move(str(downloaded), str(target_file))
+        finally:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+
         size = target_file.stat().st_size
         if size < min_bytes:
+            target_file.unlink(missing_ok=True)
             raise RuntimeError(
                 f"Downloaded file looks incomplete: {target_file} ({size} bytes; expected >= {min_bytes})"
             )
         print(f"[{index}/{len(files)}] ready: {target_file} ({size} bytes)")
 
-    print("All model files are ready.")
+    print("All FLUX.2 model files are ready.")
     return 0
 
 
