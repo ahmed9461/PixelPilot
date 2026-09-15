@@ -17,6 +17,9 @@ class FakeComfy:
 
     async def submit(self, workflow, client_id):
         assert workflow["4"]["inputs"]["text"] == "A natural photo"
+        assert workflow["10"]["class_type"] == "FluxGuidance"
+        assert workflow["10"]["inputs"]["guidance"] == 4.5
+        assert workflow["7"]["inputs"]["positive"] == ["10", 0]
         return "pid-1"
 
     async def job_status(self, prompt_id):
@@ -30,7 +33,6 @@ class FakeComfy:
 
 
 def test_worker_auth_health_and_generation(monkeypatch):
-    monkeypatch.setattr(worker, "TRUST_PROXY", False)
     monkeypatch.setattr(worker, "WORKER_TOKEN", "secret")
     monkeypatch.setattr(worker, "comfy", FakeComfy())
     client = TestClient(worker.app)
@@ -49,9 +51,10 @@ def test_worker_auth_health_and_generation(monkeypatch):
             "width": 1024,
             "height": 1024,
             "seed": 1,
-            "steps": 20,
+            "steps": 28,
             "batch_size": 1,
-            "preset": "natural",
+            "preset": "raw",
+            "quality_profile": "krea_quality",
             "filename_prefix": "PixelPilot/test",
         },
     )
