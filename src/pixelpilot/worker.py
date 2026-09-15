@@ -13,7 +13,7 @@ from pixelpilot.domain import GenerationSpec
 from pixelpilot.services.comfy_client import ComfyClient, ComfyError
 from pixelpilot.workflow import build_flux_krea_workflow, load_workflow
 
-app = FastAPI(title="PixelPilot Worker", version="0.3.0")
+app = FastAPI(title="PixelPilot Worker", version="0.4.0")
 
 WORKER_TOKEN = os.environ.get("PIXELPILOT_WORKER_TOKEN", "")
 COMFY_URL = os.environ.get("COMFY_URL", "http://127.0.0.1:8188")
@@ -39,7 +39,8 @@ class GenerateRequest(BaseModel):
     seed: int = Field(default=0, ge=0, le=2**63 - 1)
     steps: int = Field(default=20, ge=1)
     batch_size: int = Field(default=1, ge=1)
-    preset: str = Field(default="natural", max_length=64)
+    preset: str = Field(default="raw", max_length=64)
+    quality_profile: str = Field(default="official", pattern="^(official|krea_quality)$")
     filename_prefix: str = Field(default="PixelPilot", min_length=1, max_length=128)
 
     @field_validator("width", "height")
@@ -120,6 +121,7 @@ async def submit_job(request: GenerateRequest, _: None = Depends(require_token))
         steps=request.steps,
         batch_size=request.batch_size,
         preset=request.preset,
+        quality_profile=request.quality_profile,
     )
     workflow = build_flux_krea_workflow(base_workflow, spec, filename_prefix=request.filename_prefix)
     try:
