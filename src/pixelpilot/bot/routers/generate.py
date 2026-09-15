@@ -14,7 +14,7 @@ from pixelpilot.bot.keyboards import (
     count_keyboard,
     generation_image_keyboard,
     main_menu,
-    preset_keyboard,
+    quality_profile_keyboard,
     ratio_keyboard,
 )
 from pixelpilot.domain import GenerationResult, GenerationSpec, InstancePhase
@@ -36,13 +36,14 @@ RATIOS: dict[str, tuple[int, int]] = {
     "9x16": (768, 1344),
 }
 
-PRESET_SUFFIXES: dict[str, str] = {
-    "natural": "natural photorealistic photography, realistic materials and skin texture, natural proportions, believable lighting, subtle real-world imperfections",
-    "portrait": "natural photorealistic portrait photography, realistic skin texture, expressive eyes, believable facial anatomy, soft optical depth of field, natural lighting",
-    "full_body": "photorealistic full-body photography, complete person visible from head to feet, natural human anatomy and proportions, realistic hands and feet, believable posture",
-    "fashion": "high-end editorial fashion photography, realistic fabric texture and drape, natural human anatomy, elegant composition, premium lighting, believable skin texture",
-    "outdoor": "photorealistic outdoor photography, natural daylight, believable atmospheric depth, realistic textures, organic color response, subtle lens character",
-    "product": "premium commercial product photography, realistic material texture, precise geometry, controlled studio lighting, natural reflections, clean composition",
+QUALITY_STEPS: dict[str, int] = {
+    "official": 20,
+    "krea_quality": 28,
+}
+
+QUALITY_LABELS: dict[str, str] = {
+    "official": "Comfy Official",
+    "krea_quality": "Krea Quality",
 }
 
 
@@ -55,11 +56,6 @@ def orch() -> Orchestrator:
     if _orchestrator is None:
         raise RuntimeError("Generate router not configured")
     return _orchestrator
-
-
-def apply_preset(prompt: str, preset: str) -> str:
-    suffix = PRESET_SUFFIXES.get(preset, PRESET_SUFFIXES["natural"])
-    return f"{prompt.strip()}, {suffix}" if prompt.strip() else suffix
 
 
 @router.callback_query(lambda q: q.data == "generate:start")
@@ -75,18 +71,38 @@ async def generate_start(callback: CallbackQuery, state: FSMContext) -> None:
         )
         return
     await state.clear()
-    await callback.message.edit_text("🎨 اختر نوع الصورة:", reply_markup=preset_keyboard())
+    await callback.message.edit_text(
+        "🎨 <b>اختر وضع التوليد</b>\n\n"
+        "✨ <b>Krea Quality</b>: 28 خطوة + Krea guidance 4.5\n"
+        "🧪 <b>Comfy Official</b>: إعداد ComfyUI الرسمي، 20 خطوة\n\n"
+        "🔒 <b>مهم:</b> PixelPilot سيرسل البرومبت الذي تكتبه كما هو حرفيًا، بدون إضافة وصف أو تحسين أو ترجمة.",
+        reply_markup=quality_profile_keyboard(),
+    )
+
+
+@router.callback_query(lambda q: q.data and q.data.startswith("generate:quality:"))
+async def choose_quality(callback: CallbackQuery, state: FSMContext) -> None:
+    quality_profile = callback.data.rsplit(":", 1)[1]
+    if quality_profile not in QUALITY_STEPS:
+        await safe_callback_answer(callback, "وضع جودة غير معروف", show_alert=True)
+        return
+    await state.update_data(quality_profile=quality_profile)
+    await safe_callback_answer(callback)
+    await callback.message.edit_text(
+        f"✅ الوضع: <b>{QUALITY_LABELS[quality_profile]}</b>\n\n📐 اختر أبعاد الصورة:",
+        reply_markup=ratio_keyboard(),
+    )
 
 
 @router.callback_query(lambda q: q.data and q.data.startswith("generate:preset:"))
-async def choose_preset(callback: CallbackQuery, state: FSMContext) -> None:
-    preset = callback.data.rsplit(":", 1)[1]
-    if preset not in PRESET_SUFFIXES:
-        await safe_callback_answer(callback, "اختيار غير معروف", show_alert=True)
-        return
-    await state.update_data(preset=preset)
-    await safe_callback_answer(callback)
-    await callback.message.edit_text("📐 اختر أبعاد الصورة:", reply_markup=ratio_keyboard())
+async def legacy_preset(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle buttons left in old Telegram messages without modifying prompts."""
+    await state.clear()
+    await safe_callback_answer(callback, "تم إلغاء أنماط تعديل البرومبت")
+    await callback.message.edit_text(
+        "تم إلغاء أنماط تعديل البرومبت. اختر وضع التوليد الجديد:",
+        reply_markup=quality_profile_keyboard(),
+    )
 
 
 @router.callback_query(lambda q: q.data and q.data.startswith("generate:ratio:"))
@@ -94,6 +110,10 @@ async def choose_ratio(callback: CallbackQuery, state: FSMContext) -> None:
     ratio = callback.data.rsplit(":", 1)[1]
     if ratio not in RATIOS:
         await safe_callback_answer(callback, "مقاس غير معروف", show_alert=True)
+        return
+    data = await state.get_data()
+    if str(data.get("quality_profile") or "") not in QUALITY_STEPS:
+        await safe_callback_answer(callback, "اختر وضع التوليد أولًا", show_alert=True)
         return
     await state.update_data(ratio=ratio)
     await safe_callback_answer(callback)
@@ -113,45 +133,53 @@ async def choose_count(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(GenerateStates.waiting_prompt)
     await safe_callback_answer(callback)
     await callback.message.edit_text(
-        "✍️ أرسل وصف الصورة الآن.\n\n"
-        "اكتب ما تريد بشكل طبيعي؛ PixelPilot سيضيف تحسينات خفيفة مناسبة للواقعية حسب النمط الذي اخترته."
+        "✍️ أرسل البرومبت الآن.\n\n"
+        "🔒 سيتم تمريره إلى Krea <b>كما كتبته بالضبط</b>، بدون suffix أو تحسين تلقائي أو ترجمة."
     )
 
 
 @router.message(GenerateStates.waiting_prompt, F.text)
 async def receive_prompt(message: Message, state: FSMContext) -> None:
-    raw_prompt = (message.text or "").strip()
-    if not raw_prompt:
+    # Preserve the user's prompt exactly. We only use strip() to reject a
+    # whitespace-only message; the value sent to the model remains unchanged.
+    raw_prompt = message.text or ""
+    if not raw_prompt.strip():
         await message.answer("أرسل وصفًا نصيًا للصورة.")
         return
+    if len(raw_prompt) > 4000:
+        await message.answer("البرومبت طويل جدًا. الحد هو 4000 حرف.")
+        return
+
     data = await state.get_data()
-    preset = str(data.get("preset") or "natural")
+    quality_profile = str(data.get("quality_profile") or "official")
     ratio = str(data.get("ratio") or "1x1")
     count = int(data.get("count") or 1)
+    if quality_profile not in QUALITY_STEPS:
+        quality_profile = "official"
     width, height = RATIOS[ratio]
-    prepared_prompt = apply_preset(raw_prompt, preset)
-    if len(prepared_prompt) > 4000:
-        await message.answer("الوصف طويل جدًا. اختصره قليلًا (الحد بعد تحسينات PixelPilot هو 4000 حرف).")
-        return
+
     spec = GenerationSpec(
-        prompt=prepared_prompt,
+        prompt=raw_prompt,
         width=width,
         height=height,
         seed=secrets.randbits(63),
-        steps=orch().settings.generation_default_steps,
+        steps=QUALITY_STEPS[quality_profile],
         batch_size=count,
-        preset=preset,
+        preset="raw",
+        quality_profile=quality_profile,
     )
     await state.clear()
     status_message = await message.answer(
         "⏳ <b>جاري التوليد...</b>\n"
+        f"الوضع: {QUALITY_LABELS[quality_profile]}\n"
         f"المقاس: {width}×{height}\n"
+        f"الخطوات: {spec.steps}\n"
         f"العدد: {count}\n"
         f"Seed: <code>{spec.seed}</code>"
     )
     try:
         result = await orch().generate(spec)
-        await status_message.edit_text("✅ اكتمل التوليد، جاري إرسال النتائج...")
+        await status_message.edit_text("✅ اكتمل التوليد، جاري إرسال PNG الأصلي بدون ضغط Telegram...")
         await _deliver_result(message, result)
         await status_message.delete()
     except Exception as exc:
@@ -170,6 +198,8 @@ async def cancel(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(lambda q: q.data and q.data.startswith("generate:original:"))
 async def original(callback: CallbackQuery) -> None:
+    # Backward compatibility for buttons on older generations. New generations
+    # are already delivered as original documents by default.
     _, _, generation_id, image_index = callback.data.split(":")
     await safe_callback_answer(callback, "جاري إرسال الأصل...")
     try:
@@ -212,25 +242,21 @@ async def rerun_new(callback: CallbackQuery) -> None:
 async def _deliver_result(message: Message, result: GenerationResult) -> None:
     for index, image_ref in enumerate(result.images):
         content, _ = await orch().download_generation_image(result.generation_id, index)
+        quality_label = QUALITY_LABELS.get(result.spec.quality_profile, result.spec.quality_profile)
         caption = (
             f"✨ Generation <code>#{result.generation_id}</code>\n"
+            f"Mode: <b>{escape(quality_label)}</b>\n"
             f"Seed: <code>{result.spec.seed}</code>\n"
-            f"{result.spec.width}×{result.spec.height}"
+            f"{result.spec.width}×{result.spec.height}\n"
+            "📄 PNG الأصلي — بدون ضغط Telegram"
         )
         keyboard = generation_image_keyboard(
             result.generation_id,
             index,
             show_rerun=index == 0,
         )
-        try:
-            await message.answer_photo(
-                BufferedInputFile(content, filename=image_ref.filename),
-                caption=caption,
-                reply_markup=keyboard,
-            )
-        except Exception:
-            await message.answer_document(
-                BufferedInputFile(content, filename=image_ref.filename),
-                caption=caption + "\n📄 أُرسلت كملف لأن معاينة Telegram لم تقبل الصورة.",
-                reply_markup=keyboard,
-            )
+        await message.answer_document(
+            BufferedInputFile(content, filename=image_ref.filename),
+            caption=caption,
+            reply_markup=keyboard,
+        )
