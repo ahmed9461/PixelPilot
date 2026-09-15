@@ -65,10 +65,10 @@ class GenerationSpec:
     width: int = 1024
     height: int = 1024
     seed: int = 0
-    steps: int = 20
+    steps: int = 28
     batch_size: int = 1
     preset: str = "raw"
-    quality_profile: str = "official"
+    quality_profile: str = "flux2_balanced"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
