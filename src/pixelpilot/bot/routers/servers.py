@@ -46,22 +46,27 @@ def _offer_signature(item: Any) -> tuple[Any, ...]:
     )
 
 
-def _refresh_note(previous: list[Any], current: list[Any]) -> str:
+def _refresh_note(
+    previous: list[Any],
+    current: list[Any],
+    refresh_no: int | None = None,
+) -> str:
+    prefix = f"🔄 تحديث السوق #{refresh_no}" if refresh_no else "🔄 تم تحديث السوق الآن"
     if not previous:
-        return "🔄 تم جلب العروض من السوق الآن."
+        return f"{prefix} — تم فحص السوق الآن."
 
     old = [_offer_signature(item) for item in previous]
     new = [_offer_signature(item) for item in current]
     if old == new:
-        return "🔄 تم تحديث السوق الآن — لا توجد تغييرات عن آخر تحديث."
+        return f"{prefix} — تم فحص السوق الآن، ونفس النتائج ما زالت متاحة."
 
     old_ids = {item[0] for item in old}
     new_ids = {item[0] for item in new}
     added = len(new_ids - old_ids)
     removed = len(old_ids - new_ids)
     if added or removed:
-        return f"🔄 تم تحديث السوق الآن — {added} عرض جديد و{removed} عرض اختفى."
-    return "🔄 تم تحديث السوق الآن — تغيّرت الأسعار أو ترتيب العروض."
+        return f"{prefix} — {added} عرض جديد و{removed} عرض اختفى."
+    return f"{prefix} — تغيّرت الأسعار أو ترتيب العروض."
 
 
 def _format_duration(seconds: float) -> str:
@@ -133,17 +138,24 @@ async def search(callback: CallbackQuery) -> None:
             reply_markup=main_menu(),
         )
         return
+
+    refresh_no = int(await orch().db.get("offers.refresh_serial", 0) or 0) + 1
+    await orch().db.set("offers.refresh_serial", refresh_no)
+
     if not offers:
         await callback.message.edit_text(
-            "لا توجد عروض مناسبة حاليًا ضمن سقف السعر المحدد. جرّب التحديث بعد قليل.",
+            f"🔄 <b>تحديث السوق #{refresh_no}</b>\n\n"
+            "تم فحص السوق الآن، ولا توجد عروض مناسبة ضمن سقف السعر المحدد.",
             reply_markup=main_menu(),
         )
         return
 
-    note = _refresh_note(previous, offers)
+    note = _refresh_note(previous, offers, refresh_no)
     await orch().db.set("offers.last_refresh_note", note)
     await callback.message.edit_text(
-        f"🧾 <b>العروض المتاحة</b>\n{note}\n\nاختر عرضًا لمراجعة السعر والمواصفات:",
+        f"🧾 <b>العروض المتاحة</b>\n{note}\n"
+        f"العروض المطابقة الآن: <b>{len(offers)}</b>\n\n"
+        "اختر عرضًا لمراجعة السعر والمواصفات:",
         reply_markup=offers_keyboard(offers),
     )
 

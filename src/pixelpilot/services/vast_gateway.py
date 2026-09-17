@@ -195,10 +195,32 @@ class VastSdkGateway:
             self._client = VastAI(api_key=self.api_key, raw=True, quiet=True)
         return self._client
 
-    async def search_offers(self, query: str, limit: int = 8) -> list[GpuOffer]:
+    async def search_offers(
+        self,
+        query: str,
+        limit: int = 8,
+        *,
+        storage_gb: float = 5.0,
+    ) -> list[GpuOffer]:
+        """Run a fresh marketplace request and return the cheapest matches.
+
+        Vast's SDK performs a live HTTP request for each search_offers() call;
+        PixelPilot keeps only the returned snapshot for comparison/details.
+        Ask the backend to sort by total hourly price and request a wider pool
+        than the Telegram display size so local ranking is not limited to a
+        small score-sorted subset.
+        """
         client = self._get_client()
+        display_limit = max(1, int(limit))
+        backend_limit = max(32, min(200, display_limit * 8))
         try:
-            result = await asyncio.to_thread(client.search_offers, query=query)
+            result = await asyncio.to_thread(
+                client.search_offers,
+                query=query,
+                order="dph_total",
+                limit=backend_limit,
+                storage=float(storage_gb),
+            )
         except Exception as exc:
             raise VastError(f"Vast search failed: {exc}") from exc
         if isinstance(result, str):
@@ -210,7 +232,7 @@ class VastSdkGateway:
         offers = [normalize_offer(row) for row in rows if isinstance(row, dict)]
         offers = [x for x in offers if x.offer_id > 0]
         offers.sort(key=lambda x: (x.price_per_hour, -(x.dlperf or 0)))
-        return offers[:limit]
+        return offers[:display_limit]
 
     async def create_instance(self, offer_id: int, *, image: str | None, disk_gb: int, template_hash: str | None = None, env: str | None = None, onstart_cmd: str | None = None, label: str = "PixelPilot", cancel_unavail: bool = True) -> dict[str, Any]:
         client = self._get_client()

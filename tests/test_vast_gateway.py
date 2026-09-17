@@ -63,6 +63,41 @@ def test_gateway_requests_raw_json_from_official_sdk(monkeypatch):
     assert captured["quiet"] is True
 
 
+def test_search_offers_runs_live_request_each_time_and_requests_price_order():
+    import asyncio
+    from pixelpilot.services.vast_gateway import VastSdkGateway
+
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+        def search_offers(self, **kwargs):
+            self.calls.append(kwargs)
+            price = 0.40 + 0.01 * len(self.calls)
+            return [{
+                "id": len(self.calls),
+                "gpu_name": "RTX A6000",
+                "gpu_ram": 49140,
+                "dph_total": price,
+                "reliability": 0.99,
+                "dlperf": 40,
+            }]
+
+    async def scenario():
+        client = FakeClient()
+        gateway = VastSdkGateway("secret")
+        gateway._client = client
+        first = await gateway.search_offers("gpu_ram>=48", limit=8, storage_gb=80)
+        second = await gateway.search_offers("gpu_ram>=48", limit=8, storage_gb=80)
+        assert len(client.calls) == 2
+        assert client.calls[0]["order"] == "dph_total"
+        assert client.calls[0]["limit"] >= 32
+        assert client.calls[0]["storage"] == 80.0
+        assert first[0].offer_id == 1
+        assert second[0].offer_id == 2
+
+    asyncio.run(scenario())
+
+
 def test_extract_mapped_port_from_wrapped_vast_response():
     raw = {"instances": {"id": 883, "actual_status": "running", "public_ipaddr": "203.0.113.99", "ports": {"8190/tcp": [{"HostPort": "40123"}]}}}
     assert extract_mapped_port(raw, 8190) == 40123
