@@ -89,10 +89,16 @@ class InferenceClient:
     ) -> InferenceResult:
         # Deliberately no system/developer prompt is added here. The payload is
         # only the conversation supplied by PixelPilot's Telegram session.
+        #
+        # vLLM defaults to temperature=1.0, which samples randomly. Qwen2.5-Omni
+        # official Transformers examples call model.generate() without sampling,
+        # so use temperature=0 here to match greedy decoding and avoid the
+        # multilingual/gibberish instability observed in the live test.
         payload = {
             "model": self.model_id,
             "messages": messages,
             "max_tokens": max_tokens,
+            "temperature": 0.0,
         }
         response = await self._request("POST", "/v1/chat/completions", json=payload)
         data = response.json()
