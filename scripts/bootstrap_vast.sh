@@ -88,7 +88,7 @@ if ! command -v ffmpeg >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; th
 fi
 
 "$PYTHON_BIN" -m pip install -U pip wheel setuptools
-"$PYTHON_BIN" -m pip install -U 'vllm>=0.8.5.post1' 'qwen-omni-utils[decord]' hf_xet
+"$PYTHON_BIN" -m pip install -U 'vllm>=0.8.5.post1' qwen-omni-utils hf_xet
 
 export HF_HOME MODEL_ID
 if [[ -n "${HF_TOKEN:-}" ]]; then export HF_TOKEN; fi
