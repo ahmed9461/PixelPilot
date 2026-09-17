@@ -87,7 +87,7 @@ class InferenceClient:
         *,
         max_tokens: int = 2048,
         temperature: float = 0.0,
-        top_p: float = 0.95,
+        top_p: float = 1.0,
     ) -> InferenceResult:
         # PixelPilot does not rewrite the supplied conversation here. Any
         # optional persona/style prompt is explicitly assembled by the
