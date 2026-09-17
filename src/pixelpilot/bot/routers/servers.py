@@ -25,6 +25,12 @@ def orch() -> Orchestrator:
     return _orchestrator
 
 
+def _display_progress(text: str) -> str:
+    """Keep legacy orchestrator progress text aligned with the configured model."""
+    model_name = orch().settings.model_id.rsplit("/", 1)[-1]
+    return text.replace("Qwen3-Omni", model_name)
+
+
 @router.callback_query(lambda q: q.data == "servers:preflight")
 async def preflight(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback)
@@ -95,7 +101,7 @@ async def rent(callback: CallbackQuery) -> None:
 
     async def progress(text: str) -> None:
         try:
-            await callback.message.edit_text(f"⏳ <b>تجهيز PixelPilot</b>\n\n{text}")
+            await callback.message.edit_text(f"⏳ <b>تجهيز PixelPilot</b>\n\n{_display_progress(text)}")
         except Exception:
             pass
 
@@ -153,7 +159,7 @@ async def start_instance(callback: CallbackQuery) -> None:
 
     async def progress(text: str) -> None:
         try:
-            await callback.message.edit_text(f"⏳ <b>إعادة التشغيل</b>\n\n{text}")
+            await callback.message.edit_text(f"⏳ <b>إعادة التشغيل</b>\n\n{_display_progress(text)}")
         except Exception:
             pass
 
