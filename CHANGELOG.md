@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.3 — 2026-09-17
+
+- Fixed unstable multilingual/gibberish text responses observed in the live Qwen2.5-Omni test.
+- PixelPilot now sends `temperature=0` to the inference API so decoding is greedy/deterministic instead of inheriting vLLM's random `temperature=1.0` default.
+- This is a generation setting only; PixelPilot still injects no `system` or `developer` prompt and does not rewrite the user's message.
+- Added a regression test that verifies both deterministic decoding and the no-internal-prompt invariant.
+
 ## 0.4.2 — 2026-09-17
 
 - Lowered the hard Vast rental ceiling to $0.50/hour.
