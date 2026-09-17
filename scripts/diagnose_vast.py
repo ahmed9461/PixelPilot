@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import json
-from typing import Any
 
 from vastai import VastAI
 
 from pixelpilot.config import get_settings
 from pixelpilot.db import Database
+from pixelpilot.services.billing import billing_snapshot
 from pixelpilot.services.inference_client import InferenceClient
-from pixelpilot.services.vast_gateway import extract_mapped_port
+from pixelpilot.services.vast_gateway import VastSdkGateway
 
 
 async def _call(client: VastAI, method: str, **kwargs):
@@ -17,22 +16,11 @@ async def _call(client: VastAI, method: str, **kwargs):
     return await asyncio.to_thread(fn, **kwargs)
 
 
-def _coerce_instance(value: Any) -> dict[str, Any]:
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except json.JSONDecodeError:
-            return {}
-    if isinstance(value, list) and value and isinstance(value[0], dict):
-        return value[0]
-    if isinstance(value, dict):
-        nested = value.get("instances") or value.get("instance")
-        if isinstance(nested, dict):
-            return nested
-        if isinstance(nested, list) and nested and isinstance(nested[0], dict):
-            return nested[0]
-        return value
-    return {}
+def _fmt_duration(seconds: float) -> str:
+    total = max(0, int(seconds))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
 async def main() -> None:
@@ -46,49 +34,49 @@ async def main() -> None:
     if not instance_id:
         raise SystemExit("PixelPilot has no current instance id in its database")
 
-    client = VastAI(api_key=settings.vast_api_key, raw=True, quiet=True)
+    instance_id = int(instance_id)
+    gateway = VastSdkGateway(settings.vast_api_key, worker_proxy_port=settings.inference_port)
+    raw_client = VastAI(api_key=settings.vast_api_key, raw=True, quiet=True)
+
     print(f"PixelPilot live diagnostics — instance {instance_id}\n")
 
-    info: dict[str, Any] = {}
+    ref = None
     print("===== INSTANCE =====")
     try:
-        info = _coerce_instance(await _call(client, "show_instance", id=int(instance_id)))
-        if info:
-            summary = {
-                key: info.get(key)
-                for key in (
-                    "id",
-                    "actual_status",
-                    "intended_status",
-                    "cur_state",
-                    "status_msg",
-                    "public_ipaddr",
-                    "ssh_host",
-                    "ssh_port",
-                    "ports",
-                    "onstart",
-                )
-                if info.get(key) is not None
-            }
-            print(json.dumps(summary, ensure_ascii=False, indent=2))
-        else:
-            print("No structured instance data returned")
+        ref = await gateway.show_instance(instance_id)
+        print(f"status: {ref.status}")
+        print(f"public_ip: {ref.public_ip or 'not assigned'}")
+        print(f"mapped_port: {ref.mapped_port or 'not mapped'}")
+        status_msg = ref.raw.get("status_msg") if isinstance(ref.raw, dict) else None
+        if status_msg:
+            print(f"status_msg: {status_msg}")
     except Exception as exc:
         print(f"ERROR: {exc}")
 
+    phase = await db.get("instance.phase", "unknown")
     print("\n===== PIXELPILOT STATE =====")
-    print(f"phase: {await db.get('instance.phase', 'unknown')}")
+    print(f"phase: {phase}")
     print(f"model: {settings.model_id}")
+
+    print("\n===== BILLING =====")
+    billing = await billing_snapshot(db)
+    if billing is None:
+        print("billing meter: not started")
+    else:
+        print(f"active: {'yes' if billing['active'] else 'no'}")
+        print(f"active_time: {_fmt_duration(float(billing['active_seconds']))}")
+        print(f"elapsed_since_rent: {_fmt_duration(float(billing['elapsed_seconds']))}")
+        print(f"rate: ${float(billing['price_per_hour']):.3f}/h")
+        print(f"estimated_gpu_cost: ${float(billing['estimated_cost_usd']):.4f}")
 
     print("\n===== INFERENCE PROBE =====")
     token = await db.get("inference.token")
     url = await db.get("inference.url")
-    if not url and info:
-        public_ip = info.get("public_ipaddr") or info.get("public_ip")
-        mapped_port = extract_mapped_port(info, settings.inference_port)
-        if public_ip and mapped_port:
-            scheme = "https" if settings.inference_use_https else "http"
-            url = f"{scheme}://{public_ip}:{mapped_port}"
+    if not url and ref and ref.public_ip and ref.mapped_port:
+        scheme = "https" if settings.inference_use_https else "http"
+        url = f"{scheme}://{ref.public_ip}:{ref.mapped_port}"
+
+    healthy = False
     if not url:
         print("endpoint: not mapped yet")
     elif not token:
@@ -112,25 +100,24 @@ async def main() -> None:
             except Exception as exc:
                 print(f"models: ERROR: {exc}")
 
+    print("\n===== PROGRESS =====")
+    if healthy:
+        print("READY — the assistant endpoint is responding.")
+    elif ref is None:
+        print("UNKNOWN — instance details could not be read.")
+    elif ref.status.lower() not in {"running", "ready"}:
+        print(f"BOOTING — Vast instance status is {ref.status!r}.")
+    elif not ref.public_ip or not ref.mapped_port:
+        print("STARTING — the instance is running, waiting for the public service port.")
+    else:
+        print("PROVISIONING — the instance is running and mapped; the assistant runtime is still starting or loading.")
+
     print("\n===== VAST INSTANCE LOGS =====")
     try:
-        logs = await _call(client, "logs", INSTANCE_ID=int(instance_id), tail="250")
+        logs = await _call(raw_client, "logs", instance_id=instance_id, tail=250)
         print(logs.rstrip() if isinstance(logs, str) else logs)
     except Exception as exc:
-        print(f"ERROR: {exc}")
-
-    # Vast's execute API is intentionally constrained. Keep diagnostics to
-    # documented commands instead of shell commands such as tail/ps/nvidia-smi.
-    for title, command in (
-        ("WORKSPACE LIST", "ls -lah /workspace"),
-        ("WORKSPACE DISK USAGE", "du -d 2 -h /workspace"),
-    ):
-        print(f"\n===== {title} =====")
-        try:
-            output = await _call(client, "execute", id=int(instance_id), COMMAND=command)
-            print(output.rstrip() if isinstance(output, str) else output)
-        except Exception as exc:
-            print(f"UNAVAILABLE: {exc}")
+        print(f"UNAVAILABLE: {exc}")
 
 
 if __name__ == "__main__":
