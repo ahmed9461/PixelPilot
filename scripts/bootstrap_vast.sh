@@ -12,6 +12,7 @@ MODEL_GPU_MEMORY_UTILIZATION="${MODEL_GPU_MEMORY_UTILIZATION:-0.92}"
 MODEL_TENSOR_PARALLEL_SIZE="${MODEL_TENSOR_PARALLEL_SIZE:-1}"
 MODEL_LIMIT_IMAGES="${MODEL_LIMIT_IMAGES:-1}"
 MODEL_LIMIT_AUDIO="${MODEL_LIMIT_AUDIO:-1}"
+MODEL_LIMIT_VIDEOS="${MODEL_LIMIT_VIDEOS:-1}"
 HF_HOME="${HF_HOME:-$WORKSPACE/hf-cache}"
 LOG_FILE="${LOG_FILE:-$WORKSPACE/pixelpilot-bootstrap.log}"
 
@@ -40,7 +41,7 @@ if [[ -r /proc/1/environ ]]; then
   while IFS= read -r -d '' entry; do
     key="${entry%%=*}"
     case "$key" in
-      HF_TOKEN|PIXELPILOT_INFERENCE_TOKEN|INFERENCE_PORT|MODEL_ID|MODEL_DTYPE|MODEL_MAX_LEN|MODEL_GPU_MEMORY_UTILIZATION|MODEL_TENSOR_PARALLEL_SIZE|MODEL_LIMIT_IMAGES|MODEL_LIMIT_AUDIO|HF_HOME|DATA_DIRECTORY|PIXELPILOT_REPO_URL|PIXELPILOT_REPO_REF)
+      HF_TOKEN|PIXELPILOT_INFERENCE_TOKEN|INFERENCE_PORT|MODEL_ID|MODEL_DTYPE|MODEL_MAX_LEN|MODEL_GPU_MEMORY_UTILIZATION|MODEL_TENSOR_PARALLEL_SIZE|MODEL_LIMIT_IMAGES|MODEL_LIMIT_AUDIO|MODEL_LIMIT_VIDEOS|HF_HOME|DATA_DIRECTORY|PIXELPILOT_REPO_URL|PIXELPILOT_REPO_REF)
         if [[ -z "${!key:-}" ]]; then export "$entry"; fi
         ;;
     esac
@@ -87,12 +88,12 @@ if ! command -v ffmpeg >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; th
 fi
 
 "$PYTHON_BIN" -m pip install -U pip wheel setuptools
-"$PYTHON_BIN" -m pip install -U 'vllm>=0.8.5.post1' qwen-omni-utils hf_xet
+"$PYTHON_BIN" -m pip install -U 'vllm>=0.8.5.post1' 'qwen-omni-utils[decord]' hf_xet
 
 export HF_HOME MODEL_ID
 if [[ -n "${HF_TOKEN:-}" ]]; then export HF_TOKEN; fi
 
-LIMIT_MM="{\"image\":${MODEL_LIMIT_IMAGES},\"audio\":${MODEL_LIMIT_AUDIO}}"
+LIMIT_MM="{\"image\":${MODEL_LIMIT_IMAGES},\"audio\":${MODEL_LIMIT_AUDIO},\"video\":${MODEL_LIMIT_VIDEOS}}"
 
 echo "[PixelPilot] launching Qwen2.5-Omni through vLLM"
 echo "[PixelPilot] dtype=$MODEL_DTYPE max_model_len=$MODEL_MAX_LEN tp=$MODEL_TENSOR_PARALLEL_SIZE"
