@@ -21,3 +21,27 @@ def test_db_set_get_and_generation(tmp_path):
         assert row["result"] == {"images": []}
 
     asyncio.run(scenario())
+
+
+def test_db_get_many_and_set_many_use_one_logical_batch(tmp_path):
+    async def scenario():
+        db = Database(tmp_path / "state.sqlite3")
+        await db.init()
+        await db.set_many({
+            "assistant.state.tone": "direct",
+            "assistant.state.language": "ar",
+            "assistant.state.creativity_pct": 20,
+        })
+        values = await db.get_many([
+            "assistant.state.tone",
+            "assistant.state.language",
+            "assistant.state.creativity_pct",
+            "missing",
+        ])
+        assert values == {
+            "assistant.state.tone": "direct",
+            "assistant.state.language": "ar",
+            "assistant.state.creativity_pct": 20,
+        }
+
+    asyncio.run(scenario())
