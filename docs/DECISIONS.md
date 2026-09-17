@@ -1,5 +1,17 @@
 # Decisions
 
+## 2026-09-17 — $0.50/hour hard rental ceiling
+
+PixelPilot must not rent any offer whose total hourly rental price exceeds `$0.50/hour`. The ceiling is enforced both in marketplace search and again immediately before instance creation so a stale cached offer cannot bypass it.
+
+## 2026-09-17 — Live marketplace refresh feedback
+
+Every press of the refresh/search button must perform a new marketplace request. PixelPilot compares the fresh result set with the previous cached result set and tells the user whether nothing changed, offers appeared/disappeared, or prices/order changed. Do not fake rotation or shuffle unchanged offers just to make refresh look different.
+
+## 2026-09-17 — Per-second rental meter
+
+Track the active rental meter in SQLite from successful contract creation through stop/destroy. The meter uses the contracted hourly price and accumulated active seconds, pauses when the user stops the instance, resumes on start, and stores a final snapshot on destroy. Telegram status and destroy confirmation show the current elapsed active time and estimated rental cost. Storage and bandwidth remain separate provider charges and are not included in this meter.
+
 ## 2026-09-17 — Keep Telegram UI user-facing
 
 Normal Telegram screens must contain only information the user needs to operate PixelPilot. Do not expose model names, vLLM/inference architecture, prompt-policy explanations, deployment internals, or implementation notes in welcome/help/status/provisioning screens. Keep technical details in `README`, `docs`, logs, diagnostics and developer-facing files instead.
