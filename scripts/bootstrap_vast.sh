@@ -5,9 +5,9 @@ WORKSPACE="${WORKSPACE:-/workspace}"
 PIXELPILOT_ROOT="${PIXELPILOT_ROOT:-$WORKSPACE/PixelPilot}"
 VENV_DIR="${VENV_DIR:-$WORKSPACE/pixelpilot-vllm}"
 INFERENCE_PORT="${INFERENCE_PORT:-8190}"
-MODEL_ID="${MODEL_ID:-Qwen/Qwen3-Omni-30B-A3B-Instruct}"
+MODEL_ID="${MODEL_ID:-Qwen/Qwen2.5-Omni-7B}"
 MODEL_DTYPE="${MODEL_DTYPE:-bfloat16}"
-MODEL_MAX_LEN="${MODEL_MAX_LEN:-32768}"
+MODEL_MAX_LEN="${MODEL_MAX_LEN:-8192}"
 MODEL_GPU_MEMORY_UTILIZATION="${MODEL_GPU_MEMORY_UTILIZATION:-0.92}"
 MODEL_TENSOR_PARALLEL_SIZE="${MODEL_TENSOR_PARALLEL_SIZE:-1}"
 MODEL_LIMIT_IMAGES="${MODEL_LIMIT_IMAGES:-1}"
@@ -87,14 +87,14 @@ if ! command -v ffmpeg >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; th
 fi
 
 "$PYTHON_BIN" -m pip install -U pip wheel setuptools
-"$PYTHON_BIN" -m pip install -U vllm qwen-omni-utils hf_xet
+"$PYTHON_BIN" -m pip install -U 'vllm>=0.8.5.post1' qwen-omni-utils hf_xet
 
 export HF_HOME MODEL_ID
 if [[ -n "${HF_TOKEN:-}" ]]; then export HF_TOKEN; fi
 
 LIMIT_MM="{\"image\":${MODEL_LIMIT_IMAGES},\"audio\":${MODEL_LIMIT_AUDIO}}"
 
-echo "[PixelPilot] launching Qwen3-Omni through vLLM"
+echo "[PixelPilot] launching Qwen2.5-Omni through vLLM"
 echo "[PixelPilot] dtype=$MODEL_DTYPE max_model_len=$MODEL_MAX_LEN tp=$MODEL_TENSOR_PARALLEL_SIZE"
 cd "$WORKSPACE"
 exec "$VENV_DIR/bin/vllm" serve "$MODEL_ID" \
