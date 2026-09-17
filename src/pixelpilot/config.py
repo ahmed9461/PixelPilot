@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     vast_disk_gb: int = 80
     vast_min_gpu_ram_gb: int = 48
     vast_min_reliability: float = 0.98
-    vast_max_price_usd_hour: float = 0.80
+    vast_max_price_usd_hour: float = 0.50
     vast_default_limit: int = 8
     vast_verified_only: bool = True
     vast_datacenter_only: bool = False
@@ -81,6 +81,13 @@ class Settings(BaseSettings):
     def fraction_range(cls, value: float) -> float:
         if not 0 < value <= 1:
             raise ValueError("value must be > 0 and <= 1")
+        return value
+
+    @field_validator("vast_max_price_usd_hour")
+    @classmethod
+    def positive_price_cap(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("VAST_MAX_PRICE_USD_HOUR must be > 0")
         return value
 
     @field_validator(
