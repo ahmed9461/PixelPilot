@@ -20,11 +20,11 @@ def test_default_profile_has_no_hidden_prompt_and_stable_sampling(tmp_path):
         state = await get_state(db)
         assert state["persona"] == "neutral"
         assert state["tone"] == "balanced"
+        assert state["diversity_pct"] == 100
+        assert state["response_length_pct"] == 100
         assert await effective_system_prompt(db) == ""
         params = await generation_params(db, max_output_tokens=2048)
-        assert params["temperature"] == 0.0
-        assert params["top_p"] == 0.95
-        assert 256 <= params["max_tokens"] <= 2048
+        assert params == {"temperature": 0.0, "top_p": 1.0, "max_tokens": 2048}
     asyncio.run(scenario())
 
 
