@@ -28,6 +28,9 @@ Output is text. Image generation is no longer part of the project.
 11. Track rental time and estimated active rental cost per second from rent until stop/destroy. Pausing stops the active-time meter; restarting resumes it. Preserve the final billing snapshot after destroy.
 12. Stable text generation starts at `temperature=0`; the owner may deliberately raise creativity from the Assistant Settings UI. The UI value is stored in SQLite and applies on the next request without editing `.env`.
 13. Personality, tone, reasoning depth, formatting, language, custom prompt, context depth and generation controls are runtime owner settings stored in SQLite. Each prompt profile must be viewable, replaceable and resettable from Telegram.
+14. Assistant Settings navigation must be deterministic: a Back button returns to the screen that opened the current screen. Prompt edit/view/reset flows must preserve whether they came from a behavior group or the central prompt hub.
+15. Settings callbacks must feel immediate. Avoid repeated SQLite open/read cycles and avoid Telegram edits that intentionally submit identical text/markup. Use batched KV operations and safe no-op handling.
+16. Built-in behavior profiles are production-quality modular behavior contracts, not one-line style hints. They should define scope, desired behavior, accuracy/adaptation rules and what to avoid, while remaining compact enough to compose without wasting the 8K context window.
 
 ## Architecture
 
@@ -71,7 +74,11 @@ The main Telegram menu includes `⚙️ إعدادات المساعد` with:
 - `🧠 السياق`: enable/disable RAM-only context, choose retained message depth, clear context.
 - `📝 البرومتات`: view/edit/reset current profile prompts, edit a custom prompt layer, view/export the final composed prompt, reset all settings.
 
-Prompt changes take effect on the next request; they do not require GPU reinstall or controller `.env` edits.
+Prompt changes take effect on the next request; they do not require GPU reinstall or controller `.env` edits. The built-in v0.5.1 profiles use structured behavior contracts rather than short style sentences. A prompt-schema version is stored so untouched old starter prompts can be upgraded without overwriting owner customizations.
+
+## Settings performance
+
+Assistant settings use batched `get_many` / `set_many` SQLite operations for profile state. A screen should not open a fresh SQLite connection for every individual setting. Buttons that represent the already-selected value are treated as no-ops, and harmless Telegram `message is not modified` responses are ignored rather than surfaced as glitches.
 
 ## Billing meter
 

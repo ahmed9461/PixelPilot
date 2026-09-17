@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.1 — 2026-09-17
+
+- Fixed Assistant Settings navigation so prompt editing returns to the section it came from instead of jumping to an unrelated prompt screen.
+- Added explicit navigation origin to prompt view/edit/reset flows and made `/cancel` preserve a sensible return path.
+- Removed several Telegram callback glitches: selected options no longer re-edit identical markup, generation value labels are true no-op buttons, and unchanged message edits are ignored safely.
+- Added batched SQLite KV reads/writes. Settings screens no longer perform dozens of separate database connections on a single button press.
+- Rebuilt the starter personality, tone, reasoning, formatting and language prompts into structured behavior profiles with scope, accuracy rules, adaptation guidance and failure-avoidance constraints.
+- Added prompt-schema migration: untouched v0.5.0 starter prompts upgrade automatically, while owner-edited prompts remain unchanged.
+- Added navigation, batch-storage, migration and professional-profile regression tests.
+
 ## 0.5.0 — 2026-09-17
 
 - Added Telegram video, video-note and video-document understanding using multimodal `video_url` input.

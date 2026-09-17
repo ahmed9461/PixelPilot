@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from html import escape
-from typing import Any
+from typing import Any, Literal
 
 from aiogram import Router
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from pixelpilot.bot.callbacks import safe_callback_answer
+from pixelpilot.bot.callbacks import (
+    safe_callback_answer,
+    safe_edit_reply_markup,
+    safe_edit_text,
+)
 from pixelpilot.bot.keyboards import main_menu
 from pixelpilot.services.assistant_settings import (
     DEFAULT_STATE,
@@ -24,7 +29,18 @@ from pixelpilot.services.orchestrator import Orchestrator
 
 router = Router(name="assistant_settings")
 _orchestrator: Orchestrator | None = None
-_pending_edit: tuple[str, str] | None = None
+
+PromptOrigin = Literal["group", "hub"]
+
+
+@dataclass(slots=True)
+class PendingPromptEdit:
+    group: str
+    key: str
+    origin: PromptOrigin
+
+
+_pending_edit: PendingPromptEdit | None = None
 
 
 def configure(orchestrator: Orchestrator) -> None:
@@ -42,6 +58,11 @@ def _label(group: str, key: str) -> str:
     options = GROUPS[group]
     item = next((item for item in options if item.key == key), options[0])
     return item.label
+
+
+def _cancel_pending() -> None:
+    global _pending_edit
+    _pending_edit = None
 
 
 def _home_keyboard() -> InlineKeyboardMarkup:
@@ -72,7 +93,7 @@ async def _settings_text() -> str:
     state = await get_state(orch().db)
     return (
         "⚙️ <b>إعدادات المساعد</b>\n\n"
-        "هنا تغيّر شخصية المساعد وطريقة الرد والإعدادات المتقدمة بدون تعديل ملفات السيرفر.\n\n"
+        "غيّر الشخصية وطريقة الرد والإعدادات المتقدمة من هنا مباشرة.\n\n"
         f"🎭 الروح: <b>{escape(_label('persona', str(state['persona'])))}</b>\n"
         f"⚡ السمة: <b>{escape(_label('tone', str(state['tone'])))}</b>\n"
         f"🧠 الاستدلال: <b>{escape(_label('reasoning', str(state['reasoning'])))}</b>\n"
@@ -84,10 +105,16 @@ async def _settings_text() -> str:
     )
 
 
+@router.callback_query(lambda q: q.data == "assistant:noop")
+async def noop(callback: CallbackQuery) -> None:
+    await safe_callback_answer(callback)
+
+
 @router.callback_query(lambda q: q.data == "assistant:settings")
 async def settings_home(callback: CallbackQuery) -> None:
+    _cancel_pending()
     await safe_callback_answer(callback)
-    await callback.message.edit_text(await _settings_text(), reply_markup=_home_keyboard())
+    await safe_edit_text(callback.message, await _settings_text(), reply_markup=_home_keyboard())
 
 
 def _group_keyboard(group: str, selected: str) -> InlineKeyboardMarkup:
@@ -106,43 +133,60 @@ def _group_keyboard(group: str, selected: str) -> InlineKeyboardMarkup:
             current = []
     if current:
         rows.append(current)
-    rows.append([InlineKeyboardButton(text="✏️ تعديل البرومت المحدد", callback_data=f"assistant:prompt:current:{group}")])
-    rows.append([InlineKeyboardButton(text="⬅️ الإعدادات", callback_data="assistant:settings")])
+    rows.append([
+        InlineKeyboardButton(
+            text="✏️ عرض/تعديل برومت الخيار",
+            callback_data=f"assistant:prompt:open:{group}:group",
+        )
+    ])
+    rows.append([InlineKeyboardButton(text="⬅️ إعدادات المساعد", callback_data="assistant:settings")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-@router.callback_query(lambda q: q.data and q.data.startswith("assistant:group:"))
-async def show_group(callback: CallbackQuery) -> None:
-    group = callback.data.rsplit(":", 1)[1]
-    if group not in GROUPS:
-        await safe_callback_answer(callback, "خيار غير معروف")
-        return
-    await safe_callback_answer(callback)
-    state = await get_state(orch().db)
-    selected = str(state[group])
-    titles = {
+def _group_title(group: str) -> str:
+    return {
         "persona": "🎭 <b>روح المساعد</b>\n\nاختر الشخصية الأساسية:",
         "tone": "⚡ <b>السمة</b>\n\nاختر نبرة الرد:",
         "reasoning": "🧠 <b>الاستدلال</b>\n\nاختر عمق معالجة الأسئلة:",
         "format": "🧾 <b>التنسيق</b>\n\nاختر طريقة تنظيم الرد:",
         "language": "🌐 <b>اللغة</b>\n\nالتلقائي يترك اللغة للسياق والرسالة:",
-    }
-    await callback.message.edit_text(
-        titles[group],
-        reply_markup=_group_keyboard(group, selected),
+    }[group]
+
+
+async def _show_group(callback: CallbackQuery, group: str) -> None:
+    state = await get_state(orch().db)
+    await safe_edit_text(
+        callback.message,
+        _group_title(group),
+        reply_markup=_group_keyboard(group, str(state[group])),
     )
+
+
+@router.callback_query(lambda q: q.data and q.data.startswith("assistant:group:"))
+async def show_group(callback: CallbackQuery) -> None:
+    _cancel_pending()
+    group = callback.data.rsplit(":", 1)[1]
+    if group not in GROUPS:
+        await safe_callback_answer(callback, "خيار غير معروف")
+        return
+    await safe_callback_answer(callback)
+    await _show_group(callback, group)
 
 
 @router.callback_query(lambda q: q.data and q.data.startswith("assistant:select:"))
 async def select_group(callback: CallbackQuery) -> None:
+    _cancel_pending()
     _, _, group, key = callback.data.split(":", 3)
     if group not in GROUPS or key not in {item.key for item in GROUPS[group]}:
         await safe_callback_answer(callback, "خيار غير معروف")
         return
-    await set_state(orch().db, group, key)
-    await safe_callback_answer(callback, "تم الحفظ")
     state = await get_state(orch().db)
-    await callback.message.edit_reply_markup(reply_markup=_group_keyboard(group, str(state[group])))
+    if str(state[group]) == key:
+        await safe_callback_answer(callback, "محدد بالفعل")
+        return
+    await safe_callback_answer(callback, "تم الحفظ")
+    await set_state(orch().db, group, key)
+    await safe_edit_reply_markup(callback.message, reply_markup=_group_keyboard(group, key))
 
 
 def _generation_keyboard(state: dict[str, Any]) -> InlineKeyboardMarkup:
@@ -156,55 +200,67 @@ def _generation_keyboard(state: dict[str, Any]) -> InlineKeyboardMarkup:
         value = int(state[name])
         rows.append([
             InlineKeyboardButton(text="−", callback_data=f"assistant:adjust:{name}:-{step}"),
-            InlineKeyboardButton(text=f"{label} {value}%", callback_data="assistant:generation"),
+            InlineKeyboardButton(text=f"{label} {value}%", callback_data="assistant:noop"),
             InlineKeyboardButton(text="+", callback_data=f"assistant:adjust:{name}:{step}"),
         ])
     rows.extend([
         [InlineKeyboardButton(text="♻️ استعادة القيم الافتراضية", callback_data="assistant:generation:reset")],
-        [InlineKeyboardButton(text="⬅️ الإعدادات", callback_data="assistant:settings")],
+        [InlineKeyboardButton(text="⬅️ إعدادات المساعد", callback_data="assistant:settings")],
     ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def _show_generation(callback: CallbackQuery) -> None:
-    state = await get_state(orch().db)
-    await callback.message.edit_text(
+async def _show_generation(callback: CallbackQuery, state: dict[str, Any] | None = None) -> None:
+    state = state or await get_state(orch().db)
+    await safe_edit_text(
+        callback.message,
         "🎚️ <b>إعدادات التوليد</b>\n\n"
-        "🎨 الإبداع: يزيد التنوع والحرية في الصياغة.\n"
-        "🧪 التنوع: يوسّع أو يضيّق نطاق الكلمات المحتملة.\n"
-        "📏 طول الرد: يحدد الحد التقريبي لطول الإجابة.\n\n"
-        "القيمة الافتراضية للإبداع 0% لأنها الأكثر ثباتًا.",
+        "🎨 الإبداع: يرفع حرية الصياغة والعشوائية تدريجيًا.\n"
+        "🧪 التنوع: يوسع أو يضيّق نطاق الاحتمالات اللغوية.\n"
+        "📏 طول الرد: يتحكم بالحد الأقصى التقريبي للإجابة.\n\n"
+        "الإبداع 0% هو الوضع الأكثر ثباتًا.",
         reply_markup=_generation_keyboard(state),
     )
 
 
 @router.callback_query(lambda q: q.data == "assistant:generation")
 async def generation(callback: CallbackQuery) -> None:
+    _cancel_pending()
     await safe_callback_answer(callback)
     await _show_generation(callback)
 
 
 @router.callback_query(lambda q: q.data and q.data.startswith("assistant:adjust:"))
 async def adjust_generation(callback: CallbackQuery) -> None:
+    _cancel_pending()
     _, _, name, delta_text = callback.data.split(":", 3)
     if name not in {"creativity_pct", "diversity_pct", "response_length_pct"}:
         await safe_callback_answer(callback, "خيار غير معروف")
         return
     state = await get_state(orch().db)
-    value = int(state[name]) + int(delta_text)
+    old_value = int(state[name])
     minimum = 10 if name in {"diversity_pct", "response_length_pct"} else 0
-    value = max(minimum, min(100, value))
-    await set_state(orch().db, name, value)
+    value = max(minimum, min(100, old_value + int(delta_text)))
+    if value == old_value:
+        await safe_callback_answer(callback, f"{value}%")
+        return
     await safe_callback_answer(callback, f"{value}%")
-    await _show_generation(callback)
+    await set_state(orch().db, name, value)
+    state[name] = value
+    await _show_generation(callback, state)
 
 
 @router.callback_query(lambda q: q.data == "assistant:generation:reset")
 async def reset_generation(callback: CallbackQuery) -> None:
-    for name in ("creativity_pct", "diversity_pct", "response_length_pct"):
-        await set_state(orch().db, name, DEFAULT_STATE[name])
+    _cancel_pending()
     await safe_callback_answer(callback, "تمت الاستعادة")
-    await _show_generation(callback)
+    await orch().db.set_many({
+        "assistant.state.creativity_pct": DEFAULT_STATE["creativity_pct"],
+        "assistant.state.diversity_pct": DEFAULT_STATE["diversity_pct"],
+        "assistant.state.response_length_pct": DEFAULT_STATE["response_length_pct"],
+    })
+    state = await get_state(orch().db)
+    await _show_generation(callback, state)
 
 
 def _context_keyboard(enabled: bool, count: int) -> InlineKeyboardMarkup:
@@ -220,49 +276,61 @@ def _context_keyboard(enabled: bool, count: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text=f"{'✓ ' if count == 20 else ''}20", callback_data="assistant:context:size:20"),
         ],
         [InlineKeyboardButton(text="🗑 مسح سياق المحادثة", callback_data="assistant:context:clear")],
-        [InlineKeyboardButton(text="⬅️ الإعدادات", callback_data="assistant:settings")],
+        [InlineKeyboardButton(text="⬅️ إعدادات المساعد", callback_data="assistant:settings")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def _show_context(callback: CallbackQuery) -> None:
-    enabled, count = await context_policy(
-        orch().db,
-        default_messages=orch().settings.chat_history_messages,
-    )
-    await callback.message.edit_text(
+async def _show_context(callback: CallbackQuery, *, enabled: bool | None = None, count: int | None = None) -> None:
+    if enabled is None or count is None:
+        enabled, count = await context_policy(
+            orch().db,
+            default_messages=orch().settings.chat_history_messages,
+        )
+    await safe_edit_text(
+        callback.message,
         "🧠 <b>السياق</b>\n\n"
         f"الحالة: <b>{'مفعّل' if enabled else 'متوقف'}</b>\n"
         f"الحد الحالي: <b>{count} رسالة</b>\n\n"
-        "السياق هنا للمحادثة الحالية فقط ويمكن مسحه في أي وقت.",
-        reply_markup=_context_keyboard(enabled, count),
+        "السياق للمحادثة الحالية فقط ويمكن مسحه في أي وقت.",
+        reply_markup=_context_keyboard(bool(enabled), int(count)),
     )
 
 
 @router.callback_query(lambda q: q.data == "assistant:context")
 async def context_settings(callback: CallbackQuery) -> None:
+    _cancel_pending()
     await safe_callback_answer(callback)
     await _show_context(callback)
 
 
 @router.callback_query(lambda q: q.data == "assistant:context:toggle")
 async def context_toggle(callback: CallbackQuery) -> None:
+    _cancel_pending()
     state = await get_state(orch().db)
-    await set_state(orch().db, "context_enabled", not bool(state["context_enabled"]))
+    enabled = not bool(state["context_enabled"])
+    count = int(state["context_messages"])
     await safe_callback_answer(callback, "تم")
-    await _show_context(callback)
+    await set_state(orch().db, "context_enabled", enabled)
+    await _show_context(callback, enabled=enabled, count=count)
 
 
 @router.callback_query(lambda q: q.data and q.data.startswith("assistant:context:size:"))
 async def context_size(callback: CallbackQuery) -> None:
-    count = int(callback.data.rsplit(":", 1)[1])
-    await set_state(orch().db, "context_messages", max(1, min(40, count)))
+    _cancel_pending()
+    count = max(1, min(40, int(callback.data.rsplit(":", 1)[1])))
+    state = await get_state(orch().db)
+    if int(state["context_messages"]) == count:
+        await safe_callback_answer(callback, "محدد بالفعل")
+        return
     await safe_callback_answer(callback, "تم الحفظ")
-    await _show_context(callback)
+    await set_state(orch().db, "context_messages", count)
+    await _show_context(callback, enabled=bool(state["context_enabled"]), count=count)
 
 
 @router.callback_query(lambda q: q.data == "assistant:context:clear")
 async def context_clear(callback: CallbackQuery) -> None:
+    _cancel_pending()
     from pixelpilot.bot.routers.chat import clear_history
 
     clear_history()
@@ -275,80 +343,128 @@ def _prompts_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="🧩 البرومت المخصص", callback_data="assistant:prompt:custom")],
             [
-                InlineKeyboardButton(text="🎭 برومت الشخصية", callback_data="assistant:prompt:current:persona"),
-                InlineKeyboardButton(text="⚡ برومت السمة", callback_data="assistant:prompt:current:tone"),
+                InlineKeyboardButton(text="🎭 برومت الشخصية", callback_data="assistant:prompt:open:persona:hub"),
+                InlineKeyboardButton(text="⚡ برومت السمة", callback_data="assistant:prompt:open:tone:hub"),
             ],
             [
-                InlineKeyboardButton(text="🧠 برومت الاستدلال", callback_data="assistant:prompt:current:reasoning"),
-                InlineKeyboardButton(text="🧾 برومت التنسيق", callback_data="assistant:prompt:current:format"),
+                InlineKeyboardButton(text="🧠 برومت الاستدلال", callback_data="assistant:prompt:open:reasoning:hub"),
+                InlineKeyboardButton(text="🧾 برومت التنسيق", callback_data="assistant:prompt:open:format:hub"),
             ],
-            [InlineKeyboardButton(text="🌐 برومت اللغة", callback_data="assistant:prompt:current:language")],
+            [InlineKeyboardButton(text="🌐 برومت اللغة", callback_data="assistant:prompt:open:language:hub")],
             [InlineKeyboardButton(text="👁 عرض البرومت الفعّال", callback_data="assistant:prompt:effective")],
             [InlineKeyboardButton(text="📤 تصدير البرومت الفعّال", callback_data="assistant:prompt:export")],
             [InlineKeyboardButton(text="♻️ إعادة كل الإعدادات الافتراضية", callback_data="assistant:reset_all")],
-            [InlineKeyboardButton(text="⬅️ الإعدادات", callback_data="assistant:settings")],
+            [InlineKeyboardButton(text="⬅️ إعدادات المساعد", callback_data="assistant:settings")],
         ]
     )
 
 
 @router.callback_query(lambda q: q.data == "assistant:prompts")
 async def prompts(callback: CallbackQuery) -> None:
+    _cancel_pending()
     await safe_callback_answer(callback)
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         "📝 <b>البرومتات</b>\n\n"
-        "كل جزء قابل للتعديل من هنا. التغيير يُحفظ فورًا ويستخدم في الرسائل التالية.",
+        "كل ملف سلوك قابل للعرض والتعديل والاستبدال والاستعادة من هنا. "
+        "التغييرات تطبق على الرسالة التالية مباشرة.",
         reply_markup=_prompts_keyboard(),
     )
 
 
-def _prompt_actions(group: str, key: str, *, custom: bool = False) -> InlineKeyboardMarkup:
+def _origin_back_callback(group: str, origin: PromptOrigin) -> str:
+    return f"assistant:group:{group}" if origin == "group" else "assistant:prompts"
+
+
+def _origin_back_label(origin: PromptOrigin) -> str:
+    return "⬅️ رجوع للقسم" if origin == "group" else "⬅️ البرومتات"
+
+
+def _prompt_actions(
+    group: str,
+    key: str,
+    *,
+    origin: PromptOrigin,
+    custom: bool = False,
+) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(
         text="✏️ تعديل/استبدال",
-        callback_data=("assistant:prompt:edit:custom:base" if custom else f"assistant:prompt:edit:{group}:{key}"),
+        callback_data=(
+            f"assistant:prompt:edit:custom:base:{origin}"
+            if custom
+            else f"assistant:prompt:edit:{group}:{key}:{origin}"
+        ),
     )]]
     if not custom:
-        rows.append([InlineKeyboardButton(text="↩️ استعادة الافتراضي", callback_data=f"assistant:prompt:reset:{group}:{key}")])
-    rows.append([InlineKeyboardButton(text="⬅️ البرومتات", callback_data="assistant:prompts")])
+        rows.append([
+            InlineKeyboardButton(
+                text="↩️ استعادة النسخة الأصلية",
+                callback_data=f"assistant:prompt:reset:{group}:{key}:{origin}",
+            )
+        ])
+    rows.append([
+        InlineKeyboardButton(
+            text=_origin_back_label(origin),
+            callback_data=_origin_back_callback(group, origin),
+        )
+    ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _render_prompt(callback: CallbackQuery, group: str, key: str, origin: PromptOrigin) -> None:
+    prompt = await get_prompt(orch().db, group, key)
+    shown = escape(prompt) if prompt else "<i>لا يوجد برومت لهذا الخيار</i>"
+    if len(shown) > 3500:
+        shown = shown[:3500] + "…"
+    await safe_edit_text(
+        callback.message,
+        f"{escape(_label(group, key))}\n\n{shown}",
+        reply_markup=_prompt_actions(group, key, origin=origin),
+    )
 
 
 @router.callback_query(lambda q: q.data == "assistant:prompt:custom")
 async def custom_prompt(callback: CallbackQuery) -> None:
+    _cancel_pending()
     await safe_callback_answer(callback)
     state = await get_state(orch().db)
     prompt = str(state.get("custom_prompt") or "")
     shown = escape(prompt) if prompt else "<i>غير مفعّل</i>"
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         f"🧩 <b>البرومت المخصص</b>\n\n{shown}",
-        reply_markup=_prompt_actions("custom", "base", custom=True),
+        reply_markup=_prompt_actions("custom", "base", origin="hub", custom=True),
     )
 
 
-@router.callback_query(lambda q: q.data and q.data.startswith("assistant:prompt:current:"))
+@router.callback_query(lambda q: q.data and q.data.startswith("assistant:prompt:open:"))
 async def current_prompt(callback: CallbackQuery) -> None:
-    group = callback.data.rsplit(":", 1)[1]
-    if group not in GROUPS:
+    _cancel_pending()
+    parts = callback.data.split(":")
+    if len(parts) != 5:
+        await safe_callback_answer(callback, "مسار غير صالح")
+        return
+    group, origin_raw = parts[3], parts[4]
+    if group not in GROUPS or origin_raw not in {"group", "hub"}:
         await safe_callback_answer(callback, "خيار غير معروف")
         return
+    origin: PromptOrigin = "group" if origin_raw == "group" else "hub"
     state = await get_state(orch().db)
     key = str(state[group])
-    prompt = await get_prompt(orch().db, group, key)
-    shown = escape(prompt) if prompt else "<i>لا يوجد برومت لهذا الخيار</i>"
     await safe_callback_answer(callback)
-    await callback.message.edit_text(
-        f"{escape(_label(group, key))}\n\n{shown}",
-        reply_markup=_prompt_actions(group, key),
-    )
+    await _render_prompt(callback, group, key, origin)
 
 
 @router.callback_query(lambda q: q.data == "assistant:prompt:effective")
 async def effective_prompt_view(callback: CallbackQuery) -> None:
+    _cancel_pending()
     await safe_callback_answer(callback)
     prompt = await effective_system_prompt(orch().db)
     shown = escape(prompt) if prompt else "<i>لا يوجد برومت فعّال حاليًا.</i>"
     if len(shown) > 3500:
         shown = shown[:3500] + "…"
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         f"👁 <b>البرومت الفعّال</b>\n\n{shown}",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📤 تصدير كامل", callback_data="assistant:prompt:export")],
@@ -371,17 +487,48 @@ async def export_prompt(callback: CallbackQuery) -> None:
 @router.callback_query(lambda q: q.data and q.data.startswith("assistant:prompt:edit:"))
 async def edit_prompt(callback: CallbackQuery) -> None:
     global _pending_edit
-    _, _, _, group, key = callback.data.split(":", 4)
+    parts = callback.data.split(":")
+    if len(parts) != 6:
+        await safe_callback_answer(callback, "مسار غير صالح")
+        return
+    group, key, origin_raw = parts[3], parts[4], parts[5]
+    if origin_raw not in {"group", "hub"}:
+        await safe_callback_answer(callback, "مسار غير صالح")
+        return
     if group != "custom" and (group not in GROUPS or key not in {item.key for item in GROUPS[group]}):
         await safe_callback_answer(callback, "خيار غير معروف")
         return
-    _pending_edit = (group, key)
+    origin: PromptOrigin = "group" if origin_raw == "group" else "hub"
+    _pending_edit = PendingPromptEdit(group=group, key=key, origin=origin)
     await safe_callback_answer(callback, "أرسل البرومت الجديد")
-    await callback.message.edit_text(
+    back_callback = _origin_back_callback(group, origin) if group != "custom" else "assistant:prompts"
+    await safe_edit_text(
+        callback.message,
         "✏️ <b>تعديل البرومت</b>\n\n"
-        "أرسل الآن النص الجديد كاملًا في رسالة واحدة.\n"
-        "أرسل <code>-</code> لجعله فارغًا، أو /cancel للإلغاء."
+        "أرسل النص الجديد كاملًا في رسالة واحدة.\n"
+        "أرسل <code>-</code> لجعله فارغًا، أو /cancel للإلغاء.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="إلغاء", callback_data=f"assistant:prompt:cancel_edit:{group}:{origin}")],
+            [InlineKeyboardButton(text="⬅️ رجوع", callback_data=back_callback)],
+        ]),
     )
+
+
+@router.callback_query(lambda q: q.data and q.data.startswith("assistant:prompt:cancel_edit:"))
+async def cancel_prompt_edit(callback: CallbackQuery) -> None:
+    _cancel_pending()
+    parts = callback.data.split(":")
+    group = parts[3] if len(parts) > 3 else "custom"
+    origin_raw = parts[4] if len(parts) > 4 else "hub"
+    await safe_callback_answer(callback, "تم الإلغاء")
+    if group in GROUPS and origin_raw == "group":
+        await _show_group(callback, group)
+    else:
+        await safe_edit_text(
+            callback.message,
+            "📝 <b>البرومتات</b>\n\nكل ملف سلوك قابل للتعديل من هنا.",
+            reply_markup=_prompts_keyboard(),
+        )
 
 
 @router.message(lambda message: _pending_edit is not None and bool(message.text))
@@ -393,41 +540,65 @@ async def receive_prompt_edit(message: Message) -> None:
     text = (message.text or "").strip()
     if text == "/cancel":
         _pending_edit = None
-        await message.answer("تم إلغاء التعديل.", reply_markup=main_menu())
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text=_origin_back_label(target.origin),
+                callback_data=(
+                    _origin_back_callback(target.group, target.origin)
+                    if target.group != "custom"
+                    else "assistant:prompts"
+                ),
+            )
+        ]])
+        await message.answer("تم إلغاء التعديل.", reply_markup=keyboard)
         return
+
     value = "" if text == "-" else message.text or ""
-    group, key = target
-    if group == "custom":
+    if target.group == "custom":
         await set_state(orch().db, "custom_prompt", value)
+        reopen = "assistant:prompt:custom"
     else:
-        await set_prompt(orch().db, group, key, value)
+        await set_prompt(orch().db, target.group, target.key, value)
+        reopen = f"assistant:prompt:open:{target.group}:{target.origin}"
     _pending_edit = None
-    await message.answer("✅ تم حفظ البرومت الجديد.", reply_markup=_prompts_keyboard())
+
+    back = (
+        _origin_back_callback(target.group, target.origin)
+        if target.group != "custom"
+        else "assistant:prompts"
+    )
+    await message.answer(
+        "✅ تم حفظ البرومت الجديد.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👁 عرض البرومت", callback_data=reopen)],
+            [InlineKeyboardButton(text=_origin_back_label(target.origin), callback_data=back)],
+        ]),
+    )
 
 
 @router.callback_query(lambda q: q.data and q.data.startswith("assistant:prompt:reset:"))
 async def restore_prompt(callback: CallbackQuery) -> None:
-    _, _, _, group, key = callback.data.split(":", 4)
-    if group not in GROUPS:
+    _cancel_pending()
+    parts = callback.data.split(":")
+    if len(parts) != 6:
+        await safe_callback_answer(callback, "مسار غير صالح")
+        return
+    group, key, origin_raw = parts[3], parts[4], parts[5]
+    if group not in GROUPS or origin_raw not in {"group", "hub"}:
         await safe_callback_answer(callback, "خيار غير معروف")
         return
-    await reset_prompt(orch().db, group, key)
+    origin: PromptOrigin = "group" if origin_raw == "group" else "hub"
     await safe_callback_answer(callback, "تمت الاستعادة")
-    state = await get_state(orch().db)
-    selected = str(state[group])
-    prompt = await get_prompt(orch().db, group, selected)
-    shown = escape(prompt) if prompt else "<i>لا يوجد برومت لهذا الخيار</i>"
-    await callback.message.edit_text(
-        f"{escape(_label(group, selected))}\n\n{shown}",
-        reply_markup=_prompt_actions(group, selected),
-    )
+    await reset_prompt(orch().db, group, key)
+    await _render_prompt(callback, group, key, origin)
 
 
 @router.callback_query(lambda q: q.data == "assistant:reset_all")
 async def reset_all_settings(callback: CallbackQuery) -> None:
+    _cancel_pending()
     from pixelpilot.bot.routers.chat import clear_history
 
+    await safe_callback_answer(callback, "تمت إعادة الإعدادات")
     await reset_all(orch().db)
     clear_history()
-    await safe_callback_answer(callback, "تمت إعادة الإعدادات")
-    await callback.message.edit_text(await _settings_text(), reply_markup=_home_keyboard())
+    await safe_edit_text(callback.message, await _settings_text(), reply_markup=_home_keyboard())

@@ -5,7 +5,7 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 
 SCHEMA = """
@@ -48,7 +48,6 @@ class Database:
     def _init_sync(self) -> None:
         with self._connect() as conn:
             conn.executescript(SCHEMA)
-            # Lightweight migration for repositories created before updated_at existed.
             columns = {row[1] for row in conn.execute("PRAGMA table_info(generations)")}
             if "updated_at" not in columns:
                 conn.execute("ALTER TABLE generations ADD COLUMN updated_at TEXT")
@@ -70,6 +69,24 @@ class Database:
     async def set(self, key: str, value: Any) -> None:
         await asyncio.to_thread(self._set_sync, key, value)
 
+    def _set_many_sync(self, values: dict[str, Any]) -> None:
+        if not values:
+            return
+        now = datetime.now(UTC).isoformat()
+        rows = [
+            (key, json.dumps(value, ensure_ascii=False), now)
+            for key, value in values.items()
+        ]
+        with self._connect() as conn:
+            conn.executemany(
+                "INSERT INTO kv(key,value,updated_at) VALUES(?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                rows,
+            )
+
+    async def set_many(self, values: dict[str, Any]) -> None:
+        await asyncio.to_thread(self._set_many_sync, values)
+
     def _get_sync(self, key: str, default: Any = None) -> Any:
         with self._connect() as conn:
             row = conn.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
@@ -77,6 +94,21 @@ class Database:
 
     async def get(self, key: str, default: Any = None) -> Any:
         return await asyncio.to_thread(self._get_sync, key, default)
+
+    def _get_many_sync(self, keys: Iterable[str]) -> dict[str, Any]:
+        items = list(dict.fromkeys(keys))
+        if not items:
+            return {}
+        placeholders = ",".join("?" for _ in items)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT key,value FROM kv WHERE key IN ({placeholders})",
+                items,
+            ).fetchall()
+        return {str(row["key"]): json.loads(row["value"]) for row in rows}
+
+    async def get_many(self, keys: Iterable[str]) -> dict[str, Any]:
+        return await asyncio.to_thread(self._get_many_sync, list(keys))
 
     def _event_sync(self, kind: str, payload: dict[str, Any]) -> None:
         with self._connect() as conn:
