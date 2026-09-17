@@ -27,7 +27,7 @@ def test_chat_uses_stable_defaults_without_rewriting_messages():
             "messages": messages,
             "max_tokens": 123,
             "temperature": 0.0,
-            "top_p": 0.95,
+            "top_p": 1.0,
         }
         assert client.payload["messages"] is messages
     asyncio.run(scenario())
