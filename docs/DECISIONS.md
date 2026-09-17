@@ -1,5 +1,21 @@
 # Decisions
 
+## 2026-09-17 — Assistant Settings uses deterministic back-navigation
+
+Every settings screen must know where it was opened from. In particular, opening a prompt from a personality/tone/reasoning/format/language group must return to that same group, while opening it from the central Prompt Hub must return to the Prompt Hub. Edit, reset and cancel flows preserve the same origin instead of using one generic Back destination.
+
+Already-selected controls are no-ops rather than attempts to submit identical Telegram message markup. Harmless `message is not modified` responses are handled safely so repeated taps do not look like broken buttons.
+
+## 2026-09-17 — Settings state uses batched SQLite access
+
+Assistant Settings must not issue one SQLite connection/query per individual field. State screens load profile state through batched KV reads and bulk resets use batched writes. This keeps callback acknowledgement and screen updates responsive on the controller server.
+
+## 2026-09-17 — Built-in prompts are modular behavior contracts
+
+Starter prompts must be strong enough to materially change behavior without becoming huge token-heavy monoliths. Each non-neutral profile should define its scope, desired behavior, accuracy/adaptation rules and failure modes to avoid. Personality, tone, reasoning, formatting and language are intentionally separate layers so they compose cleanly.
+
+Prompt defaults are versioned. When a new prompt schema ships, exact untouched legacy defaults may be migrated to the new built-in version, but any owner-edited prompt must be preserved verbatim.
+
 ## 2026-09-17 — Owner-controlled prompt profiles supersede the blanket no-prompt rule
 
 The earlier “No internal prompt” decision is superseded by the owner's request for editable assistant personalities and behavior controls. The neutral/default profile still injects no prompt. When the owner explicitly selects a personality, tone, reasoning, formatting, language profile or custom prompt, PixelPilot may compose those visible/editable pieces into one `system` message for the request.
@@ -42,7 +58,7 @@ Hardware details that are necessary to choose a rented server — GPU name, VRAM
 
 ## 2026-09-17 — Qwen2.5-Omni-7B as the economical personal default
 
-Use `Qwen/Qwen2.5-Omni-7B` as the default model because the earlier Qwen3-Omni 30B profile forced PixelPilot into 80–96GB GPUs costing about $1/hour in the first live search. The 7B model still understands text, images, audio and video but allows a 48GB GPU policy and a much lower Vast price cap.
+Use `Qwen/Qwen2.5-Omni-7B` as the default model because the earlier Qwen3-Omni 30B profile forced PixelPilot into 80–96GB GPUs costing about $1/hour in the first live search. The 7B model still understands text, images, audio and video but allows a 48GB GPU policy and a much lower default Vast price cap.
 
 Keep the 7B profile in BF16 with an 8192-token context by default. Do not silently downgrade to the 3B model: 3B may be added later as an explicit ultra-budget option if the user accepts the quality trade-off.
 
