@@ -118,9 +118,9 @@ async def new_chat_command(message: Message) -> None:
 @router.callback_query(lambda q: q.data == "chat:new")
 async def new_chat_callback(callback: CallbackQuery) -> None:
     clear_history()
-    await safe_callback_answer(callback, "تم مسح سياق المحادثة")
+    await safe_callback_answer(callback, "تم بدء محادثة جديدة")
     await callback.message.edit_text(
-        "🧹 <b>محادثة جديدة</b>\n\nأرسل نصًا أو صورة أو تسجيلًا صوتيًا مباشرة.",
+        "🧹 <b>محادثة جديدة</b>\n\nأرسل نصًا أو صورة أو تسجيلًا صوتيًا.",
         reply_markup=main_menu(),
     )
 
@@ -129,13 +129,12 @@ async def new_chat_callback(callback: CallbackQuery) -> None:
 async def chat_help(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback)
     await callback.message.edit_text(
-        "💬 <b>استخدام PixelPilot</b>\n\n"
-        "أرسل رسالتك للبوت مباشرة:\n"
-        "• نص عادي\n"
-        "• صورة، ومعها تعليق اختياري\n"
-        "• Voice أو ملف صوتي، ومعه تعليق اختياري\n\n"
-        "المحتوى يذهب للموديل كما أرسلته، بدون System Prompt أو تعليمات داخلية من PixelPilot.\n"
-        "استخدم /new أو زر «محادثة جديدة» لمسح السياق الحالي.",
+        "💬 <b>طريقة الاستخدام</b>\n\n"
+        "أرسل للبوت مباشرة:\n"
+        "• رسالة نصية\n"
+        "• صورة، ويمكنك إضافة تعليق معها\n"
+        "• تسجيلًا صوتيًا أو ملفًا صوتيًا\n\n"
+        "لبدء محادثة من جديد استخدم /new أو زر «محادثة جديدة».",
         reply_markup=main_menu(),
     )
 

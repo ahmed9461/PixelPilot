@@ -21,6 +21,7 @@ Output is text. Image generation is no longer part of the project.
 5. `/new` clears the current conversation context.
 6. Vast lifecycle remains owner-controlled; automatic destruction is opt-in.
 7. `VAST_API_KEY` stays on the Controller.
+8. Telegram UI copy must stay user-facing. Do not put model names, inference architecture, prompt-policy explanations, deployment details, or implementation notes in normal bot screens. Keep those details in `README`, `docs`, logs, and diagnostic tools.
 
 ## Architecture
 
