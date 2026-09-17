@@ -1,42 +1,9 @@
-# Vast Deployment Profile
+# Vast runtime profile
 
-PixelPilot لا يحتاج Template يدويًا إذا استخدمت `PIXELPILOT_REPO_URL`; Controller يستطيع تمرير image/env/onstart مباشرة. Template اختياري لتثبيت defaults.
+The normal path uses `VAST_DOCKER_IMAGE=vastai/pytorch:@vastai-automatic-tag` plus `scripts/bootstrap_vast.sh`.
 
-## Base image
+Default search policy: one GPU, >= 80 GB VRAM, >= 150 GB disk, verified host, >= 200 Mbps download and one direct mapped port.
 
-`vastai/pytorch:@vastai-automatic-tag`
+The bootstrap installs vLLM and starts `Qwen/Qwen3-Omni-30B-A3B-Instruct` on `INFERENCE_PORT` with a per-instance API key.
 
-## Ports
-
-- `8190/tcp`: Caddy/Portal external app port; Vast يحوله إلى HostPort عشوائي.
-- `18190/tcp`: Worker داخلي localhost فقط، لا يفتح عبر Docker.
-- `8188/tcp`: ComfyUI localhost فقط.
-
-## Dynamic env injected by Controller
-
-- `HF_TOKEN`
-- `PIXELPILOT_WORKER_TOKEN`
-- `OPEN_BUTTON_TOKEN` = same per-instance random token
-- `OPEN_BUTTON_PORT=8190`
-- `PORTAL_CONFIG=localhost:8190:18190:/health:PixelPilot Worker`
-- `PIXELPILOT_TRUST_PROXY=1`
-- `COMFY_URL=http://127.0.0.1:8188`
-- `COMFYUI_REF`
-- generation limits
-- optional repo URL/ref
-
-`VAST_API_KEY` لا يرسل أبدًا إلى الـGPU instance.
-
-## Direct onstart
-
-إذا `PIXELPILOT_REPO_URL` موجود:
-
-1. clone/fetch `PixelPilot` إلى `/workspace/PixelPilot`.
-2. تشغيل `scripts/bootstrap_vast.sh` في الخلفية.
-3. bootstrap ينزل ComfyUI + dependencies + models.
-4. يبدأ ComfyUI.
-5. بعد readiness يبدأ Worker.
-
-## Template identifier
-
-إذا استخدمت Vast Template، ضع `hash_id` في `VAST_TEMPLATE_HASH`. لا تستخدم numeric `id` عند Create Instance.
+A custom `VAST_TEMPLATE_HASH` remains supported if it provides the same runtime contract/environment expected by the controller.

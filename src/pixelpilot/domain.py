@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import base64
 from dataclasses import asdict, dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 
 class InstancePhase(StrEnum):
@@ -14,14 +15,6 @@ class InstancePhase(StrEnum):
     STOPPING = "stopping"
     STOPPED = "stopped"
     DESTROYING = "destroying"
-    ERROR = "error"
-
-
-class GenerationStatus(StrEnum):
-    CREATED = "created"
-    SUBMITTED = "submitted"
-    RUNNING = "running"
-    COMPLETED = "completed"
     ERROR = "error"
 
 
@@ -59,34 +52,47 @@ class InstanceRef:
     raw: dict[str, Any] | None = None
 
 
-@dataclass(slots=True, frozen=True)
-class GenerationSpec:
-    prompt: str
-    width: int = 1024
-    height: int = 1024
-    seed: int = 0
-    steps: int = 28
-    batch_size: int = 1
-    preset: str = "raw"
-    quality_profile: str = "flux2_balanced"
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+MediaKind = Literal["image", "audio"]
 
 
 @dataclass(slots=True, frozen=True)
-class ImageRef:
-    filename: str
-    subfolder: str = ""
-    image_type: str = "output"
+class MediaInput:
+    kind: MediaKind
+    data: bytes
+    mime_type: str
 
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+    def data_url(self) -> str:
+        encoded = base64.b64encode(self.data).decode("ascii")
+        return f"data:{self.mime_type};base64,{encoded}"
+
+    def to_openai_part(self) -> dict[str, Any]:
+        url = self.data_url()
+        if self.kind == "image":
+            return {"type": "image_url", "image_url": {"url": url}}
+        if self.kind == "audio":
+            return {"type": "audio_url", "audio_url": {"url": url}}
+        raise ValueError(f"Unsupported media kind: {self.kind}")
 
 
-@dataclass(slots=True)
-class GenerationResult:
-    generation_id: int
-    prompt_id: str
-    spec: GenerationSpec
-    images: list[ImageRef]
+@dataclass(slots=True, frozen=True)
+class UserInput:
+    text: str | None = None
+    media: tuple[MediaInput, ...] = ()
+
+    def to_openai_message(self) -> dict[str, Any]:
+        """Build exactly one user message without adding any hidden/system prompt."""
+        if not self.media:
+            return {"role": "user", "content": self.text or ""}
+
+        content: list[dict[str, Any]] = [item.to_openai_part() for item in self.media]
+        if self.text is not None and self.text != "":
+            content.append({"type": "text", "text": self.text})
+        return {"role": "user", "content": content}
+
+
+@dataclass(slots=True, frozen=True)
+class InferenceResult:
+    text: str
+    model: str
+    finish_reason: str | None = None
+    usage: dict[str, Any] | None = None

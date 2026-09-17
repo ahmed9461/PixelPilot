@@ -1,34 +1,68 @@
 # PixelPilot
 
-PixelPilot هو بوت Telegram شخصي Owner-only يحوّل Vast.ai إلى استوديو صور GPU عند الطلب:
+PixelPilot هو بوت Telegram شخصي Owner-only يحوّل Vast.ai إلى مساعد متعدد الوسائط عند الطلب باستخدام `Qwen/Qwen3-Omni-30B-A3B-Instruct`.
 
 ```text
-Telegram -> PixelPilot Controller -> Vast.ai -> PixelPilot Worker -> ComfyUI -> FLUX.1 Krea Dev
+Telegram -> PixelPilot Controller -> Vast.ai -> vLLM -> Qwen3-Omni
 ```
 
-الفكرة الأساسية: لا يوجد GPU ثابت. تبحث من البوت عن عرض مناسب، تراجعه، تستأجره، PixelPilot يجهزه تلقائيًا، يولد الصور، ثم تستطيع Destroy بالكامل عند الانتهاء.
+المشروع لا يولّد صورًا. وظيفته الحالية هي **المحادثة النصية وفهم الصور وفهم الصوت**. لا يوجد GPU ثابت: تبحث من البوت عن عرض مناسب، تستأجره، PixelPilot يجهز vLLM والموديل تلقائيًا، ثم تحذف الـInstance عندما تنتهي.
 
-## ما يعمل في النسخة الحالية
+## مبدأ مهم: لا System Prompt
+
+PixelPilot لا يضيف `system` أو `developer` message، ولا يترجم كلام المستخدم، ولا يعيد صياغته، ولا يفرض لغة على الموديل.
+
+- النص يمر كما كتبه المستخدم.
+- الصورة تمر للموديل كمدخل بصري فعلي، وليس OCR فقط.
+- Voice/Audio يمر للموديل كمدخل صوتي فعلي.
+- Caption المرفق بالصورة/الصوت يمر كما هو.
+- إذا أُرسلت صورة أو صوت بلا Caption، لا يخترع PixelPilot تعليمات مخفية من عنده.
+
+المحادثة الحالية تحفظ في RAM فقط على Controller كي تعمل أسئلة المتابعة. الأمر `/new` أو زر **محادثة جديدة** يمسح السياق. محتوى المحادثة لا يُكتب إلى SQLite؛ سجل الأحداث يحفظ metadata تشغيلية فقط.
+
+## ما يعمل
 
 - Owner-only Telegram bot.
-- البحث عن عروض Vast حسب VRAM / السعر / Reliability / Disk / Network / verified host.
-- مراجعة العرض والسعر قبل Rent.
-- Rent عبر Vast Python SDK الرسمي.
-- Bootstrap تلقائي لـ ComfyUI + ملفات FLUX.1 Krea الكاملة.
-- Worker خلف Vast base-image Caddy؛ ComfyUI نفسه localhost فقط.
-- انتظار تلقائي للحالات: `RENTING -> BOOTING -> PROVISIONING -> READY`.
-- Rollback/Destroy تلقائي اختياري عند فشل provisioning.
-- Workflow API فعلي لـ FLUX.1 Krea.
-- توليد من Telegram: preset + ratio + batch + prompt.
-- نسب جاهزة: 1:1 / 4:5 / 3:2 / 16:9 / 9:16.
-- إعادة بنفس Seed أو Seed جديد.
-- إرسال Preview وصورة الأصل كـDocument.
-- Stop / Start / Destroy.
+- البحث عن عروض Vast حسب VRAM والسعر والموثوقية والقرص والشبكة.
+- Rent / Start / Stop / Destroy وإعادة استعادة حالة الـInstance بعد Restart.
+- Bootstrap تلقائي لـ vLLM وQwen3-Omni على السيرفر المؤقت.
+- Endpoint محمي بمفتاح عشوائي خاص بكل Instance.
+- رسائل نصية عربية/إنجليزية وغيرها.
+- الصور وملفات الصور.
+- Telegram Voice والملفات الصوتية.
+- سياق محادثة قصير في الذاكرة فقط، مع `/new` للمسح.
 - Preflight قبل الاستئجار.
-- Cost Guard للتنبيه على الخمول؛ Auto-Destroy اختياري ومغلق افتراضيًا.
-- استعادة حالة الـInstance بعد Restart للبوت.
-- SQLite للأحداث والحالة وسجل التوليد.
-- اختبارات Unit/Integration بدون استئجار GPU حقيقي.
+- Cost Guard للتنبيه على GPU الخامل؛ الحذف التلقائي اختياري ومغلق افتراضيًا.
+- SQLite لحالة السيرفر والأحداث التشغيلية فقط.
+- اختبارات تمنع إعادة إدخال System Prompt بالخطأ.
+
+## الموديل
+
+الافتراضي:
+
+```text
+Qwen/Qwen3-Omni-30B-A3B-Instruct
+```
+
+Qwen3-Omni يدعم مدخلات نص وصورة وصوت وفيديو. PixelPilot يستخدم حاليًا النص والصورة والصوت ويطلب مخرجات نصية فقط.
+
+المصادر الرسمية:
+
+- Qwen3-Omni: https://github.com/QwenLM/Qwen3-Omni
+- Model: https://huggingface.co/Qwen/Qwen3-Omni-30B-A3B-Instruct
+- vLLM serving: https://docs.vllm.ai/
+- Vast.ai: https://docs.vast.ai/
+
+## العتاد الافتراضي
+
+الملف `.env.example` يبدأ بسياسة محافظة نسبيًا:
+
+- GPU VRAM: `80 GB` أو أكثر.
+- Disk: `150 GB`.
+- Model context: `32768`.
+- BF16 على GPU واحد افتراضيًا.
+
+الموديل على Hugging Face حجمه يقارب 70 GB، لذلك القرص وVRAM مضبوطان أعلى من المشاريع الصغيرة. يمكن تعديل الإعدادات لاحقًا حسب الـGPU الفعلي.
 
 ## الإعداد الأول
 
@@ -41,15 +75,14 @@ python scripts/preflight.py
 python -m pixelpilot.main
 ```
 
-`configure_secrets.py` يطلب القيم الحساسة بدون إظهار التوكنات على الشاشة، ويكتبها فقط إلى `.env` المستبعد من Git. لا تضع الأسرار في `.env.example`.
-
 المطلوب في `.env` على الأقل:
 
 - `TELEGRAM_BOT_TOKEN`
 - `OWNER_TELEGRAM_ID`
 - `VAST_API_KEY`
-- `HF_TOKEN` (Read-only وبعد قبول ترخيص Krea)
-- `PIXELPILOT_REPO_URL` بعد نشر هذا المستودع في Git server يمكن لـ Vast الوصول إليه، أو استخدم `VAST_TEMPLATE_HASH` لقالب يحتوي المشروع/الـbootstrap.
+- `PIXELPILOT_REPO_URL` أو `VAST_TEMPLATE_HASH`
+
+`HF_TOKEN` اختياري لأن الموديل عام.
 
 ## التشغيل عبر Docker
 
@@ -65,30 +98,23 @@ docker compose logs -f
 1. `/start`
 2. `🧪 فحص الجاهزية`
 3. `🔎 البحث عن سيرفر`
-4. افتح عرضًا وراجع السعر
+4. مراجعة السعر والـGPU
 5. `🚀 استئجار وتجهيز`
-6. انتظر `✅ PixelPilot جاهز بالكامل`
-7. `🎨 إنشاء صورة`
-8. احفظ الصور المهمة خارج Vast
-9. `🗑 حذف السيرفر`
+6. انتظار رسالة جاهزية Qwen3-Omni
+7. إرسال نص أو صورة أو Voice/Audio مباشرة للبوت
+8. `/new` عند الرغبة في بدء سياق جديد
+9. `🗑 حذف السيرفر` عند الانتهاء لإيقاف تكلفة الـInstance
 
-## الأمان
+## الأمان والخصوصية
 
-- `VAST_API_KEY` لا يغادر خادم Controller.
-- GPU instance يأخذ فقط `HF_TOKEN` read-only + token عشوائي خاص بالـWorker.
+- `VAST_API_KEY` يبقى على Controller ولا يُرسل إلى GPU instance.
+- الـInstance يأخذ token عشوائي للـInference API و`HF_TOKEN` فقط إن كان مضبوطًا.
+- vLLM API يتطلب Bearer token عشوائي خاص بالـInstance.
 - لا تضع `.env` أو أي token في Git.
-- ComfyUI يستمع على `127.0.0.1` فقط.
-- Worker يستمع داخليًا فقط ويُمرَّر عبر Caddy في Vast base image.
-- لا تعتمد على بيانات الـInstance كنسخة دائمة؛ Destroy يمسحها نهائيًا.
-
-## المصادر الفنية المستخدمة في التصميم
-
-- Vast.ai docs: https://docs.vast.ai/
-- Vast Python SDK: https://docs.vast.ai/sdk/python/
-- Vast networking/ports: https://docs.vast.ai/guides/instances/connect/networking
-- ComfyUI server API: https://docs.comfy.org/development/comfyui-server/comms_routes
-- ComfyUI FLUX.1 Krea tutorial: https://docs.comfy.org/tutorials/flux/flux1-krea-dev
-- FLUX.1 Krea model: https://huggingface.co/black-forest-labs/FLUX.1-Krea-dev
+- لا يوجد System Prompt مخفي داخل PixelPilot.
+- رسائل المستخدم وصوره وصوته لا تُحفظ في SQLite.
+- ذاكرة المحادثة الحالية RAM-only وتختفي عند `/new` أو Restart للـController.
+- حذف Vast instance يمسح كاش الموديل والبيانات الموجودة على ذلك السيرفر المؤقت.
 
 ## ذاكرة المشروع
 

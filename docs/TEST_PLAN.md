@@ -1,37 +1,7 @@
 # Test Plan
 
-## Automated local
+Automated tests cover settings validation, exact user-message construction without System Prompt, image/audio data URLs, media-only messages without invented instructions, exact inference payloads, Vast lifecycle/recovery, optional HF token setup, preflight and chat-history trimming.
 
-- Settings validation.
-- SQLite KV + generation persistence.
-- Owner check.
-- Vast offer query + normalization + mapped port parsing.
-- Instance ID extraction.
-- Official Krea model manifest.
-- Workflow API patching + history image parsing.
-- Fake full orchestration lifecycle:
-  Search -> Rent -> Ready -> Generate -> Download -> Stop -> Start -> Destroy.
-- Worker FastAPI:
-  auth -> health -> submit -> job -> image.
-- Preflight.
+Existing Vast query normalization, database, security and callback regression tests remain.
 
-Current result: **31 passed**.
-
-## Compile
-
-```bash
-python -m compileall -q src scripts
-```
-
-## Live acceptance required once credentials exist
-
-1. Search real offers.
-2. Rent one 48GB offer.
-3. Verify port mapping and Caddy auth.
-4. Verify all four model files download.
-5. Verify Comfy `/system_stats` and model lists.
-6. Generate one 1024×1024 image.
-7. Telegram Preview + Original.
-8. Same-seed reproducibility check.
-9. Destroy.
-10. Confirm no active instance remains.
+CI runs compileall + pytest on Python 3.12. Live acceptance additionally tests Arabic text, screenshots/photos and Telegram Voice on a real rented GPU.

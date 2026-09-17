@@ -3,22 +3,14 @@ from __future__ import annotations
 import asyncio
 import secrets
 import shlex
-from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable
 
 from pixelpilot.config import Settings
 from pixelpilot.db import Database
-from pixelpilot.domain import (
-    GenerationResult,
-    GenerationSpec,
-    GenerationStatus,
-    GpuOffer,
-    ImageRef,
-    InstancePhase,
-)
+from pixelpilot.domain import GpuOffer, InferenceResult, InstancePhase
+from pixelpilot.services.inference_client import InferenceClient
 from pixelpilot.services.vast_gateway import VastSdkGateway, build_offer_query
-from pixelpilot.services.worker_client import WorkerClient
 
 
 ProgressCallback = Callable[[str], Awaitable[None]]
@@ -35,22 +27,23 @@ class Orchestrator:
         db: Database,
         vast: VastSdkGateway,
         *,
-        worker_factory: Callable[[str, str], WorkerClient] | None = None,
+        inference_factory: Callable[[str, str], InferenceClient] | None = None,
     ):
         self.settings = settings
         self.db = db
         self.vast = vast
-        self._worker_factory = worker_factory or self._default_worker_factory
-        self._generation_lock = asyncio.Lock()
+        self._inference_factory = inference_factory or self._default_inference_factory
+        self._inference_lock = asyncio.Lock()
         self._rent_lock = asyncio.Lock()
         self._control_lock = asyncio.Lock()
 
-    def _default_worker_factory(self, url: str, token: str) -> WorkerClient:
-        return WorkerClient(
+    def _default_inference_factory(self, url: str, token: str) -> InferenceClient:
+        return InferenceClient(
             url,
             token,
-            verify_tls=self.settings.worker_verify_tls,
-            timeout_seconds=self.settings.worker_request_timeout_seconds,
+            self.settings.model_id,
+            verify_tls=self.settings.inference_verify_tls,
+            timeout_seconds=self.settings.inference_request_timeout_seconds,
         )
 
     async def offers(self) -> list[GpuOffer]:
@@ -103,15 +96,15 @@ class Orchestrator:
         if offer.price_per_hour > self.settings.vast_max_price_usd_hour:
             raise OrchestratorError("Offer price exceeds the configured hard maximum")
 
-        worker_token = secrets.token_urlsafe(32)
+        inference_token = secrets.token_urlsafe(32)
         unique_label = f"PixelPilot-{secrets.token_hex(6)}"
         await self.db.set("instance.phase", InstancePhase.RENTING.value)
         await self.db.set("instance.pending_label", unique_label)
         await self.db.set("instance.offer", offer.public_dict())
-        await self.db.set("worker.token", worker_token)
-        await self.db.set("worker.url", None)
+        await self.db.set("inference.token", inference_token)
+        await self.db.set("inference.url", None)
 
-        env = self._build_vast_env(worker_token)
+        env = self._build_vast_env(inference_token)
         onstart_cmd = self._build_onstart_cmd()
         result: dict[str, Any] | None = None
         create_error: Exception | None = None
@@ -164,11 +157,21 @@ class Orchestrator:
         await self.db.set("instance.phase", InstancePhase.BOOTING.value)
         await self.db.event(
             "instance.rented",
-            {"instance_id": instance_id, "offer_id": offer_id, "price_per_hour": offer.price_per_hour, "label": unique_label},
+            {
+                "instance_id": instance_id,
+                "offer_id": offer_id,
+                "price_per_hour": offer.price_per_hour,
+                "label": unique_label,
+                "model_id": self.settings.model_id,
+            },
         )
         return {"instance_id": instance_id, "raw": result or {}, "offer": offer.public_dict()}
 
-    async def rent_and_prepare(self, offer_id: int, progress: ProgressCallback | None = None) -> dict[str, Any]:
+    async def rent_and_prepare(
+        self,
+        offer_id: int,
+        progress: ProgressCallback | None = None,
+    ) -> dict[str, Any]:
         result = await self.rent(offer_id)
         try:
             await self.wait_until_ready(result["instance_id"], progress=progress)
@@ -182,7 +185,10 @@ class Orchestrator:
                 )
                 raise
             await self.db.set("instance.phase", InstancePhase.ERROR.value)
-            await self.db.event("instance.provision_failed", {"instance_id": result["instance_id"], "error": str(exc)})
+            await self.db.event(
+                "instance.provision_failed",
+                {"instance_id": result["instance_id"], "error": str(exc)},
+            )
             if self.settings.vast_auto_destroy_on_provision_failure:
                 try:
                     await self.destroy_current()
@@ -193,14 +199,21 @@ class Orchestrator:
                     )
             raise
 
-    async def wait_until_ready(self, instance_id: int, *, progress: ProgressCallback | None = None) -> None:
+    async def wait_until_ready(
+        self,
+        instance_id: int,
+        *,
+        progress: ProgressCallback | None = None,
+    ) -> None:
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + self.settings.provision_ready_timeout_seconds
+        deadline = loop.time() + self.settings.inference_ready_timeout_seconds
         last_notice: str | None = None
+
         while loop.time() < deadline:
             current_id = await self.db.get("instance.id")
             if not current_id or int(current_id) != int(instance_id):
                 raise OrchestratorError("Provisioning was cancelled because this instance is no longer current")
+
             ref = await self.vast.show_instance(instance_id)
             status = ref.status.lower()
             if status in {"exited", "error", "failed", "dead"}:
@@ -211,24 +224,28 @@ class Orchestrator:
                 notice = f"Vast: {ref.status}"
             elif not ref.public_ip or not ref.mapped_port:
                 await self.db.set("instance.phase", InstancePhase.PROVISIONING.value)
-                notice = "السيرفر يعمل، بانتظار منفذ PixelPilot Worker..."
+                notice = "السيرفر يعمل، بانتظار منفذ Qwen..."
             else:
                 await self.db.set("instance.phase", InstancePhase.PROVISIONING.value)
-                url = self._worker_url(ref.public_ip, ref.mapped_port)
-                await self.db.set("worker.url", url)
-                token = await self.db.get("worker.token")
-                worker = self._worker_factory(url, str(token or ""))
-                if await worker.is_ready():
+                url = self._inference_url(ref.public_ip, ref.mapped_port)
+                await self.db.set("inference.url", url)
+                token = await self.db.get("inference.token")
+                inference = self._inference_factory(url, str(token or ""))
+                if await inference.is_ready():
                     await self.db.set("instance.phase", InstancePhase.READY.value)
                     await self._touch_activity()
                     await self.db.event(
                         "instance.ready",
-                        {"instance_id": instance_id, "worker_url": _redact_url(url)},
+                        {
+                            "instance_id": instance_id,
+                            "inference_url": _redact_url(url),
+                            "model_id": self.settings.model_id,
+                        },
                     )
                     if progress:
-                        await progress("✅ السيرفر جاهز بالكامل للتوليد.")
+                        await progress("✅ Qwen3-Omni جاهز للمحادثة وفهم الصور والصوت.")
                     return
-                notice = "السيرفر يعمل؛ جاري تنزيل/تحميل Krea وتشغيل ComfyUI..."
+                notice = "السيرفر يعمل؛ جاري تنزيل/تحميل Qwen3-Omni وتشغيل vLLM..."
 
             if progress and notice != last_notice:
                 await progress(notice)
@@ -236,7 +253,7 @@ class Orchestrator:
             await asyncio.sleep(self.settings.provision_poll_seconds)
 
         raise OrchestratorError(
-            f"PixelPilot worker did not become ready within {self.settings.provision_ready_timeout_seconds}s"
+            f"Qwen inference endpoint did not become ready within {self.settings.inference_ready_timeout_seconds}s"
         )
 
     async def stop_current(self) -> bool:
@@ -275,129 +292,88 @@ class Orchestrator:
                 ("instance.offer", None),
                 ("instance.label", None),
                 ("instance.pending_label", None),
+                ("inference.url", None),
+                ("inference.token", None),
+                ("instance.last_activity_at", None),
+                ("inference.active", False),
                 ("worker.url", None),
                 ("worker.token", None),
-                ("instance.last_activity_at", None),
                 ("generation.active", False),
             ):
                 await self.db.set(key, value)
             return True
 
-    async def current_state(self, *, probe_worker: bool = False) -> dict[str, Any]:
+    async def current_state(self, *, probe_inference: bool = False) -> dict[str, Any]:
         instance_id = await self.db.get("instance.id")
         phase = await self.db.get("instance.phase", InstancePhase.NONE.value)
         offer = await self.db.get("instance.offer")
-        state: dict[str, Any] = {"instance_id": instance_id, "phase": phase, "offer": offer}
+        state: dict[str, Any] = {
+            "instance_id": instance_id,
+            "phase": phase,
+            "offer": offer,
+            "model_id": self.settings.model_id,
+        }
         if not instance_id:
             return state
+
         ref = await self.vast.show_instance(int(instance_id))
-        state.update({"vast_status": ref.status, "public_ip": ref.public_ip, "mapped_port": ref.mapped_port})
-        if probe_worker:
+        state.update(
+            {
+                "vast_status": ref.status,
+                "public_ip": ref.public_ip,
+                "mapped_port": ref.mapped_port,
+            }
+        )
+        if probe_inference:
             try:
-                worker = await self._current_worker()
-                state["worker_ready"] = await worker.is_ready()
+                inference = await self._current_inference()
+                state["inference_ready"] = await inference.is_ready()
             except Exception:
-                state["worker_ready"] = False
+                state["inference_ready"] = False
         return state
 
-    async def generate(self, spec: GenerationSpec) -> GenerationResult:
-        if self._generation_lock.locked():
-            raise OrchestratorError("يوجد توليد آخر قيد التنفيذ حاليًا")
-        async with self._generation_lock:
-            await self.db.set("generation.active", True)
+    async def chat(self, messages: list[dict[str, Any]]) -> InferenceResult:
+        if self._inference_lock.locked():
+            raise OrchestratorError("يوجد طلب آخر قيد المعالجة حاليًا")
+
+        async with self._inference_lock:
+            phase = await self.db.get("instance.phase", InstancePhase.NONE.value)
+            instance_id = await self.db.get("instance.id")
+            if phase != InstancePhase.READY.value or not instance_id:
+                raise OrchestratorError("السيرفر غير جاهز للمحادثة")
+
+            await self.db.set("inference.active", True)
             await self._touch_activity()
             try:
-                return await self._generate_locked(spec)
+                inference = await self._current_inference()
+                result = await inference.chat(
+                    messages,
+                    max_tokens=self.settings.model_max_output_tokens,
+                )
+                await self.db.event(
+                    "chat.completed",
+                    {
+                        "instance_id": int(instance_id),
+                        "message_count": len(messages),
+                        "response_chars": len(result.text),
+                        "model": result.model,
+                    },
+                )
+                return result
+            except Exception as exc:
+                await self.db.event(
+                    "chat.failed",
+                    {"instance_id": int(instance_id), "error": str(exc)},
+                )
+                raise
             finally:
-                await self.db.set("generation.active", False)
+                await self.db.set("inference.active", False)
                 await self._touch_activity()
 
-    async def _generate_locked(self, spec: GenerationSpec) -> GenerationResult:
-        if spec.batch_size > self.settings.generation_max_batch:
-            raise OrchestratorError(f"Batch cannot exceed {self.settings.generation_max_batch}")
-        if spec.steps > self.settings.generation_max_steps:
-            raise OrchestratorError(f"Steps cannot exceed {self.settings.generation_max_steps}")
-        phase = await self.db.get("instance.phase", InstancePhase.NONE.value)
-        instance_id = await self.db.get("instance.id")
-        if phase != InstancePhase.READY.value or not instance_id:
-            raise OrchestratorError("السيرفر غير جاهز للتوليد")
-
-        generation_id = await self.db.create_generation(
-            prompt=spec.prompt,
-            seed=spec.seed,
-            instance_id=int(instance_id),
-            status=GenerationStatus.CREATED.value,
-            result={"request": spec.to_dict(), "images": []},
-        )
-        worker = await self._current_worker()
-        prefix = f"PixelPilot/g{generation_id}"
-        try:
-            prompt_id = await worker.submit(spec, filename_prefix=prefix)
-            await self.db.update_generation(
-                generation_id,
-                status=GenerationStatus.SUBMITTED.value,
-                prompt_id=prompt_id,
-            )
-            job = await worker.wait_job(
-                prompt_id,
-                timeout_seconds=self.settings.worker_generation_timeout_seconds,
-            )
-            images = [
-                ImageRef(
-                    filename=str(item["filename"]),
-                    subfolder=str(item.get("subfolder") or ""),
-                    image_type=str(item.get("type") or "output"),
-                )
-                for item in job.get("images", [])
-                if isinstance(item, dict) and item.get("filename")
-            ]
-            if not images:
-                raise OrchestratorError("ComfyUI completed but returned no images")
-            result_json = {"request": spec.to_dict(), "images": [image.to_dict() for image in images]}
-            await self.db.update_generation(
-                generation_id,
-                status=GenerationStatus.COMPLETED.value,
-                prompt_id=prompt_id,
-                result=result_json,
-            )
-            await self.db.event(
-                "generation.completed",
-                {"generation_id": generation_id, "prompt_id": prompt_id, "image_count": len(images)},
-            )
-            return GenerationResult(generation_id=generation_id, prompt_id=prompt_id, spec=spec, images=images)
-        except Exception as exc:
-            await self.db.update_generation(generation_id, status=GenerationStatus.ERROR.value)
-            await self.db.event("generation.failed", {"generation_id": generation_id, "error": str(exc)})
-            raise
-
-    async def generation_record(self, generation_id: int) -> dict[str, Any] | None:
-        return await self.db.get_generation(generation_id)
-
-    async def download_generation_image(self, generation_id: int, index: int) -> tuple[bytes, ImageRef]:
-        record = await self.db.get_generation(generation_id)
-        if not record or not isinstance(record.get("result"), dict):
-            raise OrchestratorError("Generation not found")
-        images = record["result"].get("images") or []
-        if index < 0 or index >= len(images):
-            raise OrchestratorError("Image index out of range")
-        image = ImageRef(**images[index])
-        worker = await self._current_worker()
-        return await worker.download_image(image), image
-
-    async def regenerate(self, generation_id: int, *, same_seed: bool) -> GenerationResult:
-        record = await self.db.get_generation(generation_id)
-        if not record or not isinstance(record.get("result"), dict):
-            raise OrchestratorError("Generation not found")
-        request = record["result"].get("request")
-        if not isinstance(request, dict):
-            raise OrchestratorError("Generation request metadata is missing")
-        spec = GenerationSpec(**request)
-        if not same_seed:
-            spec = GenerationSpec(**(spec.to_dict() | {"seed": secrets.randbits(63)}))
-        return await self.generate(spec)
-
     async def recover_current(self) -> None:
+        await self.db.set("inference.active", False)
         await self.db.set("generation.active", False)
+
         instance_id = await self.db.get("instance.id")
         if not instance_id:
             pending_label = await self.db.get("instance.pending_label")
@@ -406,37 +382,58 @@ class Orchestrator:
             try:
                 matches = await self.vast.find_instances_by_label(str(pending_label))
             except Exception as exc:
-                await self.db.event("instance.pending_recovery_failed", {"label": pending_label, "error": str(exc)})
+                await self.db.event(
+                    "instance.pending_recovery_failed",
+                    {"label": pending_label, "error": str(exc)},
+                )
                 return
             if len(matches) != 1:
-                await self.db.event("instance.pending_recovery_unresolved", {"label": pending_label, "count": len(matches)})
+                await self.db.event(
+                    "instance.pending_recovery_unresolved",
+                    {"label": pending_label, "count": len(matches)},
+                )
                 return
             instance_id = matches[0].instance_id
             await self.db.set("instance.id", instance_id)
             await self.db.set("instance.label", pending_label)
             await self.db.set("instance.pending_label", None)
             await self.db.set("instance.phase", InstancePhase.BOOTING.value)
-            await self.db.event("instance.pending_recovered", {"instance_id": instance_id, "label": pending_label})
+            await self.db.event(
+                "instance.pending_recovered",
+                {"instance_id": instance_id, "label": pending_label},
+            )
+
         try:
             ref = await self.vast.show_instance(int(instance_id))
         except Exception as exc:
-            await self.db.event("instance.recovery_probe_failed", {"instance_id": instance_id, "error": str(exc)})
+            await self.db.event(
+                "instance.recovery_probe_failed",
+                {"instance_id": instance_id, "error": str(exc)},
+            )
             return
+
         status = ref.status.lower()
         if status == "stopped":
             await self.db.set("instance.phase", InstancePhase.STOPPED.value)
             return
         if status in {"exited", "error", "failed", "dead"}:
             await self.db.set("instance.phase", InstancePhase.ERROR.value)
-            await self.db.event("instance.recovery_terminal", {"instance_id": instance_id, "status": ref.status})
+            await self.db.event(
+                "instance.recovery_terminal",
+                {"instance_id": instance_id, "status": ref.status},
+            )
             return
+
         try:
             await self.wait_until_ready(int(instance_id))
         except Exception as exc:
             current_id = await self.db.get("instance.id")
             if current_id and int(current_id) == int(instance_id):
                 await self.db.set("instance.phase", InstancePhase.ERROR.value)
-            await self.db.event("instance.recovery_failed", {"instance_id": instance_id, "error": str(exc)})
+            await self.db.event(
+                "instance.recovery_failed",
+                {"instance_id": instance_id, "error": str(exc)},
+            )
 
     async def _touch_activity(self) -> None:
         stamp = datetime.now(UTC).isoformat()
@@ -444,39 +441,42 @@ class Orchestrator:
         await self.db.set("cost_guard.warned_instance", None)
         await self.db.set("cost_guard.warned_activity_at", None)
 
-    async def _current_worker(self) -> WorkerClient:
-        url = await self.db.get("worker.url")
-        token = await self.db.get("worker.token")
+    async def _current_inference(self) -> InferenceClient:
+        url = await self.db.get("inference.url")
+        token = await self.db.get("inference.token")
         if not url or not token:
-            raise OrchestratorError("Worker endpoint is not available")
-        return self._worker_factory(str(url), str(token))
+            raise OrchestratorError("Inference endpoint is not available")
+        return self._inference_factory(str(url), str(token))
 
-    def _worker_url(self, public_ip: str, mapped_port: int) -> str:
-        scheme = "https" if self.settings.worker_use_https else "http"
+    def _inference_url(self, public_ip: str, mapped_port: int) -> str:
+        scheme = "https" if self.settings.inference_use_https else "http"
         return f"{scheme}://{public_ip}:{mapped_port}"
 
-    def _build_vast_env(self, worker_token: str) -> str:
-        portal = f"localhost:{self.settings.worker_proxy_port}:{self.settings.worker_internal_port}:/health:PixelPilot Worker"
+    def _build_vast_env(self, inference_token: str) -> str:
         values = {
             "HF_TOKEN": self.settings.hf_token,
-            "PIXELPILOT_WORKER_TOKEN": worker_token,
-            "OPEN_BUTTON_TOKEN": worker_token,
-            "OPEN_BUTTON_PORT": str(self.settings.worker_proxy_port),
-            "PORTAL_CONFIG": portal,
-            "PIXELPILOT_TRUST_PROXY": "1",
-            "PIXELPILOT_WORKER_PORT": str(self.settings.worker_internal_port),
-            "COMFY_PORT": str(self.settings.comfy_port),
-            "COMFY_URL": f"http://127.0.0.1:{self.settings.comfy_port}",
-            "COMFYUI_REF": self.settings.comfyui_ref,
-            "GENERATION_MAX_BATCH": str(self.settings.generation_max_batch),
-            "GENERATION_MAX_STEPS": str(self.settings.generation_max_steps),
+            "PIXELPILOT_INFERENCE_TOKEN": inference_token,
+            "INFERENCE_PORT": str(self.settings.inference_port),
+            "MODEL_ID": self.settings.model_id,
+            "MODEL_DTYPE": self.settings.model_dtype,
+            "MODEL_MAX_LEN": str(self.settings.model_max_len),
+            "MODEL_GPU_MEMORY_UTILIZATION": str(self.settings.model_gpu_memory_utilization),
+            "MODEL_TENSOR_PARALLEL_SIZE": str(self.settings.model_tensor_parallel_size),
+            "MODEL_LIMIT_IMAGES": str(self.settings.model_limit_images),
+            "MODEL_LIMIT_AUDIO": str(self.settings.model_limit_audio),
+            "HF_HOME": "/workspace/hf-cache",
             "DATA_DIRECTORY": "/workspace",
         }
         if self.settings.pixelpilot_repo_url:
             values["PIXELPILOT_REPO_URL"] = self.settings.pixelpilot_repo_url
             values["PIXELPILOT_REPO_REF"] = self.settings.pixelpilot_repo_ref
-        parts = [f"-e {shlex.quote(f'{key}={value}')}" for key, value in values.items() if value != ""]
-        parts.append(f"-p {self.settings.worker_proxy_port}:{self.settings.worker_proxy_port}")
+
+        parts = [
+            f"-e {shlex.quote(f'{key}={value}')}"
+            for key, value in values.items()
+            if value != ""
+        ]
+        parts.append(f"-p {self.settings.inference_port}:{self.settings.inference_port}")
         return " ".join(parts)
 
     def _build_onstart_cmd(self) -> str | None:

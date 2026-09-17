@@ -1,84 +1,49 @@
 # PixelPilot — Project Memory
 
-> المرجع الأول عند استكمال المشروع في أي جلسة لاحقة. حدّث هذا الملف فقط عند تغير قرار ثابت أو تدفق أساسي.
+## Current goal
 
-## الهدف
+PixelPilot is a personal, owner-only Telegram assistant backed by a temporary Vast.ai GPU. The active model is `Qwen/Qwen3-Omni-30B-A3B-Instruct`.
 
-بوت Telegram شخصي Owner-only يستخدم GPU مؤقتًا من Vast.ai لإنشاء صور طبيعية عالية الجودة بـ FLUX.1 Krea. لا يوجد GPU ثابت: Search -> Review -> Rent -> Auto Provision -> Generate -> Destroy.
+Supported user inputs:
+- text
+- images
+- Telegram Voice
+- audio files
 
-## القرارات الحالية
+Output is text. Image generation is no longer part of the project.
 
-- اسم المستودع: `PixelPilot`.
-- GitHub remote العام: `https://github.com/ahmed9461/PixelPilot.git`.
-- الواجهة اليومية: Telegram Bot.
-- Controller يعيش على استضافة صغيرة دائمة خارج Vast.
-- GPU Cloud: Vast.ai.
-- Image backend: ComfyUI self-hosted API.
-- الموديل الأول: `black-forest-labs/FLUX.1-Krea-dev` full weights.
-- Target profile الأول: GPU بذاكرة 48GB، T5 FP16، disk 100GB.
-- الاستخدام: شخصي/هواية.
-- الأولوية: photorealism / natural details / premium aesthetics.
-- Cost mode المفضل: Destroy عند الانتهاء؛ Stop متاح لكنه يبقي رسوم التخزين.
-- Owner-only: أي Telegram ID غير المالك يُهمل.
-- الأسرار في env فقط؛ لا Tokens في Git.
-- Vast API key يبقى على Controller ولا يرسل للـGPU.
-- HF token Read-only يمر للـInstance فقط وقت التشغيل لتنزيل Krea.
-- ComfyUI لا يُكشف للعالم؛ localhost فقط.
-- Worker خلف Vast base-image Caddy/portal على proxy port 8190 إلى localhost:18190.
-- Vast SDK parameter الصحيح للقالب هو `template_hash` / `VAST_TEMPLATE_HASH`، وليس numeric template ID.
-- Direct deployment لا يحتاج Template إذا كان `PIXELPILOT_REPO_URL` متاحًا للـInstance.
-- Auto-Destroy عند فشل provisioning مفعّل افتراضيًا.
-- Idle Auto-Destroy متاح لكنه Disabled افتراضيًا (`0`) لمنع حذف غير مقصود.
+## Non-negotiable behavior
 
-## Workflow Krea المعتمد
+1. Do not inject a System Prompt or Developer Prompt.
+2. Do not translate, improve, prepend, append or rewrite the user's message before sending it to Qwen.
+3. A media-only message must remain media-only; do not invent a hidden “describe this” instruction.
+4. Conversation content is RAM-only on the Controller, not persisted to SQLite.
+5. `/new` clears the current conversation context.
+6. Vast lifecycle remains owner-controlled; automatic destruction is opt-in.
+7. `VAST_API_KEY` stays on the Controller.
 
-الـAPI workflow يطابق workflow الرسمي المبسط:
+## Architecture
 
-- `UNETLoader`: `flux1-krea-dev.safetensors`
-- `DualCLIPLoader`: `clip_l.safetensors` + `t5xxl_fp16.safetensors`, type `flux`
-- `VAELoader`: `ae.safetensors`
-- `CLIPTextEncode`
-- `EmptySD3LatentImage`
-- `ConditioningZeroOut`
-- `KSampler`: 20 steps / CFG 1.0 / Euler / simple / denoise 1.0
-- `VAEDecode`
-- `SaveImage`
+```text
+Telegram
+  -> PixelPilot Controller
+  -> authenticated public Vast port
+  -> vLLM OpenAI-compatible API
+  -> Qwen3-Omni
+```
 
-## ملفات الموديل
+No ComfyUI, FLUX workflow, image seed/ratio/batch, or PixelPilot Worker is used in v0.4.
 
-- `diffusion_models/flux1-krea-dev.safetensors`
-- `text_encoders/clip_l.safetensors`
-- `text_encoders/t5xxl_fp16.safetensors`
-- `vae/ae.safetensors`
+## Runtime defaults
 
-## تدفق الاستخدام
+- Model: `Qwen/Qwen3-Omni-30B-A3B-Instruct`
+- dtype: BF16
+- min GPU VRAM policy: 80 GB
+- disk: 150 GB
+- model context: 32768
+- max output tokens: 2048
+- one image and one audio input per prompt by default
 
-1. `/start`
-2. `🧪 فحص الجاهزية`
-3. `🔎 البحث عن سيرفر`
-4. عرض التفاصيل والسعر
-5. `🚀 استئجار وتجهيز`
-6. Controller يولد Worker token عشوائيًا ويستأجر Vast.
-7. onstart يجلب PixelPilot، ثم `bootstrap_vast.sh`.
-8. Bootstrap يجهز ComfyUI وينزل الموديلات ويشغل Worker.
-9. Controller يقرأ public IP + mapped port ويراقب `/health`.
-10. لا يرسل READY إلا إذا ComfyUI + الموديلات Ready.
-11. Telegram generation flow.
-12. الصور ترجع Preview؛ Original متاح كـDocument ما دام الـInstance موجودًا.
-13. `🗑 Destroy` عند الانتهاء.
+## Persistence
 
-## ملفات الحالة
-
-- `docs/PROGRESS.md`: ما تم فعليًا.
-- `docs/TODO.md`: المتبقي الحقيقي فقط.
-- `docs/DECISIONS.md`: ADRs.
-- `docs/FINAL_BUILD_REPORT.md`: تقرير البناء الحالي.
-
-## الحالة الحالية
-
-- Local MVP code-complete.
-- 31/31 automated tests passing.
-- Python compile check PASS.
-- GitHub source published.
-- External credentials created by the user but intentionally not stored in Git.
-- Remaining gate: local secret injection + Preflight + one paid Vast Live Acceptance.
+SQLite keeps instance lifecycle state, cached Vast offers, operational events and Cost Guard state. Conversation content remains RAM-only.

@@ -12,30 +12,36 @@ from pixelpilot.domain import InstancePhase
 from pixelpilot.services.orchestrator import Orchestrator
 
 
-async def cost_guard_loop(bot: Bot, settings: Settings, db: Database, orchestrator: Orchestrator) -> None:
-    """Warn about idle paid GPU time and optionally destroy idle instances.
-
-    Automatic destruction is intentionally opt-in (`COST_GUARD_AUTO_DESTROY_MINUTES=0` by default).
-    """
-
+async def cost_guard_loop(
+    bot: Bot,
+    settings: Settings,
+    db: Database,
+    orchestrator: Orchestrator,
+) -> None:
+    """Warn about idle paid GPU time and optionally destroy idle instances."""
     while True:
         try:
             await _cost_guard_tick(bot, settings, db, orchestrator)
         except asyncio.CancelledError:
             raise
         except Exception:
-            # Guard failures must never crash the Telegram bot. The next tick retries.
             pass
         await asyncio.sleep(max(10, settings.cost_guard_poll_seconds))
 
 
-async def _cost_guard_tick(bot: Bot, settings: Settings, db: Database, orchestrator: Orchestrator) -> None:
+async def _cost_guard_tick(
+    bot: Bot,
+    settings: Settings,
+    db: Database,
+    orchestrator: Orchestrator,
+) -> None:
     instance_id = await db.get("instance.id")
     phase = await db.get("instance.phase", InstancePhase.NONE.value)
     if not instance_id or phase != InstancePhase.READY.value:
         return
-    if await db.get("generation.active", False):
+    if await db.get("inference.active", False):
         return
+
     stamp = await db.get("instance.last_activity_at")
     if not stamp:
         return
@@ -54,13 +60,15 @@ async def _cost_guard_tick(bot: Bot, settings: Settings, db: Database, orchestra
         except Exception as exc:
             await bot.send_message(
                 settings.owner_telegram_id,
-                f"⚠️ Cost Guard حاول حذف Instance <code>{instance_id}</code> وفشل:\n<code>{escape(str(exc))}</code>",
+                f"⚠️ Cost Guard حاول حذف Instance <code>{instance_id}</code> وفشل:\n"
+                f"<code>{escape(str(exc))}</code>",
             )
             return
         if destroyed:
             await bot.send_message(
                 settings.owner_telegram_id,
-                f"🛡 <b>Cost Guard</b>\nتم حذف Instance <code>{instance_id}</code> تلقائيًا بعد {idle_minutes:.0f} دقيقة خمول.",
+                f"🛡 <b>Cost Guard</b>\nتم حذف Instance <code>{instance_id}</code> تلقائيًا "
+                f"بعد {idle_minutes:.0f} دقيقة خمول.",
             )
         return
 
@@ -73,8 +81,8 @@ async def _cost_guard_tick(bot: Bot, settings: Settings, db: Database, orchestra
         return
     await bot.send_message(
         settings.owner_telegram_id,
-        f"💸 <b>تنبيه تكلفة</b>\nInstance <code>{instance_id}</code> جاهز لكنه خامل منذ نحو {idle_minutes:.0f} دقيقة.\n"
-        "إذا انتهيت، استخدم 🗑 حذف السيرفر لإيقاف تكلفة الـInstance والتخزين.",
+        f"💸 <b>تنبيه تكلفة</b>\nInstance <code>{instance_id}</code> جاهز لكنه خامل منذ نحو "
+        f"{idle_minutes:.0f} دقيقة.\nإذا انتهيت، استخدم 🗑 حذف السيرفر لإيقاف تكلفة الـInstance والتخزين.",
     )
     await db.set("cost_guard.warned_instance", instance_id)
     await db.set("cost_guard.warned_activity_at", stamp)
