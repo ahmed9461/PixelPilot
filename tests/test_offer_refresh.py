@@ -17,7 +17,15 @@ def _offer(offer_id: int, price: float) -> GpuOffer:
 def test_refresh_reports_unchanged_market():
     previous = [_offer(1, 0.40).public_dict()]
     current = [_offer(1, 0.40)]
-    assert "لا توجد تغييرات" in _refresh_note(previous, current)
+    note = _refresh_note(previous, current)
+    assert "تم فحص السوق الآن" in note
+    assert "نفس النتائج ما زالت متاحة" in note
+
+
+def test_refresh_includes_visible_refresh_serial():
+    previous = [_offer(1, 0.40).public_dict()]
+    current = [_offer(1, 0.40)]
+    assert "تحديث السوق #7" in _refresh_note(previous, current, 7)
 
 
 def test_refresh_reports_new_and_removed_offers():
