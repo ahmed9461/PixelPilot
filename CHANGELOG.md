@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.2 — 2026-09-17
+
+- Lowered the hard Vast rental ceiling to $0.50/hour.
+- Made offer refresh visibly live by comparing each fresh marketplace query with the previous results.
+- Added per-second active rental time and estimated cost tracking in SQLite.
+- Added live billing details to status/provisioning/stop/start/destroy flows and a final billing snapshot after deletion.
+- Fixed Vast diagnostics to avoid unsupported remote shell commands and probe the inference endpoint directly.
+- Added regression tests for billing arithmetic, offer-refresh comparison, migration and the new price ceiling.
+
 ## 0.4.1 — 2026-09-17
 
 - Switched the default model from `Qwen/Qwen3-Omni-30B-A3B-Instruct` to the much lighter `Qwen/Qwen2.5-Omni-7B`.
