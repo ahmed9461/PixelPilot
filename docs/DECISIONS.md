@@ -1,5 +1,11 @@
 # Decisions
 
+## 2026-09-17 — Keep Telegram UI user-facing
+
+Normal Telegram screens must contain only information the user needs to operate PixelPilot. Do not expose model names, vLLM/inference architecture, prompt-policy explanations, deployment internals, or implementation notes in welcome/help/status/provisioning screens. Keep technical details in `README`, `docs`, logs, diagnostics and developer-facing files instead.
+
+Hardware details that are necessary to choose a rented server — GPU name, VRAM, price, reliability, network speed and location — may remain in the offer screen.
+
 ## 2026-09-17 — Qwen2.5-Omni-7B as the economical personal default
 
 Use `Qwen/Qwen2.5-Omni-7B` as the default model because the earlier Qwen3-Omni 30B profile forced PixelPilot into 80–96GB GPUs costing about $1/hour in the first live search. The 7B model still understands text, images and audio but allows a 48GB GPU policy and a much lower default Vast price cap.
