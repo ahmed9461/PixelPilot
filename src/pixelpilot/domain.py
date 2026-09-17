@@ -52,7 +52,7 @@ class InstanceRef:
     raw: dict[str, Any] | None = None
 
 
-MediaKind = Literal["image", "audio"]
+MediaKind = Literal["image", "audio", "video"]
 
 
 @dataclass(slots=True, frozen=True)
@@ -71,6 +71,8 @@ class MediaInput:
             return {"type": "image_url", "image_url": {"url": url}}
         if self.kind == "audio":
             return {"type": "audio_url", "audio_url": {"url": url}}
+        if self.kind == "video":
+            return {"type": "video_url", "video_url": {"url": url}}
         raise ValueError(f"Unsupported media kind: {self.kind}")
 
 
@@ -80,7 +82,7 @@ class UserInput:
     media: tuple[MediaInput, ...] = ()
 
     def to_openai_message(self) -> dict[str, Any]:
-        """Build exactly one user message without adding any hidden/system prompt."""
+        """Build exactly one user message without silently rewriting its content."""
         if not self.media:
             return {"role": "user", "content": self.text or ""}
 

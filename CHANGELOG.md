@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0 — 2026-09-17
+
+- Added Telegram video, video-note and video-document understanding using multimodal `video_url` input.
+- Enabled one video input per prompt in the Vast vLLM runtime while keeping the previously proven dependency-install path.
+- Added a new in-bot Assistant Settings section with personality, tone, reasoning depth, formatting, language, context and generation controls.
+- Added editable prompt profiles. The owner can view, replace, reset and export prompts directly from Telegram without SSH or `.env` edits.
+- Added a custom prompt layer; the default neutral profile remains prompt-free until the owner enables or edits behavior.
+- Added percentage controls for creativity, diversity and response length. Neutral defaults preserve the previous stable behavior: 0% creativity, full diversity and full configured output-token allowance.
+- Added runtime context controls: enable/disable memory, choose retained message depth, and clear the current RAM-only context.
+- Added regression tests for video payloads, editable profile composition, context policy and generation controls.
+
 ## 0.4.3 — 2026-09-17
 
 - Fixed unstable multilingual/gibberish text responses observed in the live Qwen2.5-Omni test.

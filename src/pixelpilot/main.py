@@ -8,9 +8,10 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from pixelpilot.bot.middleware import OwnerOnlyMiddleware
-from pixelpilot.bot.routers import chat, home, servers
+from pixelpilot.bot.routers import chat, home, servers, settings as assistant_settings_router
 from pixelpilot.config import get_settings
 from pixelpilot.db import Database
+from pixelpilot.services.assistant_settings import ensure_defaults
 from pixelpilot.services.cost_guard import cost_guard_loop
 from pixelpilot.services.orchestrator import Orchestrator
 from pixelpilot.services.vast_gateway import VastSdkGateway
@@ -26,10 +27,12 @@ async def main() -> None:
 
     db = Database(settings.database_path)
     await db.init()
+    await ensure_defaults(db)
     vast = VastSdkGateway(settings.vast_api_key, worker_proxy_port=settings.inference_port)
     orchestrator = Orchestrator(settings, db, vast)
     servers.configure(orchestrator)
     chat.configure(orchestrator)
+    assistant_settings_router.configure(orchestrator)
 
     bot = Bot(
         settings.telegram_bot_token,
@@ -39,6 +42,9 @@ async def main() -> None:
     dp.update.middleware(OwnerOnlyMiddleware(settings.owner_telegram_id))
     dp.include_router(home.router)
     dp.include_router(servers.router)
+    # Settings is registered before chat so a pending prompt edit can capture
+    # exactly the next text message without being sent to the model.
+    dp.include_router(assistant_settings_router.router)
     dp.include_router(chat.router)
 
     recovery_task = asyncio.create_task(

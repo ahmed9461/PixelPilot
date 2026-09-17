@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     hf_token: str = ""
 
     # Model / vLLM. The default is the economical 7B Omni profile: one model
-    # understands text, images and audio while returning text only.
+    # understands text, images, audio and video while returning text only.
     model_id: str = "Qwen/Qwen2.5-Omni-7B"
     model_dtype: str = "bfloat16"
     model_max_len: int = 8192
@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     model_tensor_parallel_size: int = 1
     model_limit_images: int = 1
     model_limit_audio: int = 1
+    model_limit_videos: int = 1
 
     # Public mapped vLLM endpoint on the rented instance.
     inference_port: int = 8190
@@ -98,6 +99,7 @@ class Settings(BaseSettings):
         "model_tensor_parallel_size",
         "model_limit_images",
         "model_limit_audio",
+        "model_limit_videos",
         "inference_port",
         "inference_request_timeout_seconds",
         "inference_ready_timeout_seconds",
