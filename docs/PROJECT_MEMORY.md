@@ -52,8 +52,8 @@ No ComfyUI, FLUX workflow, image seed/ratio/batch, or PixelPilot Worker is used 
 - model context: 8192
 - max output tokens: 2048
 - creativity: 0% (`temperature=0`)
-- diversity: 95% (`top_p=0.95`)
-- response-length control: 50%
+- diversity: 100% (`top_p=1.0`)
+- response-length control: 100% (full configured max output tokens)
 - one image, one audio and one video input per prompt by default
 - assistant personality/tone/reasoning/format/language: neutral/automatic until owner changes them
 
