@@ -8,11 +8,11 @@ Every injected prompt fragment must be visible, editable, replaceable and resett
 
 ## 2026-09-17 — Video is a first-class multimodal input
 
-Support Telegram videos, video notes and video documents. Pass video bytes to the OpenAI-compatible endpoint as a `video_url` data URL and allow one video per prompt by default. Keep the same media-size guard used for images/audio. The Vast runtime includes video in `--limit-mm-per-prompt` and installs the Qwen video utility extra.
+Support Telegram videos, video notes and video documents. Pass video bytes to the OpenAI-compatible endpoint as a `video_url` data URL and allow one video per prompt by default. Keep the same media-size guard used for images/audio. The Vast runtime includes video in `--limit-mm-per-prompt` while keeping the previously proven dependency-install path.
 
 ## 2026-09-17 — Runtime generation controls live in Telegram
 
-Expose user-facing percentage controls for creativity, diversity and response length. Defaults remain conservative: creativity 0% maps to `temperature=0` to preserve the stability established by the live Arabic test, diversity 95% maps to `top_p=0.95`, and response length is bounded by the configured maximum output tokens. These are request-time controls stored in SQLite, not `.env` mutations.
+Expose user-facing percentage controls for creativity, diversity and response length. The neutral defaults must preserve the already-tested v0.4.3 behavior: creativity 0% maps to `temperature=0`, diversity 100% maps to `top_p=1.0`, and response length 100% keeps the full configured output-token allowance. The owner can deliberately change any of these from Telegram. These are request-time controls stored in SQLite, not `.env` mutations.
 
 ## 2026-09-17 — Deterministic Qwen text decoding
 
