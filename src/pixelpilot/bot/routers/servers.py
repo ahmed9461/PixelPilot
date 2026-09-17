@@ -44,7 +44,7 @@ async def preflight(callback: CallbackQuery) -> None:
 @router.callback_query(lambda q: q.data == "servers:search")
 async def search(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback, "جاري البحث...")
-    await callback.message.edit_text("🔎 أبحث عن عروض Vast المناسبة لـ Qwen3-Omni...")
+    await callback.message.edit_text("🔎 أبحث عن عروض Vast الاقتصادية المناسبة للموديل...")
     try:
         offers = await orch().offers()
     except Exception as exc:
@@ -54,7 +54,7 @@ async def search(callback: CallbackQuery) -> None:
         await callback.message.edit_text("لا توجد عروض مطابقة حاليًا. جرّب لاحقًا أو عدّل سياسة السعر/العتاد في الإعدادات.", reply_markup=main_menu())
         return
     await callback.message.edit_text(
-        "🧾 <b>العروض المطابقة</b>\nالحد الافتراضي مضبوط لسيرفر بذاكرة GPU مناسبة لنسخة Qwen3-Omni BF16. اختر عرضًا لمراجعة التفاصيل:",
+        "🧾 <b>العروض المطابقة</b>\nالملف الاقتصادي مضبوط افتراضيًا على GPU بذاكرة 48GB أو أكثر لـ Qwen2.5-Omni-7B. اختر عرضًا لمراجعة التفاصيل:",
         reply_markup=offers_keyboard(offers),
     )
 
@@ -149,7 +149,7 @@ async def stop(callback: CallbackQuery) -> None:
 @router.callback_query(lambda q: q.data == "servers:start")
 async def start_instance(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback, "جاري التشغيل...")
-    await callback.message.edit_text("▶️ جاري تشغيل السيرفر والتحقق من Qwen3-Omni...")
+    await callback.message.edit_text("▶️ جاري تشغيل السيرفر والتحقق من الموديل...")
 
     async def progress(text: str) -> None:
         try:
