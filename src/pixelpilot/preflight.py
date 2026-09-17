@@ -25,8 +25,8 @@ def run_local_preflight(settings: Settings, *, repo_root: Path | None = None) ->
     source_ok = bool(settings.pixelpilot_repo_url or settings.vast_template_hash)
     checks.append(Check("Vast bootstrap source", source_ok, "repository URL configured" if settings.pixelpilot_repo_url else "template hash configured" if settings.vast_template_hash else "missing repo URL/template hash"))
     checks.append(Check("Model", bool(settings.model_id), settings.model_id or "missing"))
-    checks.append(Check("Vast disk", settings.vast_disk_gb >= 120, f"{settings.vast_disk_gb} GB"))
-    checks.append(Check("GPU VRAM policy", settings.vast_min_gpu_ram_gb >= 80, f">= {settings.vast_min_gpu_ram_gb} GB"))
+    checks.append(Check("Vast disk", settings.vast_disk_gb >= 60, f"{settings.vast_disk_gb} GB"))
+    checks.append(Check("GPU VRAM policy", settings.vast_min_gpu_ram_gb >= 48, f">= {settings.vast_min_gpu_ram_gb} GB"))
     return checks
 
 
@@ -59,10 +59,10 @@ def _hf_access_check(settings: Settings) -> Check:
         metadata = get_hf_file_metadata(url, token=settings.hf_token or None, timeout=15)
         size = int(metadata.size or 0)
         if size <= 0:
-            return Check("Qwen3-Omni model access", False, "config metadata returned no size")
-        return Check("Qwen3-Omni model access", True, f"{settings.model_id} reachable")
+            return Check("Qwen Omni model access", False, "config metadata returned no size")
+        return Check("Qwen Omni model access", True, f"{settings.model_id} reachable")
     except Exception as exc:
-        return Check("Qwen3-Omni model access", False, f"metadata failed: {type(exc).__name__}")
+        return Check("Qwen Omni model access", False, f"metadata failed: {type(exc).__name__}")
 
 
 async def run_external_preflight(settings: Settings) -> list[Check]:
