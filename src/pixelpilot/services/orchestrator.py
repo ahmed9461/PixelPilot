@@ -9,6 +9,15 @@ from typing import Any, Awaitable, Callable
 from pixelpilot.config import Settings
 from pixelpilot.db import Database
 from pixelpilot.domain import GpuOffer, InferenceResult, InstancePhase
+from pixelpilot.services.billing import (
+    begin_billing,
+    billing_snapshot,
+    finalize_billing,
+    last_billing_snapshot,
+    pause_billing,
+    resume_billing,
+    sync_billing_status,
+)
 from pixelpilot.services.inference_client import InferenceClient
 from pixelpilot.services.vast_gateway import VastSdkGateway, build_offer_query
 
@@ -59,6 +68,7 @@ class Orchestrator:
         )
         rows = await self.vast.search_offers(query, self.settings.vast_default_limit)
         await self.db.set("offers.last", [row.public_dict() for row in rows])
+        await self.db.set("offers.last_refreshed_at", datetime.now(UTC).isoformat())
         await self.db.event("offers.search", {"query": query, "count": len(rows)})
         return rows
 
@@ -155,6 +165,7 @@ class Orchestrator:
         await self.db.set("instance.label", unique_label)
         await self.db.set("instance.pending_label", None)
         await self.db.set("instance.phase", InstancePhase.BOOTING.value)
+        await begin_billing(self.db, offer.price_per_hour)
         await self.db.event(
             "instance.rented",
             {
@@ -216,6 +227,8 @@ class Orchestrator:
 
             ref = await self.vast.show_instance(instance_id)
             status = ref.status.lower()
+            if status in {"running", "frozen", "stopped"}:
+                await sync_billing_status(self.db, status)
             if status in {"exited", "error", "failed", "dead"}:
                 raise OrchestratorError(f"Vast instance entered terminal state: {ref.status}")
 
@@ -263,6 +276,7 @@ class Orchestrator:
                 return False
             await self.db.set("instance.phase", InstancePhase.STOPPING.value)
             await self.vast.stop_instance(int(instance_id))
+            await pause_billing(self.db)
             await self.db.set("instance.phase", InstancePhase.STOPPED.value)
             await self.db.event("instance.stopped", {"instance_id": instance_id})
             return True
@@ -273,6 +287,7 @@ class Orchestrator:
             if not instance_id:
                 return False
             await self.vast.start_instance(int(instance_id))
+            await resume_billing(self.db)
             await self.db.set("instance.phase", InstancePhase.BOOTING.value)
         await self.wait_until_ready(int(instance_id), progress=progress)
         await self._touch_activity()
@@ -285,7 +300,11 @@ class Orchestrator:
                 return False
             await self.db.set("instance.phase", InstancePhase.DESTROYING.value)
             await self.vast.destroy_instance(int(instance_id))
-            await self.db.event("instance.destroyed", {"instance_id": instance_id})
+            billing = await finalize_billing(self.db)
+            await self.db.event(
+                "instance.destroyed",
+                {"instance_id": instance_id, "billing": billing},
+            )
             for key, value in (
                 ("instance.id", None),
                 ("instance.phase", InstancePhase.NONE.value),
@@ -317,11 +336,14 @@ class Orchestrator:
             return state
 
         ref = await self.vast.show_instance(int(instance_id))
+        if ref.status.lower() in {"running", "frozen", "stopped"}:
+            await sync_billing_status(self.db, ref.status)
         state.update(
             {
                 "vast_status": ref.status,
                 "public_ip": ref.public_ip,
                 "mapped_port": ref.mapped_port,
+                "billing": await billing_snapshot(self.db),
             }
         )
         if probe_inference:
@@ -413,6 +435,8 @@ class Orchestrator:
             return
 
         status = ref.status.lower()
+        if status in {"running", "frozen", "stopped"}:
+            await sync_billing_status(self.db, status)
         if status == "stopped":
             await self.db.set("instance.phase", InstancePhase.STOPPED.value)
             return
@@ -434,6 +458,9 @@ class Orchestrator:
                 "instance.recovery_failed",
                 {"instance_id": instance_id, "error": str(exc)},
             )
+
+    async def last_billing_snapshot(self) -> dict[str, Any] | None:
+        return await last_billing_snapshot(self.db)
 
     async def _touch_activity(self) -> None:
         stamp = datetime.now(UTC).isoformat()
