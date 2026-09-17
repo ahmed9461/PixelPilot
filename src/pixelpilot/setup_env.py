@@ -6,7 +6,7 @@ from typing import Mapping
 
 
 SECRET_KEYS = {"TELEGRAM_BOT_TOKEN", "VAST_API_KEY", "HF_TOKEN"}
-REQUIRED_KEYS = {"TELEGRAM_BOT_TOKEN", "OWNER_TELEGRAM_ID", "VAST_API_KEY", "HF_TOKEN"}
+REQUIRED_KEYS = {"TELEGRAM_BOT_TOKEN", "OWNER_TELEGRAM_ID", "VAST_API_KEY"}
 
 
 def render_env(template_text: str, updates: Mapping[str, str]) -> str:
@@ -46,7 +46,11 @@ def validate_setup_values(values: Mapping[str, str]) -> list[str]:
     return errors
 
 
-def write_private_env(template_path: Path, target_path: Path, values: Mapping[str, str]) -> None:
+def write_private_env(
+    template_path: Path,
+    target_path: Path,
+    values: Mapping[str, str],
+) -> None:
     errors = validate_setup_values(values)
     if errors:
         raise ValueError("; ".join(errors))
@@ -55,5 +59,4 @@ def write_private_env(template_path: Path, target_path: Path, values: Mapping[st
     try:
         os.chmod(target_path, 0o600)
     except OSError:
-        # Best effort on platforms/filesystems without POSIX permission semantics.
         pass

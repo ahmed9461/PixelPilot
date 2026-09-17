@@ -8,7 +8,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from pixelpilot.bot.middleware import OwnerOnlyMiddleware
-from pixelpilot.bot.routers import generate, home, servers
+from pixelpilot.bot.routers import chat, home, servers
 from pixelpilot.config import get_settings
 from pixelpilot.db import Database
 from pixelpilot.services.cost_guard import cost_guard_loop
@@ -26,20 +26,29 @@ async def main() -> None:
 
     db = Database(settings.database_path)
     await db.init()
-    vast = VastSdkGateway(settings.vast_api_key, worker_proxy_port=settings.worker_proxy_port)
+    vast = VastSdkGateway(settings.vast_api_key, worker_proxy_port=settings.inference_port)
     orchestrator = Orchestrator(settings, db, vast)
     servers.configure(orchestrator)
-    generate.configure(orchestrator)
+    chat.configure(orchestrator)
 
-    bot = Bot(settings.telegram_bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = Bot(
+        settings.telegram_bot_token,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
     dp = Dispatcher()
     dp.update.middleware(OwnerOnlyMiddleware(settings.owner_telegram_id))
     dp.include_router(home.router)
     dp.include_router(servers.router)
-    dp.include_router(generate.router)
+    dp.include_router(chat.router)
 
-    recovery_task = asyncio.create_task(orchestrator.recover_current(), name="pixelpilot-recovery")
-    guard_task = asyncio.create_task(cost_guard_loop(bot, settings, db, orchestrator), name="pixelpilot-cost-guard")
+    recovery_task = asyncio.create_task(
+        orchestrator.recover_current(),
+        name="pixelpilot-recovery",
+    )
+    guard_task = asyncio.create_task(
+        cost_guard_loop(bot, settings, db, orchestrator),
+        name="pixelpilot-cost-guard",
+    )
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:

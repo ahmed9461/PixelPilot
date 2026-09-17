@@ -1,39 +1,19 @@
-# TODO — المتبقي الحقيقي بعد اكتمال البناء المحلي
+# TODO
 
-## P0 — متطلبات خارجية لأول تشغيل حي
+## Live acceptance
 
-- [x] إنشاء Telegram bot (التوكن موجود لدى المستخدم؛ لا يُحفظ في Git).
-- [x] Telegram User ID معروف للمستخدم؛ سيُدخل محليًا في `.env` ولا يُحفظ في المستودع.
-- [x] إنشاء Vast API key (القيمة سرية لدى المستخدم).
-- [ ] التأكد من وجود رصيد كافٍ لأول جلسة Live Acceptance.
-- [x] قبول ترخيص FLUX.1 Krea في Hugging Face.
-- [x] إنشاء HF Read token (القيمة سرية لدى المستخدم).
-- [x] نشر المستودع العام `ahmed9461/PixelPilot` ليكون Vast قادرًا على clone بدون Git credentials.
-- [ ] تشغيل `python scripts/configure_secrets.py` على جهاز/خادم Controller.
-- [ ] تشغيل `python scripts/preflight.py` حتى تكون كل النتائج PASS.
+- Rent one suitable 80 GB+ GPU through the bot.
+- Confirm Qwen3-Omni reaches READY.
+- Test Arabic text conversation.
+- Test an Arabic screenshot/photo and follow-up question.
+- Test Telegram Voice (OGG/Opus) and an audio file.
+- Test `/new` really removes previous context.
+- Confirm no message/media content appears in SQLite events.
+- Measure VRAM at 32K context; reduce `MODEL_MAX_LEN` if an 80 GB GPU is too tight.
 
-## P0 — Live Acceptance
+## Optional later improvements
 
-- [ ] Search حقيقي من البوت.
-- [ ] Rent عرض 48GB مناسب.
-- [ ] تحقق أن Caddy Worker endpoint يصل من Controller.
-- [ ] تحقق تنزيل الملفات الأربعة.
-- [ ] تحقق `/health`: `comfy_ready=true`, `models_ready=true`.
-- [ ] توليد صورة واحدة 1024×1024.
-- [ ] استلام Preview + Original في Telegram.
-- [ ] Re-run بنفس Seed.
-- [ ] Destroy من البوت والتحقق أن الـInstance اختفى.
-
-## P1 — بعد قياس الجلسة الحقيقية
-
-- [x] تثبيت `COMFYUI_REF=v0.35.0` بدل تتبع `master` لتحسين reproducibility.
-- [ ] قياس هل 24GB/32GB مع quantization يستحق إضافة Economy profile.
-- [ ] قياس download time؛ إذا كان cold start طويلًا أضف optional persistent volume/cache profile.
-
-## P2 — Features لاحقة وليست مطلوبة للنسخة الأولى
-
-- [ ] LoRA.
-- [ ] Upscale.
-- [ ] Image-to-image.
-- [ ] HiDream/Qwen model profiles.
-- [ ] External object storage لحفظ Originals بعد Destroy.
+- Streaming model replies to Telegram.
+- Video input.
+- Multiple media items in one Telegram request.
+- Configurable model profiles without changing the no-system-prompt rule.

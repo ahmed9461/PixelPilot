@@ -1,71 +1,30 @@
 # Architecture
 
-```text
-Telegram (Owner only)
-       |
-       v
-PixelPilot Controller (persistent cheap host)
-       |
-       +-- SQLite
-       |    |- instance state
-       |    |- offer cache
-       |    |- events
-       |    `- generation metadata
-       |
-       +-- VastSdkGateway
-       |    |- search offers
-       |    |- rent
-       |    |- show/start/stop/destroy
-       |    `- mapped-port discovery
-       |
-       +-- Orchestrator
-       |    |- lifecycle state machine
-       |    |- provisioning readiness
-       |    |- rollback
-       |    |- generation serialization
-       |    `- cost activity tracking
-       |
-       `-- WorkerClient (Bearer token)
-                |
-                | HTTPS via Vast Caddy/Portal
-                v
-Vast GPU Instance
-  |
-  +-- Caddy / Instance Portal :8190
-  |      `-- auth OPEN_BUTTON_TOKEN
-  |             |
-  |             v
-  +-- PixelPilot Worker 127.0.0.1:18190
-  |      |- /health
-  |      |- /jobs
-  |      |- /jobs/{prompt_id}
-  |      `- /images
-  |             |
-  |             v
-  `-- ComfyUI 127.0.0.1:8188
-         |- /prompt
-         |- /history/{id}
-         |- /models/{folder}
-         `- /view
-                |
-                v
-          FLUX.1 Krea Dev
-```
+## Controller
 
-## State machine
+Runs permanently on the user's machine/server: aiogram Telegram bot, OwnerOnlyMiddleware, SQLite lifecycle/event state, Vast SDK gateway, Orchestrator, InferenceClient, Cost Guard and RAM-only chat history.
 
-```text
-NONE
- -> RENTING
- -> BOOTING
- -> PROVISIONING
- -> READY
- -> STOPPING -> STOPPED -> BOOTING ...
- -> DESTROYING -> NONE
+## Temporary Vast instance
 
-Any provisioning failure -> ERROR -> optional automatic DESTROY -> NONE
-```
+1. PixelPilot searches for a matching GPU offer.
+2. Owner confirms rent.
+3. A random inference API token is generated.
+4. Vast starts the configured PyTorch image.
+5. `scripts/bootstrap_vast.sh` creates a venv and installs vLLM/Qwen utilities.
+6. vLLM downloads/loads `Qwen/Qwen3-Omni-30B-A3B-Instruct`.
+7. vLLM binds the mapped port with Bearer-token authentication.
+8. Controller probes `/health` and `/v1/models` until ready.
 
-## Storage policy
+## Chat path
 
-Controller SQLite دائم. Vast local disk مؤقت ويُعتبر disposable. Image metadata يبقى في SQLite، لكن Original bytes تعتمد على بقاء الـInstance؛ لذلك يجب تنزيل الصور المهمة قبل Destroy أو إضافة object storage لاحقًا.
+Text is sent as `{role:user, content:<exact text>}`. Image/audio bytes become data URLs in `image_url`/`audio_url` content parts. Caption text is added only when Telegram actually contains a caption.
+
+## Explicitly absent
+
+- System Prompt
+- Developer Prompt
+- prompt enhancer/translator
+- ComfyUI
+- FLUX
+- image-generation workflow
+- custom inference Worker service

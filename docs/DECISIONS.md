@@ -1,51 +1,21 @@
-# Architecture Decision Log
+# Decisions
 
-## ADR-001 — Telegram هو الواجهة اليومية
-**الحالة:** Accepted
+## 2026-09-17 — Qwen3-Omni as the single personal model
 
-الاستخدام الأساسي من الجوال؛ ComfyUI backend فقط.
+Use `Qwen/Qwen3-Omni-30B-A3B-Instruct` because the project needs one model that can understand text, images and audio and respond with text.
 
-## ADR-002 — Controller خارج Vast
-**الحالة:** Accepted
+## 2026-09-17 — No internal prompt
 
-لو عاش البوت داخل الـInstance فلن يستطيع إنشاء Instance جديد بعد Destroy.
+PixelPilot must never add a System Prompt, language instruction, persona or prompt enhancer. The model receives only the actual Telegram conversation supplied by the owner.
 
-## ADR-003 — Vast SDK الرسمي
-**الحالة:** Accepted
+## 2026-09-17 — Direct vLLM serving
 
-يستخدم SDK للبحث والإنشاء وLifecycle بدل REST hard-code. `template_hash` هو المعرف الصحيح لإنشاء instance من template.
+Remove ComfyUI and the custom FastAPI image Worker. A rented Vast instance serves Qwen3-Omni through vLLM's OpenAI-compatible API directly.
 
-## ADR-004 — Destroy هو الوضع الاقتصادي المفضل
-**الحالة:** Accepted
+## 2026-09-17 — RAM-only chat context
 
-Stop يبقي التخزين مدفوعًا؛ Destroy يمسح البيانات، لذلك bootstrap idempotent قدر الإمكان.
+Keep short conversation history only in Controller RAM. Do not persist user messages, images or audio to SQLite. `/new` clears context; Controller restart also clears it.
 
-## ADR-005 — Workflow API رسمي البنية
-**الحالة:** Accepted
+## 2026-09-17 — Keep Vast lifecycle
 
-تم اعتماد Workflow API مبني من عقد وإعدادات Workflow Krea الرسمي بدل تحويلات UI غير الموثوقة.
-
-## ADR-006 — 48GB VRAM كبداية
-**الحالة:** Accepted / قابل للمراجعة بعد Live Test
-
-الهدف هو تجربة full weights + FP16 text encoder بأقل صراع مع offload/quantization.
-
-## ADR-007 — ComfyUI localhost + Worker خلف Caddy
-**الحالة:** Accepted
-
-ComfyUI لا يُفتح خارجيًا. Worker الداخلي على 18190، وVast base-image Caddy يعرض proxy port 8190 مع OPEN_BUTTON_TOKEN/TLS.
-
-## ADR-008 — Tokens per-instance
-**الحالة:** Accepted
-
-يولد Controller Worker token عشوائي لكل Rent. Vast API key لا ينتقل إلى الـGPU. HF token read-only فقط هو المطلوب للتنزيل.
-
-## ADR-009 — Auto rollback عند فشل provisioning
-**الحالة:** Accepted
-
-الافتراضي `true` لمنع استمرار GPU مدفوع إذا فشل الإعداد قبل Ready.
-
-## ADR-010 — Idle Auto-Destroy opt-in
-**الحالة:** Accepted
-
-التنبيه مفعّل افتراضيًا، أما الحذف التلقائي للخمول = 0 افتراضيًا حتى لا نفقد صورًا بدون قرار صريح.
+Preserve search, review, rent, start, stop, destroy, recovery, preflight and Cost Guard from the previous implementation.

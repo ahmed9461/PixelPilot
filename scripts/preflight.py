@@ -13,18 +13,12 @@ async def _main() -> int:
     checks = run_local_preflight(settings, repo_root=Path(__file__).resolve().parents[1])
     if all(item.ok for item in checks):
         checks.extend(await run_external_preflight(settings))
-
     for check in checks:
         print(("PASS" if check.ok else "FAIL"), f"{check.name}: {check.detail}")
-
     if not all(item.ok for item in checks):
         return 1
-
     try:
-        gateway = VastSdkGateway(
-            settings.vast_api_key,
-            worker_proxy_port=settings.worker_proxy_port,
-        )
+        gateway = VastSdkGateway(settings.vast_api_key, worker_proxy_port=settings.inference_port)
         query = build_offer_query(
             settings.vast_min_gpu_ram_gb,
             settings.vast_min_reliability,
