@@ -73,8 +73,8 @@ DEFAULT_STATE: dict[str, Any] = {
     "format": "auto",
     "language": "auto",
     "creativity_pct": 0,
-    "diversity_pct": 95,
-    "response_length_pct": 50,
+    "diversity_pct": 100,
+    "response_length_pct": 100,
     "context_enabled": True,
     "context_messages": 10,
     "custom_prompt": "",
@@ -121,7 +121,7 @@ async def get_prompt(db: Database, group: str, key: str) -> str:
 
 
 async def set_prompt(db: Database, group: str, key: str, prompt: str) -> None:
-    _option(group, key)  # validate group/key
+    _option(group, key)
     await db.set(_prompt_key(group, key), prompt)
 
 
@@ -155,11 +155,11 @@ async def effective_system_prompt(db: Database) -> str:
 async def generation_params(db: Database, *, max_output_tokens: int) -> dict[str, Any]:
     state = await get_state(db)
     creativity = max(0, min(100, int(state.get("creativity_pct") or 0)))
-    diversity = max(10, min(100, int(state.get("diversity_pct") or 95)))
-    length = max(10, min(100, int(state.get("response_length_pct") or 50)))
+    diversity = max(10, min(100, int(state.get("diversity_pct") or 100)))
+    length = max(10, min(100, int(state.get("response_length_pct") or 100)))
 
-    # Keep the proven stable default at temperature=0. Users can deliberately
-    # increase creativity from Telegram; cap it at 0.8 to avoid wild sampling.
+    # Preserve the proven v0.4.3 behavior until the owner changes a control:
+    # temperature=0, top_p=1 and the full configured output-token allowance.
     temperature = round((creativity / 100.0) * 0.8, 2)
     top_p = round(diversity / 100.0, 2)
     minimum = min(256, max_output_tokens)
