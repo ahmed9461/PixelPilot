@@ -9,7 +9,7 @@ def test_extract_text_supports_string_and_parts():
     assert _extract_text([{"type": "text", "text": "أهلًا"}, {"text": " بك"}]) == "أهلًا بك"
 
 
-def test_chat_sends_only_supplied_conversation():
+def test_chat_sends_only_supplied_conversation_with_greedy_decoding():
     async def scenario():
         class CapturingClient(InferenceClient):
             def __init__(self):
@@ -22,6 +22,12 @@ def test_chat_sends_only_supplied_conversation():
         messages = [{"role": "user", "content": "مرحبا"}]
         result = await client.chat(messages, max_tokens=123)
         assert result.text == "تمام"
-        assert client.payload == {"model": "model-id", "messages": messages, "max_tokens": 123}
+        assert client.payload == {
+            "model": "model-id",
+            "messages": messages,
+            "max_tokens": 123,
+            "temperature": 0.0,
+        }
         assert all(item.get("role") != "system" for item in client.payload["messages"])
+        assert all(item.get("role") != "developer" for item in client.payload["messages"])
     asyncio.run(scenario())

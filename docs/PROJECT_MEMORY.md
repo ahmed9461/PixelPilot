@@ -25,6 +25,7 @@ Output is text. Image generation is no longer part of the project.
 9. The rental hard ceiling is `$0.50/hour`. PixelPilot must reject any cached/selected offer above that ceiling even if it was visible in an older search.
 10. Offer refresh must perform a fresh marketplace query every time. Compare the new result set with the previously cached set and tell the user whether offers/prices/order actually changed.
 11. Track rental time and estimated active rental cost per second from rent until stop/destroy. Pausing stops the active-time meter; restarting resumes it. Preserve the final billing snapshot after destroy.
+12. Qwen text generation uses greedy decoding (`temperature=0`) to match the official non-sampling generation path and avoid the multilingual/gibberish instability seen in the live test. This is a sampling control, not a hidden prompt.
 
 ## Architecture
 
@@ -47,6 +48,7 @@ No ComfyUI, FLUX workflow, image seed/ratio/batch, or PixelPilot Worker is used 
 - hard Vast price cap: $0.50/hour
 - model context: 8192
 - max output tokens: 2048
+- text decoding temperature: 0 (greedy)
 - one image and one audio input per prompt by default
 
 The earlier `Qwen/Qwen3-Omni-30B-A3B-Instruct` profile required 80–96GB-class GPUs and proved too expensive for the intended personal-use workflow. Keep 7B as the default unless the user explicitly chooses a higher-cost quality profile later.
