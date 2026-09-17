@@ -1,9 +1,17 @@
 # PixelPilot
 
-PixelPilot هو بوت Telegram شخصي Owner-only يحوّل Vast.ai إلى مساعد متعدد الوسائط عند الطلب باستخدام `Qwen/Qwen3-Omni-30B-A3B-Instruct`.
+PixelPilot هو بوت Telegram شخصي Owner-only يحوّل Vast.ai إلى مساعد متعدد الوسائط عند الطلب.
+
+الملف الافتراضي الحالي يستخدم:
 
 ```text
-Telegram -> PixelPilot Controller -> Vast.ai -> vLLM -> Qwen3-Omni
+Qwen/Qwen2.5-Omni-7B
+```
+
+وهو أخف بكثير من Qwen3-Omni 30B الذي استُخدم في أول تجربة، لذلك يستهدف PixelPilot الآن بطاقات GPU بذاكرة **48GB** بدل 80–96GB، مع الحفاظ على فهم **النص والصورة والصوت**.
+
+```text
+Telegram -> PixelPilot Controller -> Vast.ai -> vLLM -> Qwen2.5-Omni-7B
 ```
 
 المشروع لا يولّد صورًا. وظيفته الحالية هي **المحادثة النصية وفهم الصور وفهم الصوت**. لا يوجد GPU ثابت: تبحث من البوت عن عرض مناسب، تستأجره، PixelPilot يجهز vLLM والموديل تلقائيًا، ثم تحذف الـInstance عندما تنتهي.
@@ -25,7 +33,7 @@ PixelPilot لا يضيف `system` أو `developer` message، ولا يترجم �
 - Owner-only Telegram bot.
 - البحث عن عروض Vast حسب VRAM والسعر والموثوقية والقرص والشبكة.
 - Rent / Start / Stop / Destroy وإعادة استعادة حالة الـInstance بعد Restart.
-- Bootstrap تلقائي لـ vLLM وQwen3-Omni على السيرفر المؤقت.
+- Bootstrap تلقائي لـ vLLM وQwen2.5-Omni-7B على السيرفر المؤقت.
 - Endpoint محمي بمفتاح عشوائي خاص بكل Instance.
 - رسائل نصية عربية/إنجليزية وغيرها.
 - الصور وملفات الصور.
@@ -36,33 +44,28 @@ PixelPilot لا يضيف `system` أو `developer` message، ولا يترجم �
 - SQLite لحالة السيرفر والأحداث التشغيلية فقط.
 - اختبارات تمنع إعادة إدخال System Prompt بالخطأ.
 
-## الموديل
+## لماذا Qwen2.5-Omni-7B؟
 
-الافتراضي:
-
-```text
-Qwen/Qwen3-Omni-30B-A3B-Instruct
-```
-
-Qwen3-Omni يدعم مدخلات نص وصورة وصوت وفيديو. PixelPilot يستخدم حاليًا النص والصورة والصوت ويطلب مخرجات نصية فقط.
+الهدف هو توازن أفضل بين الجودة والتكلفة للاستخدام الشخصي. النموذج يدعم النص والصور والصوت والفيديو في نموذج واحد، وvLLM يدعم تقديمه عبر OpenAI-compatible API مع مخرجات نصية. مستودع النموذج أصغر بكثير من Qwen3-Omni 30B، لذلك يمكن استهداف فئة 48GB GPU بدل البطاقات 80–96GB مرتفعة السعر.
 
 المصادر الرسمية:
 
-- Qwen3-Omni: https://github.com/QwenLM/Qwen3-Omni
-- Model: https://huggingface.co/Qwen/Qwen3-Omni-30B-A3B-Instruct
+- Qwen2.5-Omni: https://github.com/QwenLM/Qwen2.5-Omni
+- Model: https://huggingface.co/Qwen/Qwen2.5-Omni-7B
 - vLLM serving: https://docs.vllm.ai/
 - Vast.ai: https://docs.vast.ai/
 
-## العتاد الافتراضي
+## العتاد الافتراضي الاقتصادي
 
-الملف `.env.example` يبدأ بسياسة محافظة نسبيًا:
+الملف `.env.example` يبدأ بهذه السياسة:
 
-- GPU VRAM: `80 GB` أو أكثر.
-- Disk: `150 GB`.
-- Model context: `32768`.
-- BF16 على GPU واحد افتراضيًا.
+- GPU VRAM: `48 GB` أو أكثر.
+- Disk: `80 GB`.
+- Model context: `8192`.
+- BF16 على GPU واحد.
+- حد السعر الافتراضي للبحث: `$0.80/hour`.
 
-الموديل على Hugging Face حجمه يقارب 70 GB، لذلك القرص وVRAM مضبوطان أعلى من المشاريع الصغيرة. يمكن تعديل الإعدادات لاحقًا حسب الـGPU الفعلي.
+هذه الإعدادات تستهدف بطاقات مثل A6000 / RTX 6000 Ada / L40S وغيرها من فئة 48GB. إذا لم توجد عروض تحت حد السعر، يمكن رفع `VAST_MAX_PRICE_USD_HOUR` فقط بدون تغيير الموديل.
 
 ## الإعداد الأول
 
@@ -100,7 +103,7 @@ docker compose logs -f
 3. `🔎 البحث عن سيرفر`
 4. مراجعة السعر والـGPU
 5. `🚀 استئجار وتجهيز`
-6. انتظار رسالة جاهزية Qwen3-Omni
+6. انتظار رسالة جاهزية الموديل
 7. إرسال نص أو صورة أو Voice/Audio مباشرة للبوت
 8. `/new` عند الرغبة في بدء سياق جديد
 9. `🗑 حذف السيرفر` عند الانتهاء لإيقاف تكلفة الـInstance
