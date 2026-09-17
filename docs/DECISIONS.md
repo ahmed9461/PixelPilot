@@ -1,5 +1,11 @@
 # Decisions
 
+## 2026-09-17 — Deterministic Qwen text decoding
+
+PixelPilot sends `temperature=0` on chat-completion requests. vLLM defaults to `temperature=1.0`, which samples randomly; the live Arabic test produced intermittent multilingual/gibberish output under that default. Qwen2.5-Omni's official Transformers examples use `model.generate()` without enabling sampling, so greedy decoding is the closer behavioral match.
+
+This is a generation/sampling control only. It must not be implemented as a System Prompt, language instruction, hidden user-message rewrite, or any other injected message.
+
 ## 2026-09-17 — $0.50/hour hard rental ceiling
 
 PixelPilot must not rent any offer whose total hourly rental price exceeds `$0.50/hour`. The ceiling is enforced both in marketplace search and again immediately before instance creation so a stale cached offer cannot bypass it.
