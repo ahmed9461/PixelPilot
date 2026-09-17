@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from html import escape
+from typing import Any
 
 from aiogram import Router
 from aiogram.types import CallbackQuery
@@ -25,6 +26,61 @@ def orch() -> Orchestrator:
     if _orchestrator is None:
         raise RuntimeError("Server router not configured")
     return _orchestrator
+
+
+def _offer_signature(item: Any) -> tuple[Any, ...]:
+    if isinstance(item, dict):
+        return (
+            int(item.get("offer_id") or 0),
+            round(float(item.get("price_per_hour") or 0.0), 6),
+            round(float(item.get("reliability") or 0.0), 6),
+            round(float(item.get("inet_down_mbps") or 0.0), 3),
+            str(item.get("gpu_name") or ""),
+        )
+    return (
+        int(item.offer_id),
+        round(float(item.price_per_hour), 6),
+        round(float(item.reliability or 0.0), 6),
+        round(float(item.inet_down_mbps or 0.0), 3),
+        str(item.gpu_name),
+    )
+
+
+def _refresh_note(previous: list[Any], current: list[Any]) -> str:
+    if not previous:
+        return "🔄 تم جلب العروض من السوق الآن."
+
+    old = [_offer_signature(item) for item in previous]
+    new = [_offer_signature(item) for item in current]
+    if old == new:
+        return "🔄 تم تحديث السوق الآن — لا توجد تغييرات عن آخر تحديث."
+
+    old_ids = {item[0] for item in old}
+    new_ids = {item[0] for item in new}
+    added = len(new_ids - old_ids)
+    removed = len(old_ids - new_ids)
+    if added or removed:
+        return f"🔄 تم تحديث السوق الآن — {added} عرض جديد و{removed} عرض اختفى."
+    return "🔄 تم تحديث السوق الآن — تغيّرت الأسعار أو ترتيب العروض."
+
+
+def _format_duration(seconds: float) -> str:
+    total = max(0, int(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _billing_lines(billing: Any, *, final: bool = False) -> list[str]:
+    if not isinstance(billing, dict):
+        return []
+    active_seconds = float(billing.get("active_seconds") or 0.0)
+    cost = float(billing.get("estimated_cost_usd") or 0.0)
+    label = "التكلفة النهائية المقدرة" if final else "التكلفة حتى الآن"
+    return [
+        f"⏱ وقت التشغيل المحتسب: <b>{_format_duration(active_seconds)}</b>",
+        f"💵 {label}: <b>${cost:.4f}</b>",
+    ]
 
 
 @router.callback_query(lambda q: q.data == "servers:preflight")
@@ -63,8 +119,11 @@ async def preflight(callback: CallbackQuery) -> None:
 
 @router.callback_query(lambda q: q.data == "servers:search")
 async def search(callback: CallbackQuery) -> None:
-    await safe_callback_answer(callback, "جاري البحث...")
+    await safe_callback_answer(callback, "جاري التحديث...")
     await callback.message.edit_text("🔎 أبحث عن السيرفرات المتاحة...")
+    previous = await orch().db.get("offers.last", [])
+    if not isinstance(previous, list):
+        previous = []
     try:
         offers = await orch().offers()
     except Exception:
@@ -76,12 +135,15 @@ async def search(callback: CallbackQuery) -> None:
         return
     if not offers:
         await callback.message.edit_text(
-            "لا توجد عروض مناسبة حاليًا. جرّب التحديث بعد قليل.",
+            "لا توجد عروض مناسبة حاليًا ضمن سقف السعر المحدد. جرّب التحديث بعد قليل.",
             reply_markup=main_menu(),
         )
         return
+
+    note = _refresh_note(previous, offers)
+    await orch().db.set("offers.last_refresh_note", note)
     await callback.message.edit_text(
-        "🧾 <b>العروض المتاحة</b>\nاختر عرضًا لمراجعة السعر والمواصفات:",
+        f"🧾 <b>العروض المتاحة</b>\n{note}\n\nاختر عرضًا لمراجعة السعر والمواصفات:",
         reply_markup=offers_keyboard(offers),
     )
 
@@ -111,7 +173,7 @@ async def offer_details(callback: CallbackQuery) -> None:
         lines.append(f"الموقع: <b>{escape(offer.location)}</b>")
     lines.extend([
         "",
-        "⚠️ يبدأ احتساب التكلفة عند الاستئجار. احذف السيرفر عند الانتهاء لإيقاف التكلفة.",
+        "⚠️ يبدأ عداد التكلفة عند الاستئجار، ويُحسب بالثانية حتى الإيقاف أو الحذف.",
     ])
     await callback.message.edit_text("\n".join(lines), reply_markup=offer_confirm_keyboard(offer_id))
 
@@ -124,9 +186,11 @@ async def rent(callback: CallbackQuery) -> None:
 
     async def progress(_text: str) -> None:
         try:
-            await callback.message.edit_text(
-                "⏳ <b>جاري تجهيز السيرفر...</b>\n\nقد يستغرق ذلك عدة دقائق."
-            )
+            state = await orch().current_state(probe_inference=False)
+            billing = state.get("billing") if isinstance(state, dict) else None
+            lines = ["⏳ <b>جاري تجهيز السيرفر...</b>", "", "قد يستغرق ذلك عدة دقائق."]
+            lines.extend(_billing_lines(billing))
+            await callback.message.edit_text("\n".join(lines))
         except Exception:
             pass
 
@@ -134,24 +198,39 @@ async def rent(callback: CallbackQuery) -> None:
         await orch().rent_and_prepare(offer_id, progress=progress)
     except Exception:
         logger.exception("Server rent/provision failed")
-        await callback.message.edit_text(
-            "❌ <b>تعذر تجهيز السيرفر</b>\n\n"
+        try:
+            state = await orch().current_state(probe_inference=False)
+            billing = state.get("billing") if isinstance(state, dict) else None
+        except Exception:
+            billing = None
+        lines = [
+            "❌ <b>تعذر تجهيز السيرفر</b>",
+            "",
             "إذا ظهر لديك كسيرفر حالي، احذفه من زر «حذف السيرفر» لإيقاف التكلفة.",
-            reply_markup=main_menu(),
-        )
+        ]
+        lines.extend(_billing_lines(billing))
+        await callback.message.edit_text("\n".join(lines), reply_markup=main_menu())
         return
 
-    await callback.message.edit_text(
-        "✅ <b>السيرفر جاهز</b>\n\nأرسل الآن نصًا أو صورة أو تسجيلًا صوتيًا.",
-        reply_markup=main_menu(),
-    )
+    state = await orch().current_state(probe_inference=False)
+    lines = ["✅ <b>السيرفر جاهز</b>", "", "أرسل الآن نصًا أو صورة أو تسجيلًا صوتيًا."]
+    lines.extend(_billing_lines(state.get("billing")))
+    await callback.message.edit_text("\n".join(lines), reply_markup=main_menu())
 
 
 @router.callback_query(lambda q: q.data == "servers:destroy_confirm")
 async def destroy_confirm(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback)
+    try:
+        state = await orch().current_state(probe_inference=False)
+        billing = state.get("billing") if isinstance(state, dict) else None
+    except Exception:
+        billing = None
+    lines = ["⚠️ سيتم حذف السيرفر نهائيًا وإيقافه."]
+    lines.extend(_billing_lines(billing))
+    lines.extend(["", "هل أنت متأكد؟"])
     await callback.message.edit_text(
-        "⚠️ سيتم حذف السيرفر نهائيًا وإيقافه.\nهل أنت متأكد؟",
+        "\n".join(lines),
         reply_markup=destroy_confirm_keyboard(),
     )
 
@@ -168,8 +247,15 @@ async def destroy(callback: CallbackQuery) -> None:
             reply_markup=main_menu(),
         )
         return
-    text = "🗑 تم حذف السيرفر نهائيًا." if destroyed else "لا يوجد سيرفر حالي."
-    await callback.message.edit_text(text, reply_markup=main_menu())
+    if not destroyed:
+        await callback.message.edit_text("لا يوجد سيرفر حالي.", reply_markup=main_menu())
+        return
+    billing = await orch().last_billing_snapshot()
+    lines = ["🗑 تم حذف السيرفر نهائيًا."]
+    lines.extend(_billing_lines(billing, final=True))
+    if billing:
+        lines.append("<i>قد توجد رسوم تخزين أو بيانات منفصلة عن عداد التشغيل.</i>")
+    await callback.message.edit_text("\n".join(lines), reply_markup=main_menu())
 
 
 @router.callback_query(lambda q: q.data == "servers:stop")
@@ -184,12 +270,13 @@ async def stop(callback: CallbackQuery) -> None:
             reply_markup=main_menu(),
         )
         return
-    text = (
-        "⏹ تم إيقاف السيرفر. قد تستمر رسوم التخزين أثناء الإيقاف."
-        if stopped
-        else "لا يوجد سيرفر حالي."
-    )
-    await callback.message.edit_text(text, reply_markup=main_menu())
+    if not stopped:
+        await callback.message.edit_text("لا يوجد سيرفر حالي.", reply_markup=main_menu())
+        return
+    state = await orch().current_state(probe_inference=False)
+    lines = ["⏹ تم إيقاف السيرفر. قد تستمر رسوم التخزين أثناء الإيقاف."]
+    lines.extend(_billing_lines(state.get("billing")))
+    await callback.message.edit_text("\n".join(lines), reply_markup=main_menu())
 
 
 @router.callback_query(lambda q: q.data == "servers:start")
@@ -199,7 +286,10 @@ async def start_instance(callback: CallbackQuery) -> None:
 
     async def progress(_text: str) -> None:
         try:
-            await callback.message.edit_text("⏳ <b>جاري تشغيل السيرفر...</b>")
+            state = await orch().current_state(probe_inference=False)
+            lines = ["⏳ <b>جاري تشغيل السيرفر...</b>"]
+            lines.extend(_billing_lines(state.get("billing")))
+            await callback.message.edit_text("\n".join(lines))
         except Exception:
             pass
 
@@ -212,8 +302,13 @@ async def start_instance(callback: CallbackQuery) -> None:
             reply_markup=main_menu(),
         )
         return
-    text = "✅ السيرفر جاهز." if started else "لا يوجد سيرفر حالي."
-    await callback.message.edit_text(text, reply_markup=main_menu())
+    if not started:
+        await callback.message.edit_text("لا يوجد سيرفر حالي.", reply_markup=main_menu())
+        return
+    state = await orch().current_state(probe_inference=False)
+    lines = ["✅ السيرفر جاهز."]
+    lines.extend(_billing_lines(state.get("billing")))
+    await callback.message.edit_text("\n".join(lines), reply_markup=main_menu())
 
 
 def _status_label(state: dict) -> str:
@@ -263,4 +358,7 @@ async def status(callback: CallbackQuery) -> None:
     offer = state.get("offer")
     if isinstance(offer, dict) and offer.get("price_per_hour") is not None:
         lines.append(f"السعر: <b>${float(offer['price_per_hour']):.3f}/ساعة</b>")
+    lines.extend(_billing_lines(state.get("billing")))
+    if state.get("billing"):
+        lines.append("<i>العداد مباشر بالثانية؛ رسوم التخزين أو البيانات قد تكون منفصلة.</i>")
     await callback.message.edit_text("\n".join(lines), reply_markup=main_menu())

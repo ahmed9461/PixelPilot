@@ -20,7 +20,7 @@ def test_qwen_economy_profile_defaults():
     assert settings.model_id == "Qwen/Qwen2.5-Omni-7B"
     assert settings.vast_min_gpu_ram_gb == 48
     assert settings.vast_disk_gb == 80
-    assert settings.vast_max_price_usd_hour == 0.80
+    assert settings.vast_max_price_usd_hour == 0.50
     assert settings.model_max_len == 8192
 
 
@@ -32,3 +32,8 @@ def test_qwen_economy_profile_rejects_small_gpu():
 def test_qwen_economy_profile_accepts_48gb_gpu():
     settings = Settings(_env_file=None, vast_min_gpu_ram_gb=48)
     assert settings.vast_min_gpu_ram_gb == 48
+
+
+def test_price_cap_must_be_positive():
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, vast_max_price_usd_hour=0)

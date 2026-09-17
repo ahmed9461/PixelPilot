@@ -9,7 +9,7 @@ from pathlib import Path
 PROFILE = {
     "VAST_DISK_GB": "80",
     "VAST_MIN_GPU_RAM_GB": "48",
-    "VAST_MAX_PRICE_USD_HOUR": "0.80",
+    "VAST_MAX_PRICE_USD_HOUR": "0.50",
     "VAST_MIN_INET_DOWN_MBPS": "100",
     "MODEL_ID": "Qwen/Qwen2.5-Omni-7B",
     "MODEL_DTYPE": "bfloat16",
@@ -77,7 +77,7 @@ def main() -> int:
     backup = migrate(args.env)
     print(f"Updated: {args.env}")
     print(f"Backup:  {backup}")
-    print("Profile: Qwen/Qwen2.5-Omni-7B, 48GB VRAM search, 80GB disk, $0.80/h cap")
+    print("Profile: Qwen/Qwen2.5-Omni-7B, 48GB VRAM search, 80GB disk, $0.50/h cap")
     return 0
 
 
