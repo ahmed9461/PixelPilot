@@ -22,7 +22,7 @@ class FakeVast:
     def __init__(self):
         self.destroyed = []; self.stopped = []; self.started = []; self.create_kwargs = None
     async def search_offers(self, query, limit):
-        return [GpuOffer(offer_id=77, gpu_name="H100", gpu_ram_gb=80, price_per_hour=1.5, reliability=0.99, dlperf=80)]
+        return [GpuOffer(offer_id=77, gpu_name="A6000", gpu_ram_gb=48, price_per_hour=0.4, reliability=0.99, dlperf=40)]
     async def create_instance(self, offer_id, **kwargs):
         self.create_kwargs = kwargs; return {"success": True, "new_contract": 321}
     async def find_instances_by_label(self, label, limit=5):
@@ -39,7 +39,7 @@ class FakeInference:
     async def is_ready(self): return True
     async def chat(self, messages, max_tokens):
         self.messages = messages
-        return InferenceResult(text="أهلًا بك", model="Qwen/Qwen3-Omni-30B-A3B-Instruct")
+        return InferenceResult(text="أهلًا بك", model="Qwen/Qwen2.5-Omni-7B")
 
 
 def test_orchestrator_full_fake_lifecycle(tmp_path):
@@ -52,11 +52,13 @@ def test_orchestrator_full_fake_lifecycle(tmp_path):
         await orch.rent_and_prepare(77)
         assert await db.get("instance.phase") == "ready"
         assert "PIXELPILOT_INFERENCE_TOKEN" in vast.create_kwargs["env"]
-        assert "MODEL_ID=Qwen/Qwen3-Omni-30B-A3B-Instruct" in vast.create_kwargs["env"]
+        assert "MODEL_ID=Qwen/Qwen2.5-Omni-7B" in vast.create_kwargs["env"]
+        assert "MODEL_MAX_LEN=8192" in vast.create_kwargs["env"]
         assert "COMFY" not in vast.create_kwargs["env"]
         messages = [{"role": "user", "content": "مرحبا"}]
         result = await orch.chat(messages)
         assert result.text == "أهلًا بك" and inference.messages == messages
+        assert result.model == "Qwen/Qwen2.5-Omni-7B"
         assert all(item.get("role") != "system" for item in inference.messages)
         assert await orch.stop_current() is True and vast.stopped == [321]
         assert await orch.start_current() is True and vast.started == [321]

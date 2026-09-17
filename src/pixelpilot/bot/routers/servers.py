@@ -25,6 +25,12 @@ def orch() -> Orchestrator:
     return _orchestrator
 
 
+def _display_progress(text: str) -> str:
+    """Keep legacy orchestrator progress text aligned with the configured model."""
+    model_name = orch().settings.model_id.rsplit("/", 1)[-1]
+    return text.replace("Qwen3-Omni", model_name)
+
+
 @router.callback_query(lambda q: q.data == "servers:preflight")
 async def preflight(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback)
@@ -44,7 +50,7 @@ async def preflight(callback: CallbackQuery) -> None:
 @router.callback_query(lambda q: q.data == "servers:search")
 async def search(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback, "جاري البحث...")
-    await callback.message.edit_text("🔎 أبحث عن عروض Vast المناسبة لـ Qwen3-Omni...")
+    await callback.message.edit_text("🔎 أبحث عن عروض Vast الاقتصادية المناسبة للموديل...")
     try:
         offers = await orch().offers()
     except Exception as exc:
@@ -54,7 +60,7 @@ async def search(callback: CallbackQuery) -> None:
         await callback.message.edit_text("لا توجد عروض مطابقة حاليًا. جرّب لاحقًا أو عدّل سياسة السعر/العتاد في الإعدادات.", reply_markup=main_menu())
         return
     await callback.message.edit_text(
-        "🧾 <b>العروض المطابقة</b>\nالحد الافتراضي مضبوط لسيرفر بذاكرة GPU مناسبة لنسخة Qwen3-Omni BF16. اختر عرضًا لمراجعة التفاصيل:",
+        "🧾 <b>العروض المطابقة</b>\nالملف الاقتصادي مضبوط افتراضيًا على GPU بذاكرة 48GB أو أكثر لـ Qwen2.5-Omni-7B. اختر عرضًا لمراجعة التفاصيل:",
         reply_markup=offers_keyboard(offers),
     )
 
@@ -95,7 +101,7 @@ async def rent(callback: CallbackQuery) -> None:
 
     async def progress(text: str) -> None:
         try:
-            await callback.message.edit_text(f"⏳ <b>تجهيز PixelPilot</b>\n\n{text}")
+            await callback.message.edit_text(f"⏳ <b>تجهيز PixelPilot</b>\n\n{_display_progress(text)}")
         except Exception:
             pass
 
@@ -149,11 +155,11 @@ async def stop(callback: CallbackQuery) -> None:
 @router.callback_query(lambda q: q.data == "servers:start")
 async def start_instance(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback, "جاري التشغيل...")
-    await callback.message.edit_text("▶️ جاري تشغيل السيرفر والتحقق من Qwen3-Omni...")
+    await callback.message.edit_text("▶️ جاري تشغيل السيرفر والتحقق من الموديل...")
 
     async def progress(text: str) -> None:
         try:
-            await callback.message.edit_text(f"⏳ <b>إعادة التشغيل</b>\n\n{text}")
+            await callback.message.edit_text(f"⏳ <b>إعادة التشغيل</b>\n\n{_display_progress(text)}")
         except Exception:
             pass
 

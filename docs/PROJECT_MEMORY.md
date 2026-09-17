@@ -2,7 +2,7 @@
 
 ## Current goal
 
-PixelPilot is a personal, owner-only Telegram assistant backed by a temporary Vast.ai GPU. The active model is `Qwen/Qwen3-Omni-30B-A3B-Instruct`.
+PixelPilot is a personal, owner-only Telegram assistant backed by a temporary Vast.ai GPU. The active default model is `Qwen/Qwen2.5-Omni-7B` because it provides a better personal-use cost/quality balance than the earlier Qwen3-Omni 30B profile.
 
 Supported user inputs:
 - text
@@ -29,20 +29,23 @@ Telegram
   -> PixelPilot Controller
   -> authenticated public Vast port
   -> vLLM OpenAI-compatible API
-  -> Qwen3-Omni
+  -> Qwen2.5-Omni-7B
 ```
 
-No ComfyUI, FLUX workflow, image seed/ratio/batch, or PixelPilot Worker is used in v0.4.
+No ComfyUI, FLUX workflow, image seed/ratio/batch, or PixelPilot Worker is used in v0.4.x.
 
-## Runtime defaults
+## Runtime defaults — economy profile
 
-- Model: `Qwen/Qwen3-Omni-30B-A3B-Instruct`
+- Model: `Qwen/Qwen2.5-Omni-7B`
 - dtype: BF16
-- min GPU VRAM policy: 80 GB
-- disk: 150 GB
-- model context: 32768
+- min GPU VRAM policy: 48 GB
+- disk: 80 GB
+- default Vast price cap: $0.80/hour
+- model context: 8192
 - max output tokens: 2048
 - one image and one audio input per prompt by default
+
+The earlier `Qwen/Qwen3-Omni-30B-A3B-Instruct` profile required 80–96GB-class GPUs and proved too expensive for the intended personal-use workflow. Keep 7B as the default unless the user explicitly chooses a higher-cost quality profile later.
 
 ## Persistence
 

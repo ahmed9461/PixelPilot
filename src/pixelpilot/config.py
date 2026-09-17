@@ -20,15 +20,15 @@ class Settings(BaseSettings):
     vast_api_key: str = ""
     vast_template_hash: str | None = None
     vast_docker_image: str = "vastai/pytorch:@vastai-automatic-tag"
-    vast_disk_gb: int = 150
-    vast_min_gpu_ram_gb: int = 80
+    vast_disk_gb: int = 80
+    vast_min_gpu_ram_gb: int = 48
     vast_min_reliability: float = 0.98
-    vast_max_price_usd_hour: float = 3.0
+    vast_max_price_usd_hour: float = 0.80
     vast_default_limit: int = 8
     vast_verified_only: bool = True
     vast_datacenter_only: bool = False
     vast_min_direct_ports: int = 1
-    vast_min_inet_down_mbps: float = 200.0
+    vast_min_inet_down_mbps: float = 100.0
     vast_cancel_unavailable: bool = True
     vast_auto_destroy_on_provision_failure: bool = False
 
@@ -36,14 +36,15 @@ class Settings(BaseSettings):
     pixelpilot_repo_url: str = ""
     pixelpilot_repo_ref: str = "main"
 
-    # Optional Hugging Face read token. Qwen3-Omni is public, but a token can
-    # improve authenticated Hub access/rate limits.
+    # Optional Hugging Face read token. Qwen2.5-Omni-7B is public, but a token
+    # can improve authenticated Hub access/rate limits.
     hf_token: str = ""
 
-    # Model / vLLM
-    model_id: str = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
+    # Model / vLLM. The default is the economical 7B Omni profile: one model
+    # understands text, images and audio while returning text only.
+    model_id: str = "Qwen/Qwen2.5-Omni-7B"
     model_dtype: str = "bfloat16"
-    model_max_len: int = 32768
+    model_max_len: int = 8192
     model_max_output_tokens: int = 2048
     model_gpu_memory_utilization: float = 0.92
     model_tensor_parallel_size: int = 1
@@ -55,7 +56,7 @@ class Settings(BaseSettings):
     inference_use_https: bool = False
     inference_verify_tls: bool = False
     inference_request_timeout_seconds: int = 600
-    inference_ready_timeout_seconds: int = 2400
+    inference_ready_timeout_seconds: int = 1800
     provision_poll_seconds: float = 5.0
 
     # Telegram chat session. History exists only in controller memory and is
@@ -104,16 +105,16 @@ class Settings(BaseSettings):
 
     @field_validator("vast_disk_gb")
     @classmethod
-    def disk_large_enough_for_qwen3_omni(cls, value: int) -> int:
-        if value < 120:
-            raise ValueError("VAST_DISK_GB must be >= 120 for the Qwen3-Omni BF16 profile")
+    def disk_large_enough_for_qwen25_omni(cls, value: int) -> int:
+        if value < 60:
+            raise ValueError("VAST_DISK_GB must be >= 60 for the Qwen2.5-Omni-7B BF16 profile")
         return value
 
     @field_validator("vast_min_gpu_ram_gb")
     @classmethod
-    def vram_large_enough_for_qwen3_omni(cls, value: int) -> int:
-        if value < 80:
-            raise ValueError("VAST_MIN_GPU_RAM_GB must be >= 80 for the Qwen3-Omni BF16 profile")
+    def vram_large_enough_for_qwen25_omni(cls, value: int) -> int:
+        if value < 48:
+            raise ValueError("VAST_MIN_GPU_RAM_GB must be >= 48 for the supported Qwen2.5-Omni-7B BF16 profile")
         return value
 
     def validate_runtime(self) -> None:
