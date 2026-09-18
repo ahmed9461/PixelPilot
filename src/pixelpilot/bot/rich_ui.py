@@ -36,6 +36,7 @@ def settings_card(values: Mapping[str, str | int]) -> InputRichMessage:
         ("🎨 الإبداع", f"{values['creativity']}%"),
         ("🧪 التنوع", f"{values['diversity']}%"),
         ("📏 طول الرد", f"{values['length']}%"),
+        ("🔁 منع التكرار", f"{values['repetition']}%"),
     ]
     body = "".join(
         f"<tr><td>{escape(name)}</td><td><b>{escape(value)}</b></td></tr>"
