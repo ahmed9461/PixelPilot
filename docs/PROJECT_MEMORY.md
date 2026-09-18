@@ -33,6 +33,9 @@ Output is text. Image generation is no longer part of the project.
 16. Built-in behavior profiles are production-quality modular behavior contracts, not one-line style hints. They should define scope, desired behavior, accuracy/adaptation rules and what to avoid, while remaining compact enough to compose without wasting the 8K context window.
 17. PixelPilot is visual-first. Prefer Telegram-native Rich Messages, structured dashboards and styled action buttons over plain walls of text whenever the feature is available, while preserving a graceful plain-message fallback.
 18. AI replies stream live through Telegram message drafts while vLLM generates. Draft updates must be throttled, ephemeral, and followed by one persistent final response.
+19. Qwen generation uses an owner-adjustable repetition guard. The default 50% maps to `repetition_penalty=1.1`; this prevents the long repeated loops observed in the Arabic story test while preserving deterministic `temperature=0` by default.
+20. Personality/tone/reasoning/format/language changes start a new RAM-only conversation context. A new behavior profile must not be diluted by assistant messages generated under the previous profile.
+21. Persona profiles must have an observable everyday voice signature. Task adaptation may reduce stylistic intensity for technical/sensitive work, but it must not make different personalities indistinguishable in normal conversation.
 
 ## Architecture
 
@@ -60,6 +63,7 @@ No ComfyUI, FLUX workflow, image seed/ratio/batch, or PixelPilot Worker is used 
 - creativity: 0% (`temperature=0`)
 - diversity: 100% (`top_p=1.0`)
 - response-length control: 100% (full configured max output tokens)
+- repetition guard: 50% (`repetition_penalty=1.1`)
 - one image, one audio and one video input per prompt by default
 - assistant personality/tone/reasoning/format/language: neutral/automatic until owner changes them
 
