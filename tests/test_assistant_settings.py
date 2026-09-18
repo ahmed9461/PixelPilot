@@ -120,7 +120,7 @@ def test_v2_persona_defaults_upgrade_to_v3_but_marked_owner_edits_survive(tmp_pa
         assert dramatic != LEGACY_V2_PERSONAS["dramatic"]
         assert "[شخصية: سينمائية عاطفية]" in dramatic
         assert friend == LEGACY_V2_PERSONAS["friend"]
-        assert await db.get("assistant.prompts.version") == 3
+        assert await db.get("assistant.prompts.version") == 4
 
     asyncio.run(scenario())
 
