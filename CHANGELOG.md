@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.4 — 2026-09-18
+
+- Fixed the v2→v3 persona migration bug that left existing installations on the old behavior prompts even after updating PixelPilot. Prompt schema v4 now recognizes exact v0.5.1/v0.5.2 built-ins and upgrades them while preserving owner-edited prompts.
+- Added explicit per-prompt owner-edit markers so future built-in prompt upgrades never overwrite manual edits.
+- Sends the active profile as typed system text content, matching Qwen2.5-Omni serving examples.
+- Caps video requests at 24 sampled frames and clears older conversation turns before a fresh video request to keep multimodal input inside the 8192-token context.
+- Adds a 4096-token-equivalent video pixel budget to new Vast model servers via `VIDEO_MAX_PIXELS`.
+- Bumped PixelPilot to 0.5.4 and added migration/video regression tests.
+
+
 ## 0.5.3 — 2026-09-18
 
 - Fixed Qwen2.5-Omni long-response degeneration seen in Arabic storytelling by sending a configurable `repetition_penalty`; the default 50% guard maps to 1.1, matching the model's current vLLM-Omni thinker example.

@@ -1,5 +1,14 @@
 # Decisions
 
+## 2026-09-18 — Repair prompt migrations and preserve manual edits
+
+Prompt schema migrations must not rely only on very old starter prompt values. Schema v4 explicitly recognizes the v0.5.1/v0.5.2 persona defaults so installations that were incorrectly marked v3 are upgraded on the next controller restart. Every manual prompt edit writes an `assistant.prompt.edited.*` marker; reset clears that marker. Automatic upgrades must preserve marked owner edits.
+
+## 2026-09-18 — Video context budgeting
+
+PixelPilot runs Qwen2.5-Omni with an 8192-token model context, so raw video must not be allowed to consume an unbounded visual token budget. Video payloads use an explicit 24-frame cap, a fresh video turn does not prepend old chat history, and new Vast servers export a conservative `VIDEO_MAX_PIXELS` budget equivalent to roughly 4096 visual tokens. This keeps room for the active profile, user text and model output without increasing the GPU requirement.
+
+
 ## 2026-09-18 — Persona changes are immediately observable
 
 Personality, tone, reasoning, formatting and language profiles are behavior changes, not cosmetic labels. Selecting one clears the current RAM-only chat history before the next user message so examples produced under the old profile cannot anchor the new response style. Editing/resetting a behavior prompt does the same.

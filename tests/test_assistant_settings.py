@@ -2,6 +2,7 @@ import asyncio
 
 from pixelpilot.db import Database
 from pixelpilot.services.assistant_settings import (
+    LEGACY_V2_PERSONAS,
     context_policy,
     effective_system_prompt,
     ensure_defaults,
@@ -98,4 +99,39 @@ def test_dramatic_persona_has_visible_everyday_signature_and_anti_loop_rules(tmp
         assert "الكلام اليومي" in prompt
         assert "لا تكرر الحدث نفسه" in prompt
         assert "لا تستخدم عبارة مميزة واحدة في كل رد" in prompt
+    asyncio.run(scenario())
+
+
+
+def test_v2_persona_defaults_upgrade_to_v3_but_marked_owner_edits_survive(tmp_path):
+    async def scenario():
+        db = Database(tmp_path / "settings.sqlite3")
+        await db.init()
+
+        await db.set("assistant.prompts.version", 2)
+        await db.set("assistant.prompt.persona.dramatic", LEGACY_V2_PERSONAS["dramatic"])
+        await db.set("assistant.prompt.persona.friend", LEGACY_V2_PERSONAS["friend"])
+        await db.set("assistant.prompt.edited.persona.friend", True)
+
+        await ensure_defaults(db)
+
+        dramatic = await get_prompt(db, "persona", "dramatic")
+        friend = await get_prompt(db, "persona", "friend")
+        assert dramatic != LEGACY_V2_PERSONAS["dramatic"]
+        assert "[شخصية: سينمائية عاطفية]" in dramatic
+        assert friend == LEGACY_V2_PERSONAS["friend"]
+        assert await db.get("assistant.prompts.version") == 4
+
+    asyncio.run(scenario())
+
+
+def test_manual_prompt_edit_marker_is_written_and_reset(tmp_path):
+    async def scenario():
+        db = Database(tmp_path / "settings.sqlite3")
+        await db.init()
+        await set_prompt(db, "persona", "dramatic", "CUSTOM")
+        assert await db.get("assistant.prompt.edited.persona.dramatic") is True
+        await reset_prompt(db, "persona", "dramatic")
+        assert await db.get("assistant.prompt.edited.persona.dramatic") is False
+
     asyncio.run(scenario())
