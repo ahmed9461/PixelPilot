@@ -90,6 +90,7 @@ class InferenceClient:
         max_tokens: int,
         temperature: float,
         top_p: float,
+        repetition_penalty: float,
         stream: bool = False,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -98,6 +99,7 @@ class InferenceClient:
             "max_tokens": max_tokens,
             "temperature": float(temperature),
             "top_p": float(top_p),
+            "repetition_penalty": float(repetition_penalty),
         }
         if stream:
             payload["stream"] = True
@@ -110,6 +112,7 @@ class InferenceClient:
         max_tokens: int = 2048,
         temperature: float = 0.0,
         top_p: float = 1.0,
+        repetition_penalty: float = 1.1,
     ) -> InferenceResult:
         # PixelPilot does not rewrite the supplied conversation here. Any
         # optional persona/style prompt is explicitly assembled by the
@@ -119,6 +122,7 @@ class InferenceClient:
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
+            repetition_penalty=repetition_penalty,
         )
         response = await self._request("POST", "/v1/chat/completions", json=payload)
         data = response.json()
@@ -154,6 +158,7 @@ class InferenceClient:
         max_tokens: int = 2048,
         temperature: float = 0.0,
         top_p: float = 1.0,
+        repetition_penalty: float = 1.1,
     ) -> AsyncIterator[str]:
         """Yield text deltas from vLLM's OpenAI-compatible SSE stream."""
         payload = self._chat_payload(
@@ -161,6 +166,7 @@ class InferenceClient:
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
+            repetition_penalty=repetition_penalty,
             stream=True,
         )
         async with httpx.AsyncClient(
