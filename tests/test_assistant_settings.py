@@ -48,7 +48,7 @@ def test_selected_profiles_are_structured_and_can_be_replaced(tmp_path):
 
         await reset_prompt(db, "persona", "analyst")
         restored = await get_prompt(db, "persona", "analyst")
-        assert "[دور الشخصية: محلل دقيق عالي الاعتمادية]" in restored
+        assert "[شخصية: محلل حاد وهادئ]" in restored
     asyncio.run(scenario())
 
 
@@ -83,7 +83,19 @@ def test_legacy_default_prompts_upgrade_but_custom_edits_survive(tmp_path):
         analyst = await get_prompt(db, "persona", "analyst")
         direct = await get_prompt(db, "tone", "direct")
         assert analyst != old_analyst
-        assert "[دور الشخصية: محلل دقيق عالي الاعتمادية]" in analyst
+        assert "[شخصية: محلل حاد وهادئ]" in analyst
         assert direct == "MY CUSTOM DIRECT PROMPT"
 
+    asyncio.run(scenario())
+
+
+
+def test_dramatic_persona_has_visible_everyday_signature_and_anti_loop_rules(tmp_path):
+    async def scenario():
+        db = Database(tmp_path / "settings.sqlite3")
+        await db.init()
+        prompt = await get_prompt(db, "persona", "dramatic")
+        assert "الكلام اليومي" in prompt
+        assert "لا تكرر الحدث نفسه" in prompt
+        assert "لا تستخدم عبارة مميزة واحدة في كل رد" in prompt
     asyncio.run(scenario())
