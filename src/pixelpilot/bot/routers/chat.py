@@ -132,7 +132,14 @@ async def _handle_input(message: Message, user_input: UserInput) -> None:
         default_messages=orch().settings.chat_history_messages,
     )
 
+    has_video = any(media.kind == "video" for media in user_input.media)
+
     if context_enabled:
+        # Video consumes a large multimodal token budget. Do not prepend old
+        # turns to a fresh video request; otherwise a perfectly valid video
+        # can exceed the 8K model context before generation even starts.
+        if has_video:
+            _history.clear()
         _history.append(user_message)
         _history[:] = _trim_history(_history, max_messages)
         conversation = history_snapshot()
@@ -142,7 +149,16 @@ async def _handle_input(message: Message, user_input: UserInput) -> None:
     system_prompt = (await effective_system_prompt(orch().db)).strip()
     outbound = list(conversation)
     if system_prompt:
-        outbound.insert(0, {"role": "system", "content": system_prompt})
+        # Qwen2.5-Omni's official serving examples use typed text content for
+        # the system turn. Use the same form so profile prompts are applied
+        # unambiguously on multimodal and text-only requests.
+        outbound.insert(
+            0,
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": system_prompt}],
+            },
+        )
 
     generation = await generation_params(
         orch().db,
