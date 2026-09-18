@@ -23,9 +23,10 @@ def test_default_profile_has_no_hidden_prompt_and_stable_sampling(tmp_path):
         assert state["tone"] == "balanced"
         assert state["diversity_pct"] == 100
         assert state["response_length_pct"] == 100
+        assert state["repetition_guard_pct"] == 50
         assert await effective_system_prompt(db) == ""
         params = await generation_params(db, max_output_tokens=2048)
-        assert params == {"temperature": 0.0, "top_p": 1.0, "max_tokens": 2048}
+        assert params == {"temperature": 0.0, "top_p": 1.0, "max_tokens": 2048, "repetition_penalty": 1.1}
     asyncio.run(scenario())
 
 
@@ -36,7 +37,7 @@ def test_selected_profiles_are_structured_and_can_be_replaced(tmp_path):
         await set_state(db, "persona", "analyst")
         await set_state(db, "tone", "gentle")
         original = await effective_system_prompt(db)
-        assert "[دور الشخصية: محلل دقيق عالي الاعتمادية]" in original
+        assert "[شخصية: محلل حاد وهادئ]" in original
         assert "[نبرة: لطيفة وهادئة]" in original
         assert len(await get_prompt(db, "persona", "analyst")) > 450
 
@@ -58,8 +59,9 @@ def test_generation_percentages_and_context_are_runtime_settings(tmp_path):
         await set_state(db, "creativity_pct", 50)
         await set_state(db, "diversity_pct", 80)
         await set_state(db, "response_length_pct", 100)
+        await set_state(db, "repetition_guard_pct", 80)
         params = await generation_params(db, max_output_tokens=2048)
-        assert params == {"temperature": 0.4, "top_p": 0.8, "max_tokens": 2048}
+        assert params == {"temperature": 0.4, "top_p": 0.8, "max_tokens": 2048, "repetition_penalty": 1.16}
 
         await set_state(db, "context_enabled", False)
         await set_state(db, "context_messages", 20)
