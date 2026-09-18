@@ -12,6 +12,7 @@ from aiogram.types import CallbackQuery, Message
 
 from pixelpilot.bot.callbacks import safe_callback_answer
 from pixelpilot.bot.keyboards import main_menu
+from pixelpilot.bot.rich_ui import response_card
 from pixelpilot.domain import InstancePhase, MediaInput, UserInput
 from pixelpilot.services.assistant_runtime import stream_chat_with_options
 from pixelpilot.services.assistant_settings import (
@@ -99,7 +100,19 @@ async def _deliver_text(message: Message, text: str) -> None:
                 cut = 4000
             chunk, remaining = remaining[:cut], remaining[cut:]
             remaining = remaining.lstrip("\n")
-        await message.answer(chunk, parse_mode=None)
+
+        # Prefer Telegram's native Rich Message renderer for completed model
+        # output. If a model returns malformed/incomplete Markdown (for
+        # example because a long code block was split), fall back to plain
+        # text rather than losing the answer.
+        try:
+            await message.bot.send_rich_message(
+                chat_id=message.chat.id,
+                message_thread_id=message.message_thread_id,
+                rich_message=response_card(chunk),
+            )
+        except Exception:
+            await message.answer(chunk, parse_mode=None)
 
 
 def _draft_preview(text: str, limit: int = 4000) -> str:
