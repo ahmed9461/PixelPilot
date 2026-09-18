@@ -36,6 +36,8 @@ Output is text. Image generation is no longer part of the project.
 19. Qwen generation uses an owner-adjustable repetition guard. The default 50% maps to `repetition_penalty=1.1`; this prevents the long repeated loops observed in the Arabic story test while preserving deterministic `temperature=0` by default.
 20. Personality/tone/reasoning/format/language changes start a new RAM-only conversation context. A new behavior profile must not be diluted by assistant messages generated under the previous profile.
 21. Persona profiles must have an observable everyday voice signature. Task adaptation may reduce stylistic intensity for technical/sensitive work, but it must not make different personalities indistinguishable in normal conversation.
+22. Prompt migrations are versioned and must recognize the immediately previous built-in prompt values. Manual prompt edits are tracked with explicit edit markers and must never be overwritten by automatic schema upgrades.
+23. Video requests reserve context aggressively: cap each video to 24 sampled frames, discard older conversation turns before a new video turn, and keep the Vast-side video pixel budget aligned with the 8192-token model context.
 
 ## Architecture
 
