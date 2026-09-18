@@ -102,7 +102,8 @@ async def _settings_text() -> str:
         f"🌐 اللغة: <b>{escape(_label('language', str(state['language'])))}</b>\n"
         f"🎨 الإبداع: <b>{int(state['creativity_pct'])}%</b>\n"
         f"🧪 التنوع: <b>{int(state['diversity_pct'])}%</b>\n"
-        f"📏 طول الرد: <b>{int(state['response_length_pct'])}%</b>"
+        f"📏 طول الرد: <b>{int(state['response_length_pct'])}%</b>\n"
+        f"🔁 منع التكرار: <b>{int(state['repetition_guard_pct'])}%</b>"
     )
 
 
@@ -125,6 +126,7 @@ async def settings_home(callback: CallbackQuery) -> None:
         "creativity": int(state["creativity_pct"]),
         "diversity": int(state["diversity_pct"]),
         "length": int(state["response_length_pct"]),
+        "repetition": int(state["repetition_guard_pct"]),
     }
     try:
         await callback.message.edit_text(
@@ -164,11 +166,11 @@ def _group_keyboard(group: str, selected: str) -> InlineKeyboardMarkup:
 
 def _group_title(group: str) -> str:
     return {
-        "persona": "🎭 <b>روح المساعد</b>\n\nاختر الشخصية الأساسية:",
-        "tone": "⚡ <b>السمة</b>\n\nاختر نبرة الرد:",
-        "reasoning": "🧠 <b>الاستدلال</b>\n\nاختر عمق معالجة الأسئلة:",
-        "format": "🧾 <b>التنسيق</b>\n\nاختر طريقة تنظيم الرد:",
-        "language": "🌐 <b>اللغة</b>\n\nالتلقائي يترك اللغة للسياق والرسالة:",
+        "persona": "🎭 <b>روح المساعد</b>\n\nاختر الشخصية الأساسية. تغييرها يبدأ سياقًا جديدًا حتى تظهر البصمة فورًا:",
+        "tone": "⚡ <b>السمة</b>\n\nاختر نبرة الرد. تغييرها يبدأ سياقًا جديدًا:",
+        "reasoning": "🧠 <b>الاستدلال</b>\n\nاختر عمق معالجة الأسئلة. تغيير الخيار يبدأ سياقًا جديدًا:",
+        "format": "🧾 <b>التنسيق</b>\n\nاختر طريقة تنظيم الرد. تغيير الخيار يبدأ سياقًا جديدًا:",
+        "language": "🌐 <b>اللغة</b>\n\nالتلقائي يترك اللغة للسياق والرسالة. تغيير الخيار يبدأ سياقًا جديدًا:",
     }[group]
 
 
@@ -203,8 +205,11 @@ async def select_group(callback: CallbackQuery) -> None:
     if str(state[group]) == key:
         await safe_callback_answer(callback, "محدد بالفعل")
         return
-    await safe_callback_answer(callback, "تم الحفظ")
+    from pixelpilot.bot.routers.chat import clear_history
+
     await set_state(orch().db, group, key)
+    clear_history()
+    await safe_callback_answer(callback, "تم التطبيق وبدأ سياق جديد")
     await safe_edit_reply_markup(callback.message, reply_markup=_group_keyboard(group, key))
 
 
@@ -214,6 +219,7 @@ def _generation_keyboard(state: dict[str, Any]) -> InlineKeyboardMarkup:
         ("creativity_pct", "🎨 الإبداع", 10),
         ("diversity_pct", "🧪 التنوع", 5),
         ("response_length_pct", "📏 طول الرد", 10),
+        ("repetition_guard_pct", "🔁 منع التكرار", 10),
     )
     for name, label, step in specs:
         value = int(state[name])
@@ -236,8 +242,9 @@ async def _show_generation(callback: CallbackQuery, state: dict[str, Any] | None
         "🎚️ <b>إعدادات التوليد</b>\n\n"
         "🎨 الإبداع: يرفع حرية الصياغة والعشوائية تدريجيًا.\n"
         "🧪 التنوع: يوسع أو يضيّق نطاق الاحتمالات اللغوية.\n"
-        "📏 طول الرد: يتحكم بالحد الأقصى التقريبي للإجابة.\n\n"
-        "الإبداع 0% هو الوضع الأكثر ثباتًا.",
+        "📏 طول الرد: يتحكم بالحد الأقصى التقريبي للإجابة.\n"
+        "🔁 منع التكرار: يقلل دخول الموديل في حلقات إعادة الجمل والفقرات.\n\n"
+        "القيمة 50% لمنع التكرار تعادل الإعداد الموصى به للموديل (1.1).",
         reply_markup=_generation_keyboard(state),
     )
 
@@ -253,7 +260,7 @@ async def generation(callback: CallbackQuery) -> None:
 async def adjust_generation(callback: CallbackQuery) -> None:
     _cancel_pending()
     _, _, name, delta_text = callback.data.split(":", 3)
-    if name not in {"creativity_pct", "diversity_pct", "response_length_pct"}:
+    if name not in {"creativity_pct", "diversity_pct", "response_length_pct", "repetition_guard_pct"}:
         await safe_callback_answer(callback, "خيار غير معروف")
         return
     state = await get_state(orch().db)
@@ -277,6 +284,7 @@ async def reset_generation(callback: CallbackQuery) -> None:
         "assistant.state.creativity_pct": DEFAULT_STATE["creativity_pct"],
         "assistant.state.diversity_pct": DEFAULT_STATE["diversity_pct"],
         "assistant.state.response_length_pct": DEFAULT_STATE["response_length_pct"],
+        "assistant.state.repetition_guard_pct": DEFAULT_STATE["repetition_guard_pct"],
     })
     state = await get_state(orch().db)
     await _show_generation(callback, state)
@@ -581,6 +589,9 @@ async def receive_prompt_edit(message: Message) -> None:
     else:
         await set_prompt(orch().db, target.group, target.key, value)
         reopen = f"assistant:prompt:open:{target.group}:{target.origin}"
+
+    from pixelpilot.bot.routers.chat import clear_history
+    clear_history()
     _pending_edit = None
 
     back = (
@@ -609,8 +620,11 @@ async def restore_prompt(callback: CallbackQuery) -> None:
         await safe_callback_answer(callback, "خيار غير معروف")
         return
     origin: PromptOrigin = "group" if origin_raw == "group" else "hub"
-    await safe_callback_answer(callback, "تمت الاستعادة")
+    from pixelpilot.bot.routers.chat import clear_history
+
     await reset_prompt(orch().db, group, key)
+    clear_history()
+    await safe_callback_answer(callback, "تمت الاستعادة وبدأ سياق جديد")
     await _render_prompt(callback, group, key, origin)
 
 
