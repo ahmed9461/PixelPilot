@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.3 — 2026-09-18
+
+- Fixed Qwen2.5-Omni long-response degeneration seen in Arabic storytelling by sending a configurable `repetition_penalty`; the default 50% guard maps to 1.1, matching the model's current vLLM-Omni thinker example.
+- Added a `🔁 منع التكرار` generation control (0–100%) to the Telegram settings and Rich Settings dashboard.
+- Reworked all personality profiles so each has a visible everyday voice signature instead of activating only in narrow task types.
+- Changing personality, tone, reasoning, formatting or language now clears the RAM-only conversation context so the newly selected behavior takes effect immediately instead of inheriting old assistant-style examples.
+- Editing or resetting a prompt also starts a clean RAM-only context for the same reason.
+- Bumped prompt schema to v3 and PixelPilot to 0.5.3.
+
+
 ## 0.5.2 — 2026-09-18
 
 - Added native Telegram Rich Messages for the home dashboard, Assistant Settings dashboard and completed AI replies, with RTL-aware rendering and plain-text fallback.
