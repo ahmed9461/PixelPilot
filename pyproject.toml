@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pixelpilot"
-version = "0.5.3"
+version = "0.5.4"
 description = "Owner-only Telegram assistant that rents economical Vast.ai GPUs for Qwen2.5-Omni text, image, audio and video understanding"
 requires-python = ">=3.11"
 dependencies = [
