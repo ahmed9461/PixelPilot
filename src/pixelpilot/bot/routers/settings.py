@@ -126,6 +126,7 @@ def _group_keyboard(group: str, selected: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton(
                 text=f"{mark}{option.label}",
                 callback_data=f"assistant:select:{group}:{option.key}",
+                style="success" if option.key == selected else None,
             )
         )
         if len(current) == 2:
@@ -200,7 +201,7 @@ def _generation_keyboard(state: dict[str, Any]) -> InlineKeyboardMarkup:
         value = int(state[name])
         rows.append([
             InlineKeyboardButton(text="−", callback_data=f"assistant:adjust:{name}:-{step}"),
-            InlineKeyboardButton(text=f"{label} {value}%", callback_data="assistant:noop"),
+            InlineKeyboardButton(text=f"{label} {value}%", callback_data="assistant:noop", style="primary"),
             InlineKeyboardButton(text="+", callback_data=f"assistant:adjust:{name}:{step}"),
         ])
     rows.extend([
@@ -268,6 +269,7 @@ def _context_keyboard(enabled: bool, count: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(
             text=f"Memory {'✓' if enabled else '○'}",
             callback_data="assistant:context:toggle",
+            style="success" if enabled else "primary",
         )],
         [
             InlineKeyboardButton(text=f"{'✓ ' if count == 4 else ''}4", callback_data="assistant:context:size:4"),
@@ -275,7 +277,7 @@ def _context_keyboard(enabled: bool, count: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text=f"{'✓ ' if count == 12 else ''}12", callback_data="assistant:context:size:12"),
             InlineKeyboardButton(text=f"{'✓ ' if count == 20 else ''}20", callback_data="assistant:context:size:20"),
         ],
-        [InlineKeyboardButton(text="🗑 مسح سياق المحادثة", callback_data="assistant:context:clear")],
+        [InlineKeyboardButton(text="🗑 مسح سياق المحادثة", callback_data="assistant:context:clear", style="danger")],
         [InlineKeyboardButton(text="⬅️ إعدادات المساعد", callback_data="assistant:settings")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -353,7 +355,7 @@ def _prompts_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🌐 برومت اللغة", callback_data="assistant:prompt:open:language:hub")],
             [InlineKeyboardButton(text="👁 عرض البرومت الفعّال", callback_data="assistant:prompt:effective")],
             [InlineKeyboardButton(text="📤 تصدير البرومت الفعّال", callback_data="assistant:prompt:export")],
-            [InlineKeyboardButton(text="♻️ إعادة كل الإعدادات الافتراضية", callback_data="assistant:reset_all")],
+            [InlineKeyboardButton(text="♻️ إعادة كل الإعدادات الافتراضية", callback_data="assistant:reset_all", style="danger")],
             [InlineKeyboardButton(text="⬅️ إعدادات المساعد", callback_data="assistant:settings")],
         ]
     )
@@ -389,6 +391,7 @@ def _prompt_actions(
 ) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(
         text="✏️ تعديل/استبدال",
+        style="primary",
         callback_data=(
             f"assistant:prompt:edit:custom:base:{origin}"
             if custom
