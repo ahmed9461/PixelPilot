@@ -31,11 +31,14 @@ Output is text. Image generation is no longer part of the project.
 14. Assistant Settings navigation must be deterministic: a Back button returns to the screen that opened the current screen. Prompt edit/view/reset flows must preserve whether they came from a behavior group or the central prompt hub.
 15. Settings callbacks must feel immediate. Avoid repeated SQLite open/read cycles and avoid Telegram edits that intentionally submit identical text/markup. Use batched KV operations and safe no-op handling.
 16. Built-in behavior profiles are production-quality modular behavior contracts, not one-line style hints. They should define scope, desired behavior, accuracy/adaptation rules and what to avoid, while remaining compact enough to compose without wasting the 8K context window.
+17. PixelPilot is visual-first. Prefer Telegram-native Rich Messages, structured dashboards and styled action buttons over plain walls of text whenever the feature is available, while preserving a graceful plain-message fallback.
+18. AI replies stream live through Telegram message drafts while vLLM generates. Draft updates must be throttled, ephemeral, and followed by one persistent final response.
 
 ## Architecture
 
 ```text
 Telegram
+  -> Rich Message UI + live response drafts
   -> PixelPilot Controller
      -> optional owner-configured assistant profile/system message
      -> authenticated public Vast port
@@ -79,6 +82,16 @@ Prompt changes take effect on the next request; they do not require GPU reinstal
 ## Settings performance
 
 Assistant settings use batched `get_many` / `set_many` SQLite operations for profile state. A screen should not open a fresh SQLite connection for every individual setting. Buttons that represent the already-selected value are treated as no-ops, and harmless Telegram `message is not modified` responses are ignored rather than surfaced as glitches.
+
+## Telegram visual UX
+
+PixelPilot targets Bot API 10.x features through aiogram 3.31+:
+- `/start` uses a native RTL Rich Message card with a collapsible capabilities section.
+- Assistant Settings opens as a Rich Message dashboard with a compact status table.
+- Main actions use Telegram button styles (`primary`, `success`, `danger`) where appropriate.
+- AI output is streamed through `sendMessageDraft` while generation is in progress, then persisted as a native Rich Message when complete.
+- If Rich Message rendering or draft streaming fails, fall back to the reliable classic text-message path instead of losing the response.
+- Do not update a draft for every token; throttle updates to keep the UI smooth and avoid Telegram rate-limit pressure.
 
 ## Billing meter
 
