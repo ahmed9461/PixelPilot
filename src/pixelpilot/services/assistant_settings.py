@@ -256,7 +256,7 @@ DEFAULT_STATE: dict[str, Any] = {
     "custom_prompt": "",
 }
 
-PROMPT_SCHEMA_VERSION = 3
+PROMPT_SCHEMA_VERSION = 4
 
 # v0.5.0 shipped shorter starter prompts. If one of those exact values was
 # persisted by "reset all", upgrade it automatically. Any owner-edited value
