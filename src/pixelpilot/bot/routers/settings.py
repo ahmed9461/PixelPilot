@@ -13,6 +13,7 @@ from pixelpilot.bot.callbacks import (
     safe_edit_text,
 )
 from pixelpilot.bot.keyboards import main_menu
+from pixelpilot.bot.rich_ui import settings_card
 from pixelpilot.services.assistant_settings import (
     DEFAULT_STATE,
     GROUPS,
@@ -114,7 +115,24 @@ async def noop(callback: CallbackQuery) -> None:
 async def settings_home(callback: CallbackQuery) -> None:
     _cancel_pending()
     await safe_callback_answer(callback)
-    await safe_edit_text(callback.message, await _settings_text(), reply_markup=_home_keyboard())
+    state = await get_state(orch().db)
+    values = {
+        "persona": _label("persona", str(state["persona"])),
+        "tone": _label("tone", str(state["tone"])),
+        "reasoning": _label("reasoning", str(state["reasoning"])),
+        "format": _label("format", str(state["format"])),
+        "language": _label("language", str(state["language"])),
+        "creativity": int(state["creativity_pct"]),
+        "diversity": int(state["diversity_pct"]),
+        "length": int(state["response_length_pct"]),
+    }
+    try:
+        await callback.message.edit_text(
+            rich_message=settings_card(values),
+            reply_markup=_home_keyboard(),
+        )
+    except Exception:
+        await safe_edit_text(callback.message, await _settings_text(), reply_markup=_home_keyboard())
 
 
 def _group_keyboard(group: str, selected: str) -> InlineKeyboardMarkup:
