@@ -1,5 +1,14 @@
 # Decisions
 
+## 2026-09-18 — Native Rich Messages and streamed AI drafts
+
+PixelPilot is visual-first and should use Telegram's modern native UI where it improves the experience. Use Rich Messages for visual dashboards and completed assistant output, and use styled inline buttons for primary, success and destructive actions. Keep a plain-message fallback so a formatting/parser failure never hides an answer or blocks navigation.
+
+AI responses must be streamed from the vLLM OpenAI-compatible SSE endpoint and mirrored into Telegram with `sendMessageDraft`. The same non-zero draft id is reused for animated updates, updates are throttled rather than sent for every token, and the final answer is sent as a persistent message after generation completes. Draft streaming is private-chat only; unsupported contexts fall back to the classic processing indicator.
+
+Require aiogram 3.31+ for Bot API 10.x Rich Message, button-style and message-draft support.
+
+
 ## 2026-09-17 — Assistant Settings uses deterministic back-navigation
 
 Every settings screen must know where it was opened from. In particular, opening a prompt from a personality/tone/reasoning/format/language group must return to that same group, while opening it from the central Prompt Hub must return to the Prompt Hub. Edit, reset and cancel flows preserve the same origin instead of using one generic Back destination.
