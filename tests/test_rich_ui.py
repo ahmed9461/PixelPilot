@@ -19,6 +19,7 @@ def test_settings_rich_message_uses_table():
             "creativity": 0,
             "diversity": 100,
             "length": 100,
+            "repetition": 50,
         }
     )
     assert card.is_rtl is True
