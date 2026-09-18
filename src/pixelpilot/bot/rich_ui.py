@@ -50,3 +50,14 @@ def settings_card(values: Mapping[str, str | int]) -> InputRichMessage:
             "<footer>أي تغيير تحفظه يطبق على الرسالة التالية.</footer>"
         ),
     )
+
+
+
+def response_card(markdown: str) -> InputRichMessage:
+    """Wrap a completed model response in Telegram's native rich renderer."""
+    arabic = sum(1 for ch in markdown if "\u0600" <= ch <= "\u06ff")
+    latin = sum(1 for ch in markdown if ("A" <= ch <= "Z") or ("a" <= ch <= "z"))
+    return InputRichMessage(
+        markdown=markdown,
+        is_rtl=arabic > latin,
+    )
