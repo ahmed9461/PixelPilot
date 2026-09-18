@@ -38,7 +38,8 @@ def test_generation_value_buttons_are_noop_instead_of_reediting_same_screen():
         "creativity_pct": 0,
         "diversity_pct": 100,
         "response_length_pct": 100,
+        "repetition_guard_pct": 50,
     }
     keyboard = _generation_keyboard(state)
-    center_callbacks = [row[1].callback_data for row in keyboard.inline_keyboard[:3]]
-    assert center_callbacks == ["assistant:noop", "assistant:noop", "assistant:noop"]
+    center_callbacks = [row[1].callback_data for row in keyboard.inline_keyboard[:4]]
+    assert center_callbacks == ["assistant:noop", "assistant:noop", "assistant:noop", "assistant:noop"]

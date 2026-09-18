@@ -23,9 +23,10 @@ def test_default_profile_has_no_hidden_prompt_and_stable_sampling(tmp_path):
         assert state["tone"] == "balanced"
         assert state["diversity_pct"] == 100
         assert state["response_length_pct"] == 100
+        assert state["repetition_guard_pct"] == 50
         assert await effective_system_prompt(db) == ""
         params = await generation_params(db, max_output_tokens=2048)
-        assert params == {"temperature": 0.0, "top_p": 1.0, "max_tokens": 2048}
+        assert params == {"temperature": 0.0, "top_p": 1.0, "max_tokens": 2048, "repetition_penalty": 1.1}
     asyncio.run(scenario())
 
 
@@ -36,7 +37,7 @@ def test_selected_profiles_are_structured_and_can_be_replaced(tmp_path):
         await set_state(db, "persona", "analyst")
         await set_state(db, "tone", "gentle")
         original = await effective_system_prompt(db)
-        assert "[دور الشخصية: محلل دقيق عالي الاعتمادية]" in original
+        assert "[شخصية: محلل حاد وهادئ]" in original
         assert "[نبرة: لطيفة وهادئة]" in original
         assert len(await get_prompt(db, "persona", "analyst")) > 450
 
@@ -47,7 +48,7 @@ def test_selected_profiles_are_structured_and_can_be_replaced(tmp_path):
 
         await reset_prompt(db, "persona", "analyst")
         restored = await get_prompt(db, "persona", "analyst")
-        assert "[دور الشخصية: محلل دقيق عالي الاعتمادية]" in restored
+        assert "[شخصية: محلل حاد وهادئ]" in restored
     asyncio.run(scenario())
 
 
@@ -58,8 +59,9 @@ def test_generation_percentages_and_context_are_runtime_settings(tmp_path):
         await set_state(db, "creativity_pct", 50)
         await set_state(db, "diversity_pct", 80)
         await set_state(db, "response_length_pct", 100)
+        await set_state(db, "repetition_guard_pct", 80)
         params = await generation_params(db, max_output_tokens=2048)
-        assert params == {"temperature": 0.4, "top_p": 0.8, "max_tokens": 2048}
+        assert params == {"temperature": 0.4, "top_p": 0.8, "max_tokens": 2048, "repetition_penalty": 1.16}
 
         await set_state(db, "context_enabled", False)
         await set_state(db, "context_messages", 20)
@@ -81,7 +83,19 @@ def test_legacy_default_prompts_upgrade_but_custom_edits_survive(tmp_path):
         analyst = await get_prompt(db, "persona", "analyst")
         direct = await get_prompt(db, "tone", "direct")
         assert analyst != old_analyst
-        assert "[دور الشخصية: محلل دقيق عالي الاعتمادية]" in analyst
+        assert "[شخصية: محلل حاد وهادئ]" in analyst
         assert direct == "MY CUSTOM DIRECT PROMPT"
 
+    asyncio.run(scenario())
+
+
+
+def test_dramatic_persona_has_visible_everyday_signature_and_anti_loop_rules(tmp_path):
+    async def scenario():
+        db = Database(tmp_path / "settings.sqlite3")
+        await db.init()
+        prompt = await get_prompt(db, "persona", "dramatic")
+        assert "الكلام اليومي" in prompt
+        assert "لا تكرر الحدث نفسه" in prompt
+        assert "لا تستخدم عبارة مميزة واحدة في كل رد" in prompt
     asyncio.run(scenario())
