@@ -33,6 +33,7 @@ def offers_keyboard(offers: list[GpuOffer]) -> InlineKeyboardMarkup:
             InlineKeyboardButton(
                 text=f"🔍 {offer.display_name}",
                 callback_data=f"servers:offer:{offer.offer_id}",
+                style="primary",
             )
         ]
         for offer in offers
