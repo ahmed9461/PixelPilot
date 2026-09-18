@@ -13,6 +13,8 @@ MODEL_TENSOR_PARALLEL_SIZE="${MODEL_TENSOR_PARALLEL_SIZE:-1}"
 MODEL_LIMIT_IMAGES="${MODEL_LIMIT_IMAGES:-1}"
 MODEL_LIMIT_AUDIO="${MODEL_LIMIT_AUDIO:-1}"
 MODEL_LIMIT_VIDEOS="${MODEL_LIMIT_VIDEOS:-1}"
+VIDEO_TOKEN_BUDGET="${VIDEO_TOKEN_BUDGET:-4096}"
+VIDEO_MAX_PIXELS="${VIDEO_MAX_PIXELS:-$((VIDEO_TOKEN_BUDGET * 28 * 28 * 9 / 10))}"
 HF_HOME="${HF_HOME:-$WORKSPACE/hf-cache}"
 LOG_FILE="${LOG_FILE:-$WORKSPACE/pixelpilot-bootstrap.log}"
 
@@ -90,13 +92,14 @@ fi
 "$PYTHON_BIN" -m pip install -U pip wheel setuptools
 "$PYTHON_BIN" -m pip install -U 'vllm>=0.8.5.post1' qwen-omni-utils hf_xet
 
-export HF_HOME MODEL_ID
+export HF_HOME MODEL_ID VIDEO_MAX_PIXELS
 if [[ -n "${HF_TOKEN:-}" ]]; then export HF_TOKEN; fi
 
 LIMIT_MM="{\"image\":${MODEL_LIMIT_IMAGES},\"audio\":${MODEL_LIMIT_AUDIO},\"video\":${MODEL_LIMIT_VIDEOS}}"
 
 echo "[PixelPilot] launching Qwen2.5-Omni through vLLM"
 echo "[PixelPilot] dtype=$MODEL_DTYPE max_model_len=$MODEL_MAX_LEN tp=$MODEL_TENSOR_PARALLEL_SIZE"
+echo "[PixelPilot] video_token_budget=$VIDEO_TOKEN_BUDGET video_max_pixels=$VIDEO_MAX_PIXELS"
 cd "$WORKSPACE"
 exec "$VENV_DIR/bin/vllm" serve "$MODEL_ID" \
   --host 0.0.0.0 \
