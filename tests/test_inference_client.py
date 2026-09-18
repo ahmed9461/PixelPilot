@@ -1,7 +1,7 @@
 import asyncio
 import httpx
 
-from pixelpilot.services.inference_client import InferenceClient, _extract_text
+from pixelpilot.services.inference_client import InferenceClient, _extract_stream_delta, _extract_text
 
 
 def test_extract_text_supports_string_and_parts():
@@ -48,3 +48,32 @@ def test_chat_accepts_owner_selected_generation_controls():
         assert client.payload["temperature"] == 0.4
         assert client.payload["top_p"] == 0.8
     asyncio.run(scenario())
+
+
+
+def test_stream_payload_and_sse_delta_parser():
+    client = InferenceClient("http://example.invalid", "secret", "model-id")
+    messages = [{"role": "user", "content": "مرحبا"}]
+    payload = client._chat_payload(
+        messages,
+        max_tokens=321,
+        temperature=0.2,
+        top_p=0.9,
+        stream=True,
+    )
+    assert payload == {
+        "model": "model-id",
+        "messages": messages,
+        "max_tokens": 321,
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "stream": True,
+    }
+    assert _extract_stream_delta(
+        'data: {"choices":[{"delta":{"content":"أهل"}}]}'
+    ) == "أهل"
+    assert _extract_stream_delta(
+        'data: {"choices":[{"delta":{"content":[{"type":"text","text":"اً"}]}}]}'
+    ) == "اً"
+    assert _extract_stream_delta("data: [DONE]") is None
+    assert _extract_stream_delta("event: ping") is None

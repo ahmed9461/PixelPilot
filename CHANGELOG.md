@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.2 — 2026-09-18
+
+- Added native Telegram Rich Messages for the home dashboard, Assistant Settings dashboard and completed AI replies, with RTL-aware rendering and plain-text fallback.
+- Added live AI response streaming through Telegram `sendMessageDraft`: the answer now appears progressively while vLLM is generating instead of arriving only at the end.
+- Draft updates are throttled to avoid hammering Telegram and long previews keep the newest text inside Telegram's draft size limit.
+- Added modern Bot API button styles: primary actions are blue, successful/start actions green, and destructive stop/delete/reset actions red on supported Telegram clients.
+- Raised the minimum aiogram version to 3.31 so Rich Messages, styled buttons and streaming drafts are available consistently.
+- Added streaming-SSE, draft-preview and Rich Message regression tests.
+
+
 ## 0.5.1 — 2026-09-17
 
 - Fixed Assistant Settings navigation so prompt editing returns to the section it came from instead of jumping to an unrelated prompt screen.

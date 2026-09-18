@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
@@ -81,6 +83,26 @@ class InferenceClient:
             return False
         return self.model_id in models or bool(models)
 
+    def _chat_payload(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+        stream: bool = False,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": self.model_id,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": float(temperature),
+            "top_p": float(top_p),
+        }
+        if stream:
+            payload["stream"] = True
+        return payload
+
     async def chat(
         self,
         messages: list[dict[str, Any]],
@@ -92,13 +114,12 @@ class InferenceClient:
         # PixelPilot does not rewrite the supplied conversation here. Any
         # optional persona/style prompt is explicitly assembled by the
         # controller from the owner's in-bot settings before this call.
-        payload = {
-            "model": self.model_id,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": float(temperature),
-            "top_p": float(top_p),
-        }
+        payload = self._chat_payload(
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+        )
         response = await self._request("POST", "/v1/chat/completions", json=payload)
         data = response.json()
         choices = data.get("choices") if isinstance(data, dict) else None
@@ -124,6 +145,65 @@ class InferenceClient:
             finish_reason=str(choice.get("finish_reason")) if choice.get("finish_reason") is not None else None,
             usage=usage if isinstance(usage, dict) else None,
         )
+
+
+    async def stream_chat(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        max_tokens: int = 2048,
+        temperature: float = 0.0,
+        top_p: float = 1.0,
+    ) -> AsyncIterator[str]:
+        """Yield text deltas from vLLM's OpenAI-compatible SSE stream."""
+        payload = self._chat_payload(
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            stream=True,
+        )
+        async with httpx.AsyncClient(
+            verify=self.verify_tls,
+            timeout=self.timeout_seconds,
+            follow_redirects=True,
+        ) as client:
+            async with client.stream(
+                "POST",
+                f"{self.base_url}/v1/chat/completions",
+                headers=self._headers(),
+                json=payload,
+            ) as response:
+                if response.is_error:
+                    body = (await response.aread()).decode("utf-8", errors="replace")[:1000]
+                    raise InferenceError(
+                        f"Inference API returned HTTP {response.status_code}: {body}"
+                    )
+                async for line in response.aiter_lines():
+                    delta = _extract_stream_delta(line)
+                    if delta is not None:
+                        yield delta
+
+
+def _extract_stream_delta(line: str) -> str | None:
+    """Parse one OpenAI SSE line and return only assistant text deltas."""
+    if not line.startswith("data:"):
+        return None
+    payload = line[5:].strip()
+    if not payload or payload == "[DONE]":
+        return None
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return None
+    delta = choices[0].get("delta")
+    if not isinstance(delta, dict):
+        return None
+    text = _extract_text(delta.get("content"))
+    return text or None
 
 
 def _extract_text(content: Any) -> str:

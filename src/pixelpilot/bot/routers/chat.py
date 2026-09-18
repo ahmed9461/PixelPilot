@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import logging
 from io import BytesIO
+from time import monotonic
 from typing import Any
 
 from aiogram import F, Router
+from aiogram.enums import ChatType
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
 from pixelpilot.bot.callbacks import safe_callback_answer
 from pixelpilot.bot.keyboards import main_menu
+from pixelpilot.bot.rich_ui import response_card
 from pixelpilot.domain import InstancePhase, MediaInput, UserInput
-from pixelpilot.services.assistant_runtime import chat_with_options
+from pixelpilot.services.assistant_runtime import stream_chat_with_options
 from pixelpilot.services.assistant_settings import (
     context_policy,
     effective_system_prompt,
@@ -19,6 +23,7 @@ from pixelpilot.services.assistant_settings import (
 from pixelpilot.services.orchestrator import Orchestrator
 
 router = Router(name="chat")
+logger = logging.getLogger(__name__)
 _orchestrator: Orchestrator | None = None
 _history: list[dict[str, Any]] = []
 
@@ -95,7 +100,26 @@ async def _deliver_text(message: Message, text: str) -> None:
                 cut = 4000
             chunk, remaining = remaining[:cut], remaining[cut:]
             remaining = remaining.lstrip("\n")
-        await message.answer(chunk, parse_mode=None)
+
+        # Prefer Telegram's native Rich Message renderer for completed model
+        # output. If a model returns malformed/incomplete Markdown (for
+        # example because a long code block was split), fall back to plain
+        # text rather than losing the answer.
+        try:
+            await message.bot.send_rich_message(
+                chat_id=message.chat.id,
+                message_thread_id=message.message_thread_id,
+                rich_message=response_card(chunk),
+            )
+        except Exception:
+            await message.answer(chunk, parse_mode=None)
+
+
+def _draft_preview(text: str, limit: int = 4000) -> str:
+    """Keep Telegram draft updates inside the 4096-character message limit."""
+    if len(text) <= limit:
+        return text
+    return "…" + text[-(limit - 1):]
 
 
 async def _handle_input(message: Message, user_input: UserInput) -> None:
@@ -125,22 +149,83 @@ async def _handle_input(message: Message, user_input: UserInput) -> None:
         max_output_tokens=orch().settings.model_max_output_tokens,
     )
 
-    status = await message.answer("⏳ جاري المعالجة...")
+    # Telegram Bot API 10.1 drafts let the user see the response while the
+    # model is generating it. Drafts are private-chat only; other chat types
+    # fall back to the classic processing message.
+    draft_id = max(1, int(message.message_id))
+    draft_enabled = message.chat.type == ChatType.PRIVATE
+    status: Message | None = None
+    if draft_enabled:
+        try:
+            await message.bot.send_message_draft(
+                chat_id=message.chat.id,
+                message_thread_id=message.message_thread_id,
+                draft_id=draft_id,
+                text="",
+                parse_mode=None,
+            )
+        except Exception:
+            logger.exception("Telegram message draft could not be started; falling back")
+            draft_enabled = False
+    if not draft_enabled:
+        status = await message.answer("⏳ جاري المعالجة...")
+
+    last_draft_at = 0.0
+    last_draft_len = 0
+
+    async def on_partial(partial: str) -> None:
+        nonlocal draft_enabled, last_draft_at, last_draft_len
+        if not draft_enabled or not partial:
+            return
+
+        now = monotonic()
+        # Avoid hammering Telegram for every model token while still keeping
+        # the animation visibly live. Large jumps bypass the time throttle.
+        if now - last_draft_at < 0.30 and len(partial) - last_draft_len < 48:
+            return
+
+        try:
+            await message.bot.send_message_draft(
+                chat_id=message.chat.id,
+                message_thread_id=message.message_thread_id,
+                draft_id=draft_id,
+                text=_draft_preview(partial),
+                parse_mode=None,
+            )
+            last_draft_at = now
+            last_draft_len = len(partial)
+        except Exception:
+            logger.exception("Telegram draft update failed; finishing response normally")
+            draft_enabled = False
+
     try:
-        result = await chat_with_options(orch(), outbound, generation=generation)
+        result = await stream_chat_with_options(
+            orch(),
+            outbound,
+            generation=generation,
+            on_partial=on_partial,
+        )
     except Exception as exc:
         if context_enabled and _history and _history[-1] is user_message:
             _history.pop()
-        await status.edit_text(f"❌ تعذر إكمال الطلب:\n{exc}")
+        if status is not None:
+            await status.edit_text(f"❌ تعذر إكمال الطلب:\n{exc}")
+        else:
+            await message.answer(f"❌ تعذر إكمال الطلب:\n{exc}")
         return
 
     if context_enabled:
         _history.append({"role": "assistant", "content": result.text})
         _history[:] = _trim_history(_history, max_messages)
-    try:
-        await status.delete()
-    except Exception:
-        pass
+
+    if status is not None:
+        try:
+            await status.delete()
+        except Exception:
+            pass
+
+    # Sending the persistent final message dismisses Telegram's ephemeral
+    # draft automatically. Long answers are still split safely as before.
     await _deliver_text(message, result.text)
 
 
