@@ -1,5 +1,16 @@
 # Decisions
 
+## 2026-09-18 — Persona changes are immediately observable
+
+Personality, tone, reasoning, formatting and language profiles are behavior changes, not cosmetic labels. Selecting one clears the current RAM-only chat history before the next user message so examples produced under the old profile cannot anchor the new response style. Editing/resetting a behavior prompt does the same.
+
+Built-in personas must expose a recognizable everyday voice signature while still adapting safely to technical, factual and sensitive tasks. Avoid profiles whose instructions only activate in a narrow domain and therefore look identical during normal conversation.
+
+## 2026-09-18 — Qwen repetition guard
+
+Send `repetition_penalty` on both streamed and non-streamed vLLM chat requests. The owner-facing `🔁 منع التكرار` control maps 0–100% to 1.0–1.2, with 50% = 1.1. This baseline follows the current Qwen2.5-Omni thinker sampling example in vLLM-Omni and addresses the observed long Arabic story loop / repeated Chinese phrase degeneration.
+
+
 ## 2026-09-18 — Native Rich Messages and streamed AI drafts
 
 PixelPilot is visual-first and should use Telegram's modern native UI where it improves the experience. Use Rich Messages for visual dashboards and completed assistant output, and use styled inline buttons for primary, success and destructive actions. Keep a plain-message fallback so a formatting/parser failure never hides an answer or blocks navigation.
