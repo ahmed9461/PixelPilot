@@ -194,4 +194,11 @@ export PYTHONPATH="$PIXELPILOT_ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
   >"$GATEWAY_LOG" 2>&1 &
 GATEWAY_PID=$!
 
-wait "$GATEWAY_PID"
+# Treat Qwen3-VL and the gateway as one runtime. If either exits, tear down
+# the other process so Vast/PixelPilot cannot report a half-alive service.
+set +e
+wait -n "$VLLM_PID" "$GATEWAY_PID"
+child_status=$?
+set -e
+echo "[PixelPilot] runtime process exited (status=$child_status); shutting down peer" >&2
+exit "$child_status"
