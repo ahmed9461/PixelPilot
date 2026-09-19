@@ -81,3 +81,32 @@ def test_stream_payload_and_sse_delta_parser():
     ) == "اً"
     assert _extract_stream_delta("data: [DONE]") is None
     assert _extract_stream_delta("event: ping") is None
+
+
+
+def test_audio_transcription_uses_gateway_endpoint():
+    async def scenario():
+        class CapturingClient(InferenceClient):
+            def __init__(self):
+                super().__init__("http://example.invalid", "secret", "model-id")
+                self.method = None
+                self.path = None
+                self.kwargs = None
+
+            async def _request(self, method, path, **kwargs):
+                self.method = method
+                self.path = path
+                self.kwargs = kwargs
+                return httpx.Response(200, json={"text": "مرحبا من الصوت"})
+
+        client = CapturingClient()
+        text = await client.transcribe_audio(b"audio-bytes", mime_type="audio/ogg")
+        assert text == "مرحبا من الصوت"
+        assert client.method == "POST"
+        assert client.path == "/v1/audio/transcriptions"
+        assert client.kwargs["data"]["model"] == "turbo"
+        file_tuple = client.kwargs["files"]["file"]
+        assert file_tuple[1] == b"audio-bytes"
+        assert file_tuple[2] == "audio/ogg"
+
+    asyncio.run(scenario())
