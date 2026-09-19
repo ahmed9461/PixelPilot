@@ -14,7 +14,7 @@ class InferenceError(RuntimeError):
 
 
 class InferenceClient:
-    """Thin client for the OpenAI-compatible vLLM endpoint on the rented GPU."""
+    """Client for PixelPilot's authenticated inference gateway on the rented GPU."""
 
     def __init__(
         self,
