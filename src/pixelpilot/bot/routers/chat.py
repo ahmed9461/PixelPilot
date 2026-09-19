@@ -122,8 +122,41 @@ def _draft_preview(text: str, limit: int = 4000) -> str:
     return "…" + text[-(limit - 1):]
 
 
+async def _prepare_audio_input(message: Message, user_input: UserInput) -> UserInput:
+    audio_parts = [item for item in user_input.media if item.kind == "audio"]
+    if not audio_parts:
+        return user_input
+
+    status = await message.answer("🎧 جاري فهم التسجيل الصوتي...")
+    try:
+        transcripts = [
+            await orch().transcribe_audio(item.data, mime_type=item.mime_type)
+            for item in audio_parts
+        ]
+    finally:
+        try:
+            await status.delete()
+        except Exception:
+            pass
+
+    text_parts = [text.strip() for text in transcripts if text.strip()]
+    if user_input.text and user_input.text.strip():
+        text_parts.append(user_input.text.strip())
+    remaining_media = tuple(item for item in user_input.media if item.kind != "audio")
+    return UserInput(
+        text="\n\n".join(text_parts) if text_parts else None,
+        media=remaining_media,
+    )
+
+
 async def _handle_input(message: Message, user_input: UserInput) -> None:
     if not await _ensure_ready(message):
+        return
+
+    try:
+        user_input = await _prepare_audio_input(message, user_input)
+    except Exception as exc:
+        await message.answer(f"❌ تعذر فهم التسجيل الصوتي:\n{exc}")
         return
 
     user_message = user_input.to_openai_message()
