@@ -92,7 +92,8 @@ async def stream_chat_with_options(
                 max_tokens=int(generation.get("max_tokens") or orchestrator.settings.model_max_output_tokens),
                 temperature=float(generation.get("temperature", 0.0)),
                 top_p=float(generation.get("top_p", 1.0)),
-                repetition_penalty=float(generation.get("repetition_penalty", 1.1)),
+                repetition_penalty=float(generation.get("repetition_penalty", 1.0)),
+                top_k=int(generation.get("top_k", 20)),
             ):
                 chunks.append(delta)
                 if on_partial is not None:
@@ -113,7 +114,8 @@ async def stream_chat_with_options(
                     "streamed": True,
                     "temperature": float(generation.get("temperature", 0.0)),
                     "top_p": float(generation.get("top_p", 1.0)),
-                    "repetition_penalty": float(generation.get("repetition_penalty", 1.1)),
+                    "repetition_penalty": float(generation.get("repetition_penalty", 1.0)),
+                    "top_k": int(generation.get("top_k", 20)),
                 },
             )
             return result
