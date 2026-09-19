@@ -114,3 +114,22 @@ def test_audio_transcription_uses_gateway_endpoint():
         assert file_tuple[2] == "audio/ogg"
 
     asyncio.run(scenario())
+
+
+
+def test_ready_requires_the_configured_model_not_just_any_model():
+    async def scenario():
+        class ModelsClient(InferenceClient):
+            def __init__(self, models):
+                super().__init__("http://example.invalid", "secret", "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8")
+                self._models = models
+            async def health(self):
+                return True
+            async def models(self):
+                return self._models
+
+        assert await ModelsClient(["Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"]).is_ready() is True
+        assert await ModelsClient(["Qwen/Qwen2.5-Omni-7B"]).is_ready() is False
+        assert await ModelsClient([]).is_ready() is False
+
+    asyncio.run(scenario())
