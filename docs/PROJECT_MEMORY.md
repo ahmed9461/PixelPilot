@@ -2,7 +2,7 @@
 
 ## Current goal
 
-PixelPilot is a personal, owner-only Telegram assistant backed by a temporary Vast.ai GPU. The active default model is `Qwen/Qwen2.5-Omni-7B` because it provides a better personal-use cost/quality balance than the earlier Qwen3-Omni 30B profile.
+PixelPilot is a personal, owner-only Telegram assistant backed by a temporary Vast.ai GPU. The active quality profile is `Qwen/Qwen3-VL-30B-A3B-Instruct-FP8` for text/image/video plus OpenAI Whisper `turbo` for Voice/Audio transcription. This replaced Qwen2.5-Omni-7B after live testing showed inadequate instruction/context and visual-understanding quality.
 
 Supported user inputs:
 - text
@@ -37,7 +37,11 @@ Output is text. Image generation is no longer part of the project.
 20. Personality/tone/reasoning/format/language changes start a new RAM-only conversation context. A new behavior profile must not be diluted by assistant messages generated under the previous profile.
 21. Persona profiles must have an observable everyday voice signature. Task adaptation may reduce stylistic intensity for technical/sensitive work, but it must not make different personalities indistinguishable in normal conversation.
 22. Prompt migrations are versioned and must recognize the immediately previous built-in prompt values. Manual prompt edits are tracked with explicit edit markers and must never be overwritten by automatic schema upgrades.
-23. Video requests reserve context aggressively: cap each video to 24 sampled frames, discard older conversation turns before a new video turn, and keep the Vast-side video pixel budget aligned with the 8192-token model context.
+23. Video requests reserve context aggressively: sample 24 frames and discard older conversation turns before a new video turn.
+24. Qwen3-VL handles text/image/video only. Voice/Audio must be transcribed by Whisper turbo first; the transcript, not raw audio, enters Qwen chat history.
+25. The public Vast port is a PixelPilot inference gateway. vLLM binds localhost only; the gateway owns auth, speech transcription and proxying.
+26. Runtime target is 48GB+ VRAM, 100GB disk, 16K model context and $0.50/hour hard rental ceiling.
+27. Qwen2.5-Omni-7B is retired as the default because live personal-use testing showed insufficient general understanding, context following and non-text visual interpretation.
 
 ## Architecture
 
@@ -45,31 +49,27 @@ Output is text. Image generation is no longer part of the project.
 Telegram
   -> Rich Message UI + live response drafts
   -> PixelPilot Controller
-     -> optional owner-configured assistant profile/system message
-     -> authenticated public Vast port
-     -> vLLM OpenAI-compatible API
-     -> Qwen2.5-Omni-7B
+     -> optional owner-visible/editable behavior profile
+     -> authenticated public Vast gateway :8190
+        -> Whisper turbo for Voice/Audio
+        -> private vLLM :8191
+           -> Qwen3-VL-30B-A3B-Instruct-FP8
 ```
 
-No ComfyUI, FLUX workflow, image seed/ratio/batch, or PixelPilot Worker is used in v0.5.x.
+## Runtime defaults — quality profile
 
-## Runtime defaults — economy profile
-
-- Model: `Qwen/Qwen2.5-Omni-7B`
-- dtype: BF16
+- Vision-language model: `Qwen/Qwen3-VL-30B-A3B-Instruct-FP8`
+- Speech model: Whisper `turbo`
 - min GPU VRAM policy: 48 GB
-- disk: 80 GB
+- disk: 100 GB
 - hard Vast price cap: $0.50/hour
-- model context: 8192
+- model context: 16384
 - max output tokens: 2048
-- creativity: 0% (`temperature=0`)
-- diversity: 100% (`top_p=1.0`)
-- response-length control: 100% (full configured max output tokens)
-- repetition guard: 50% (`repetition_penalty=1.1`)
-- one image, one audio and one video input per prompt by default
+- vLLM GPU utilization: 0.82
+- Whisper device: auto (CUDA when safe, CPU fallback)
+- one image and one video per prompt
+- video sampling: 24 frames with frame recovery
 - assistant personality/tone/reasoning/format/language: neutral/automatic until owner changes them
-
-The earlier `Qwen/Qwen3-Omni-30B-A3B-Instruct` profile required 80–96GB-class GPUs and proved too expensive for the intended personal-use workflow. Keep 7B as the default unless the user explicitly chooses a higher-cost quality profile later.
 
 ## Assistant settings
 
