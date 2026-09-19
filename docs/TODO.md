@@ -1,23 +1,27 @@
 # TODO
 
-## Live acceptance — economy profile
+## Live acceptance — Qwen3-VL + Whisper
 
-- Pull the merged v0.4.1 changes on `/opt/pixelpilot`.
-- Run `scripts/migrate_economy_profile.py` so the existing `.env` switches from the old 30B/80GB profile without touching secrets.
-- Confirm Vast search returns suitable 48 GB offers under the new price cap.
-- Rent one reasonably priced 48 GB GPU through the bot.
-- Confirm Qwen2.5-Omni-7B reaches READY.
-- Test Arabic text conversation.
-- Test an Arabic screenshot/photo and follow-up question.
-- Test Telegram Voice (OGG/Opus) and an audio file.
-- Test `/new` really removes previous context.
-- Confirm no message/media content appears in SQLite events.
-- Observe actual VRAM use at 8K context before considering any lower-VRAM experimental profile.
+- Update `/opt/pixelpilot` to merged v0.6.0.
+- Run `scripts/migrate_economy_profile.py` and verify backup created.
+- Confirm marketplace still returns suitable 48GB offers <= $0.50/hour with 100GB disk.
+- Restart/rerent Vast so new bootstrap runs.
+- Confirm READY only after both gateway paths are available.
+- Test normal Arabic conversation and follow-up context.
+- Test a photo with little/no text and ask scene-specific questions.
+- Test a screenshot containing text.
+- Test Telegram Voice in Arabic and a normal audio file.
+- Confirm follow-up to Voice uses transcript context without re-transcribing old audio.
+- Test short and medium MP4 video.
+- Test personality change, then verify immediate style change.
+- Test live `sendMessageDraft` response streaming.
+- Check `diagnose_vast.py` and record actual GPU/Whisper device.
+- Confirm SQLite events contain operational metadata only, not message/transcript/media bodies.
 
 ## Optional later improvements
 
-- Add an explicit ultra-budget `Qwen2.5-Omni-3B` profile for 24GB-class GPUs only if the user accepts its lower quality.
-- Streaming model replies to Telegram.
-- Video input.
-- Multiple media items in one Telegram request.
-- Configurable model profiles without changing the no-system-prompt rule.
+- Expose Whisper device/status in technical diagnostics only.
+- Add a user-selectable higher/lower visual frame budget if real video tests justify it.
+- Consider Qwen3-VL smaller/quantized alternate profile only as an explicit budget mode, never as silent downgrade.
+- Add multiple-image album support.
+
