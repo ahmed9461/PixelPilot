@@ -100,7 +100,7 @@ class InferenceClient:
             models = await self.models()
         except Exception:
             return False
-        return self.model_id in models or bool(models)
+        return self.model_id in models
 
     def _chat_payload(
         self,
