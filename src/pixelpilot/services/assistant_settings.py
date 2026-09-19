@@ -247,16 +247,31 @@ DEFAULT_STATE: dict[str, Any] = {
     "reasoning": "auto",
     "format": "auto",
     "language": "auto",
-    "creativity_pct": 0,
-    "diversity_pct": 100,
+    "creativity_pct": 70,
+    "diversity_pct": 80,
     "response_length_pct": 100,
-    "repetition_guard_pct": 50,
+    "repetition_guard_pct": 0,
     "context_enabled": True,
     "context_messages": 10,
     "custom_prompt": "",
 }
 
 PROMPT_SCHEMA_VERSION = 4
+
+GENERATION_PROFILE_VERSION = 2
+GENERATION_FIELDS = {
+    "creativity_pct",
+    "diversity_pct",
+    "response_length_pct",
+    "repetition_guard_pct",
+}
+LEGACY_GENERATION_DEFAULTS: dict[str, int] = {
+    "creativity_pct": 0,
+    "diversity_pct": 100,
+    "response_length_pct": 100,
+    "repetition_guard_pct": 50,
+}
+
 
 # v0.5.0 shipped shorter starter prompts. If one of those exact values was
 # persisted by "reset all", upgrade it automatically. Any owner-edited value
@@ -321,12 +336,26 @@ def _prompt_key(group: str, key: str) -> str:
 
 async def ensure_defaults(db: Database) -> None:
     state_keys = [_state_key(name) for name in DEFAULT_STATE]
-    current = await db.get_many(state_keys + ["assistant.prompts.version"])
+    current = await db.get_many(
+        state_keys
+        + ["assistant.prompts.version", "assistant.generation.version"]
+        + [f"assistant.generation.edited.{name}" for name in GENERATION_FIELDS]
+    )
     missing = {
         _state_key(name): default
         for name, default in DEFAULT_STATE.items()
         if _state_key(name) not in current
     }
+
+    generation_version = int(current.get("assistant.generation.version") or 0)
+    if generation_version < GENERATION_PROFILE_VERSION:
+        for name in GENERATION_FIELDS:
+            state_key = _state_key(name)
+            current_value = current.get(state_key, LEGACY_GENERATION_DEFAULTS[name])
+            edited = bool(current.get(f"assistant.generation.edited.{name}", False))
+            if not edited and int(current_value) == LEGACY_GENERATION_DEFAULTS[name]:
+                missing[state_key] = DEFAULT_STATE[name]
+        missing["assistant.generation.version"] = GENERATION_PROFILE_VERSION
 
     version = int(current.get("assistant.prompts.version") or 0)
     if version < PROMPT_SCHEMA_VERSION:
@@ -369,7 +398,13 @@ async def get_state(db: Database) -> dict[str, Any]:
 async def set_state(db: Database, name: str, value: Any) -> None:
     if name not in DEFAULT_STATE:
         raise KeyError(name)
-    await db.set(_state_key(name), value)
+    if name in GENERATION_FIELDS:
+        await db.set_many({
+            _state_key(name): value,
+            f"assistant.generation.edited.{name}": True,
+        })
+    else:
+        await db.set(_state_key(name), value)
 
 
 async def get_prompt(db: Database, group: str, key: str) -> str:
@@ -399,6 +434,9 @@ async def reset_all(db: Database) -> None:
         _state_key(name): value for name, value in DEFAULT_STATE.items()
     }
     values["assistant.prompts.version"] = PROMPT_SCHEMA_VERSION
+    values["assistant.generation.version"] = GENERATION_PROFILE_VERSION
+    for name in GENERATION_FIELDS:
+        values[f"assistant.generation.edited.{name}"] = False
     for group, options in GROUPS.items():
         for option in options:
             values[_prompt_key(group, option.key)] = option.prompt
@@ -434,7 +472,7 @@ async def generation_params(db: Database, *, max_output_tokens: int) -> dict[str
     length = max(10, min(100, int(state.get("response_length_pct") or 100)))
     repetition_guard = max(0, min(100, int(state.get("repetition_guard_pct") or 50)))
 
-    temperature = round((creativity / 100.0) * 0.8, 2)
+    temperature = round(creativity / 100.0, 2)
     top_p = round(diversity / 100.0, 2)
     minimum = min(256, max_output_tokens)
     max_tokens = int(minimum + (max_output_tokens - minimum) * (length / 100.0))
@@ -446,6 +484,7 @@ async def generation_params(db: Database, *, max_output_tokens: int) -> dict[str
         "top_p": top_p,
         "max_tokens": max(minimum, min(max_output_tokens, max_tokens)),
         "repetition_penalty": repetition_penalty,
+        "top_k": 20,
     }
 
 
