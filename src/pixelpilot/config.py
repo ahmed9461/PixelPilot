@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     vast_api_key: str = ""
     vast_template_hash: str | None = None
     vast_docker_image: str = "vastai/pytorch:@vastai-automatic-tag"
-    vast_disk_gb: int = 80
+    vast_disk_gb: int = 100
     vast_min_gpu_ram_gb: int = 48
     vast_min_reliability: float = 0.98
     vast_max_price_usd_hour: float = 0.50
@@ -36,24 +36,30 @@ class Settings(BaseSettings):
     pixelpilot_repo_url: str = ""
     pixelpilot_repo_ref: str = "main"
 
-    # Optional Hugging Face read token. Qwen2.5-Omni-7B is public, but a token
-    # can improve authenticated Hub access/rate limits.
+    # Optional Hugging Face read token. The Qwen3-VL FP8 checkpoint is public,
+    # but authenticated Hub access can improve download reliability/rate limits.
     hf_token: str = ""
 
-    # Model / vLLM. The default is the economical 7B Omni profile: one model
-    # understands text, images, audio and video while returning text only.
-    model_id: str = "Qwen/Qwen2.5-Omni-7B"
-    model_dtype: str = "bfloat16"
-    model_max_len: int = 8192
+    # Vision-language model served by vLLM. Qwen3-VL handles text, images and
+    # video; speech is transcribed by Whisper and then passed into Qwen3-VL.
+    model_id: str = "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"
+    model_dtype: str = "auto"
+    model_max_len: int = 16384
     model_max_output_tokens: int = 2048
-    model_gpu_memory_utilization: float = 0.92
+    model_gpu_memory_utilization: float = 0.82
     model_tensor_parallel_size: int = 1
     model_limit_images: int = 1
     model_limit_audio: int = 1
     model_limit_videos: int = 1
 
-    # Public mapped vLLM endpoint on the rented instance.
+    # Speech recognition sidecar on the same temporary GPU instance.
+    whisper_model: str = "turbo"
+    whisper_device: str = "auto"
+
+    # Public mapped gateway endpoint. vLLM itself is bound only to localhost
+    # on a second internal port; the gateway adds Whisper transcription.
     inference_port: int = 8190
+    vllm_internal_port: int = 8191
     inference_use_https: bool = False
     inference_verify_tls: bool = False
     inference_request_timeout_seconds: int = 600
@@ -101,6 +107,7 @@ class Settings(BaseSettings):
         "model_limit_audio",
         "model_limit_videos",
         "inference_port",
+        "vllm_internal_port",
         "inference_request_timeout_seconds",
         "inference_ready_timeout_seconds",
         "chat_history_messages",
@@ -114,17 +121,25 @@ class Settings(BaseSettings):
 
     @field_validator("vast_disk_gb")
     @classmethod
-    def disk_large_enough_for_qwen25_omni(cls, value: int) -> int:
-        if value < 60:
-            raise ValueError("VAST_DISK_GB must be >= 60 for the Qwen2.5-Omni-7B BF16 profile")
+    def disk_large_enough_for_qwen3_vl(cls, value: int) -> int:
+        if value < 90:
+            raise ValueError("VAST_DISK_GB must be >= 90 for Qwen3-VL 30B FP8 + Whisper")
         return value
 
     @field_validator("vast_min_gpu_ram_gb")
     @classmethod
-    def vram_large_enough_for_qwen25_omni(cls, value: int) -> int:
+    def vram_large_enough_for_qwen3_vl(cls, value: int) -> int:
         if value < 48:
-            raise ValueError("VAST_MIN_GPU_RAM_GB must be >= 48 for the supported Qwen2.5-Omni-7B BF16 profile")
+            raise ValueError("VAST_MIN_GPU_RAM_GB must be >= 48 for the supported Qwen3-VL 30B FP8 profile")
         return value
+
+    @field_validator("whisper_device")
+    @classmethod
+    def whisper_device_supported(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"auto", "cuda", "cpu"}:
+            raise ValueError("WHISPER_DEVICE must be auto, cuda, or cpu")
+        return normalized
 
     def validate_runtime(self) -> None:
         missing: list[str] = []
