@@ -72,12 +72,7 @@ class MediaInput:
         if self.kind == "audio":
             return {"type": "audio_url", "audio_url": {"url": url}}
         if self.kind == "video":
-            # Keep visual tokens comfortably inside PixelPilot's 8K context.
-            # Qwen/vLLM supports an explicit frame cap on video_url inputs.
-            return {
-                "type": "video_url",
-                "video_url": {"url": url, "num_frames": 24},
-            }
+            return {"type": "video_url", "video_url": {"url": url}}
         raise ValueError(f"Unsupported media kind: {self.kind}")
 
 
