@@ -256,9 +256,9 @@ class Orchestrator:
                         },
                     )
                     if progress:
-                        await progress("✅ Qwen3-Omni جاهز للمحادثة وفهم الصور والصوت.")
+                        await progress("✅ المساعد جاهز للنص والصورة والفيديو والصوت.")
                     return
-                notice = "السيرفر يعمل؛ جاري تنزيل/تحميل Qwen3-Omni وتشغيل vLLM..."
+                notice = "السيرفر يعمل؛ جاري تجهيز نماذج الفهم والصوت..."
 
             if progress and notice != last_notice:
                 await progress(notice)
@@ -392,6 +392,45 @@ class Orchestrator:
                 await self.db.set("inference.active", False)
                 await self._touch_activity()
 
+    async def transcribe_audio(self, data: bytes, *, mime_type: str) -> str:
+        """Transcribe one audio input through the Whisper sidecar."""
+        if self._inference_lock.locked():
+            raise OrchestratorError("يوجد طلب آخر قيد المعالجة حاليًا")
+
+        async with self._inference_lock:
+            phase = await self.db.get("instance.phase", InstancePhase.NONE.value)
+            instance_id = await self.db.get("instance.id")
+            if phase != InstancePhase.READY.value or not instance_id:
+                raise OrchestratorError("السيرفر غير جاهز للمحادثة")
+
+            await self.db.set("inference.active", True)
+            await self._touch_activity()
+            try:
+                inference = await self._current_inference()
+                transcript = await inference.transcribe_audio(
+                    data,
+                    mime_type=mime_type,
+                    filename="telegram-audio",
+                )
+                await self.db.event(
+                    "speech.transcribed",
+                    {
+                        "instance_id": int(instance_id),
+                        "audio_bytes": len(data),
+                        "transcript_chars": len(transcript),
+                    },
+                )
+                return transcript
+            except Exception as exc:
+                await self.db.event(
+                    "speech.transcription_failed",
+                    {"instance_id": int(instance_id), "error": str(exc)},
+                )
+                raise
+            finally:
+                await self.db.set("inference.active", False)
+                await self._touch_activity()
+
     async def recover_current(self) -> None:
         await self.db.set("inference.active", False)
         await self.db.set("generation.active", False)
@@ -484,13 +523,17 @@ class Orchestrator:
             "HF_TOKEN": self.settings.hf_token,
             "PIXELPILOT_INFERENCE_TOKEN": inference_token,
             "INFERENCE_PORT": str(self.settings.inference_port),
+            "VLLM_INTERNAL_PORT": str(self.settings.vllm_internal_port),
             "MODEL_ID": self.settings.model_id,
             "MODEL_DTYPE": self.settings.model_dtype,
             "MODEL_MAX_LEN": str(self.settings.model_max_len),
             "MODEL_GPU_MEMORY_UTILIZATION": str(self.settings.model_gpu_memory_utilization),
             "MODEL_TENSOR_PARALLEL_SIZE": str(self.settings.model_tensor_parallel_size),
             "MODEL_LIMIT_IMAGES": str(self.settings.model_limit_images),
-            "MODEL_LIMIT_AUDIO": str(self.settings.model_limit_audio),
+            "MODEL_LIMIT_VIDEOS": str(self.settings.model_limit_videos),
+            "WHISPER_MODEL": self.settings.whisper_model,
+            "WHISPER_DEVICE": self.settings.whisper_device,
+            "WHISPER_CACHE": "/workspace/whisper-cache",
             "HF_HOME": "/workspace/hf-cache",
             "DATA_DIRECTORY": "/workspace",
         }
