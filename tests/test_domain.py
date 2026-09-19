@@ -36,8 +36,7 @@ def test_video_uses_openai_video_url_part_without_invented_caption():
             {
                 "type": "video_url",
                 "video_url": {
-                    "url": "data:video/mp4;base64," + base64.b64encode(raw).decode("ascii"),
-                    "num_frames": 24,
+                    "url": "data:video/mp4;base64," + base64.b64encode(raw).decode("ascii")
                 },
             }
         ],
