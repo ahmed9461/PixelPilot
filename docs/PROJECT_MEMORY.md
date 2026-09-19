@@ -26,14 +26,14 @@ Output is text. Image generation is no longer part of the project.
 9. The rental hard ceiling is `$0.50/hour`. PixelPilot must reject any cached/selected offer above that ceiling even if it was visible in an older search.
 10. Offer refresh must perform a fresh marketplace query every time. Compare the new result set with the previously cached set and tell the user whether offers/prices/order actually changed.
 11. Track rental time and estimated active rental cost per second from rent until stop/destroy. Pausing stops the active-time meter; restarting resumes it. Preserve the final billing snapshot after destroy.
-12. Stable text generation starts at `temperature=0`; the owner may deliberately raise creativity from the Assistant Settings UI. The UI value is stored in SQLite and applies on the next request without editing `.env`.
+12. Qwen3-VL generation starts from its published profile: `temperature=0.7`, `top_p=0.8`, `top_k=20`, `repetition_penalty=1.0`. The owner can change creativity/diversity/repetition controls from Telegram; owner-edited values survive automatic profile migrations.
 13. Personality, tone, reasoning depth, formatting, language, custom prompt, context depth and generation controls are runtime owner settings stored in SQLite. Each prompt profile must be viewable, replaceable and resettable from Telegram.
 14. Assistant Settings navigation must be deterministic: a Back button returns to the screen that opened the current screen. Prompt edit/view/reset flows must preserve whether they came from a behavior group or the central prompt hub.
 15. Settings callbacks must feel immediate. Avoid repeated SQLite open/read cycles and avoid Telegram edits that intentionally submit identical text/markup. Use batched KV operations and safe no-op handling.
-16. Built-in behavior profiles are production-quality modular behavior contracts, not one-line style hints. They should define scope, desired behavior, accuracy/adaptation rules and what to avoid, while remaining compact enough to compose without wasting the 8K context window.
+16. Built-in behavior profiles are production-quality modular behavior contracts, not one-line style hints. They should define scope, desired behavior, accuracy/adaptation rules and what to avoid, while remaining compact enough to compose without wasting the 16K context window.
 17. PixelPilot is visual-first. Prefer Telegram-native Rich Messages, structured dashboards and styled action buttons over plain walls of text whenever the feature is available, while preserving a graceful plain-message fallback.
 18. AI replies stream live through Telegram message drafts while vLLM generates. Draft updates must be throttled, ephemeral, and followed by one persistent final response.
-19. Qwen generation uses an owner-adjustable repetition guard. The default 50% maps to `repetition_penalty=1.1`; this prevents the long repeated loops observed in the Arabic story test while preserving deterministic `temperature=0` by default.
+19. Qwen generation uses an owner-adjustable repetition guard. Qwen3-VL starts at 0% (`repetition_penalty=1.0`); the control can raise the penalty to 1.2 if a future workload needs stronger loop suppression.
 20. Personality/tone/reasoning/format/language changes start a new RAM-only conversation context. A new behavior profile must not be diluted by assistant messages generated under the previous profile.
 21. Persona profiles must have an observable everyday voice signature. Task adaptation may reduce stylistic intensity for technical/sensitive work, but it must not make different personalities indistinguishable in normal conversation.
 22. Prompt migrations are versioned and must recognize the immediately previous built-in prompt values. Manual prompt edits are tracked with explicit edit markers and must never be overwritten by automatic schema upgrades.
@@ -79,7 +79,7 @@ The main Telegram menu includes `⚙️ إعدادات المساعد` with:
 - `🧠 الاستدلال`: automatic/fast/balanced/deep/critical response approach.
 - `🧾 التنسيق`: automatic/compact/structured/steps.
 - `🌐 اللغة`: automatic/Arabic/English.
-- `🎚️ التوليد`: creativity, diversity and response length percentages.
+- `🎚️ التوليد`: creativity, diversity, response length and repetition-guard percentages. Qwen3-VL defaults are 70% / 80% / 100% / 0%.
 - `🧠 السياق`: enable/disable RAM-only context, choose retained message depth, clear context.
 - `📝 البرومتات`: view/edit/reset current profile prompts, edit a custom prompt layer, view/export the final composed prompt, reset all settings.
 
