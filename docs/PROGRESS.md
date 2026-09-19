@@ -1,5 +1,29 @@
 # Progress
 
+## 2026-09-19 — v0.6.0 Qwen3-VL + Whisper quality runtime
+
+Completed in code:
+- Switched text/image/video inference to Qwen3-VL-30B-A3B-Instruct-FP8.
+- Added Whisper turbo Voice/Audio transcription.
+- Added authenticated public gateway with private localhost vLLM.
+- Added GPU/CPU Whisper auto-placement.
+- Raised context to 16K and disk policy to 100GB while retaining 48GB VRAM and $0.50/hour ceiling.
+- Converted audio into transcript before conversation history.
+- Added 24-frame video sampling + frame recovery.
+- Updated Controller -> Vast environment propagation and bootstrap.
+- Updated safe installed-.env migration.
+- Updated preflight, docs and test expectations.
+
+Live acceptance after merge:
+- Pull v0.6.0 on `/opt/pixelpilot`.
+- Run `scripts/migrate_economy_profile.py`.
+- Restart Controller.
+- Stop/start the existing Vast instance or rent a fresh one so the new bootstrap runs.
+- Confirm gateway health reports both Qwen3-VL and Whisper ready.
+- Test Arabic conversation, image scene understanding, Voice and video.
+- Confirm live streaming and behavior profiles still work.
+- Observe A6000 VRAM headroom; if Whisper auto-falls back to CPU, record latency before changing GPU utilization.
+
 ## 2026-09-17 — v0.4.2 budget controls and live billing
 
 Completed in code:

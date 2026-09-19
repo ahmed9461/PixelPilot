@@ -240,11 +240,11 @@ async def _show_generation(callback: CallbackQuery, state: dict[str, Any] | None
     await safe_edit_text(
         callback.message,
         "🎚️ <b>إعدادات التوليد</b>\n\n"
-        "🎨 الإبداع: يرفع حرية الصياغة والعشوائية تدريجيًا.\n"
-        "🧪 التنوع: يوسع أو يضيّق نطاق الاحتمالات اللغوية.\n"
+        "🎨 الإبداع: يتحكم بدرجة العشوائية في الصياغة.\n"
+        "🧪 التنوع: يتحكم بنطاق الاحتمالات اللغوية.\n"
         "📏 طول الرد: يتحكم بالحد الأقصى التقريبي للإجابة.\n"
-        "🔁 منع التكرار: يقلل دخول الموديل في حلقات إعادة الجمل والفقرات.\n\n"
-        "القيمة 50% لمنع التكرار تعادل الإعداد الموصى به للموديل (1.1).",
+        "🔁 منع التكرار: يرفع عقوبة إعادة الكلمات والجمل عند الحاجة.\n\n"
+        "الافتراضي مضبوط على ملف Qwen3-VL: 70% إبداع، 80% تنوع، و0% منع تكرار.",
         reply_markup=_generation_keyboard(state),
     )
 
@@ -285,6 +285,11 @@ async def reset_generation(callback: CallbackQuery) -> None:
         "assistant.state.diversity_pct": DEFAULT_STATE["diversity_pct"],
         "assistant.state.response_length_pct": DEFAULT_STATE["response_length_pct"],
         "assistant.state.repetition_guard_pct": DEFAULT_STATE["repetition_guard_pct"],
+        "assistant.generation.version": 2,
+        "assistant.generation.edited.creativity_pct": False,
+        "assistant.generation.edited.diversity_pct": False,
+        "assistant.generation.edited.response_length_pct": False,
+        "assistant.generation.edited.repetition_guard_pct": False,
     })
     state = await get_state(orch().db)
     await _show_generation(callback, state)

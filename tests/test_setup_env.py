@@ -67,10 +67,14 @@ def test_economy_migration_preserves_secrets_and_updates_only_profile_values():
     assert "TELEGRAM_BOT_TOKEN=tg-secret" in updated
     assert "VAST_API_KEY=vast-secret" in updated
     assert "HF_TOKEN=hf-secret" in updated
-    assert "MODEL_ID=Qwen/Qwen2.5-Omni-7B" in updated
+    assert "MODEL_ID=Qwen/Qwen3-VL-30B-A3B-Instruct-FP8" in updated
     assert "VAST_MIN_GPU_RAM_GB=48" in updated
-    assert "VAST_DISK_GB=80" in updated
+    assert "VAST_DISK_GB=100" in updated
     assert "VAST_MAX_PRICE_USD_HOUR=0.50" in updated
+    assert "MODEL_MAX_LEN=16384" in updated
+    assert "MODEL_GPU_MEMORY_UTILIZATION=0.82" in updated
+    assert "WHISPER_MODEL=turbo" in updated
+    assert "VLLM_INTERNAL_PORT=8191" in updated
 
 
 def test_economy_migration_creates_backup(tmp_path: Path):
@@ -82,5 +86,5 @@ def test_economy_migration_creates_backup(tmp_path: Path):
     assert "MODEL_ID=old" in backup.read_text(encoding="utf-8")
     assert "TELEGRAM_BOT_TOKEN=secret" in env_path.read_text(encoding="utf-8")
     body = env_path.read_text(encoding="utf-8")
-    assert "MODEL_ID=Qwen/Qwen2.5-Omni-7B" in body
+    assert "MODEL_ID=Qwen/Qwen3-VL-30B-A3B-Instruct-FP8" in body
     assert "VAST_MAX_PRICE_USD_HOUR=0.50" in body

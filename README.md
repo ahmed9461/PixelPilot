@@ -1,137 +1,159 @@
 # PixelPilot
 
-PixelPilot هو بوت Telegram شخصي Owner-only يحوّل Vast.ai إلى مساعد متعدد الوسائط عند الطلب.
+PixelPilot هو بوت Telegram شخصي Owner-only يحوّل Vast.ai إلى مساعد متعدد الوسائط مؤقت عند الطلب.
 
-الملف الافتراضي الحالي يستخدم:
-
-```text
-Qwen/Qwen2.5-Omni-7B
-```
-
-وهو أخف بكثير من Qwen3-Omni 30B الذي استُخدم في أول تجربة، لذلك يستهدف PixelPilot الآن بطاقات GPU بذاكرة **48GB** بدل 80–96GB، مع الحفاظ على فهم **النص والصورة والصوت**.
+## Runtime الحالي
 
 ```text
-Telegram -> PixelPilot Controller -> Vast.ai -> vLLM -> Qwen2.5-Omni-7B
+Text / Image / Video -> Qwen/Qwen3-VL-30B-A3B-Instruct-FP8
+Voice / Audio        -> Whisper turbo -> Qwen3-VL
 ```
 
-المشروع لا يولّد صورًا. وظيفته الحالية هي **المحادثة النصية وفهم الصور وفهم الصوت**. لا يوجد GPU ثابت: تبحث من البوت عن عرض مناسب، تستأجره، PixelPilot يجهز vLLM والموديل تلقائيًا، ثم تحذف الـInstance عندما تنتهي.
+المعمارية الافتراضية:
 
-## مبدأ مهم: لا System Prompt
+```text
+Telegram
+  -> PixelPilot Controller
+  -> public authenticated inference gateway on Vast
+       -> Whisper turbo for speech transcription
+       -> private localhost vLLM
+            -> Qwen3-VL-30B-A3B-Instruct-FP8
+```
 
-PixelPilot لا يضيف `system` أو `developer` message، ولا يترجم كلام المستخدم، ولا يعيد صياغته، ولا يفرض لغة على الموديل.
+Qwen3-VL هو المسؤول عن الفهم والحوار والرؤية والفيديو. Whisper مسؤول فقط عن تحويل الكلام المسموع إلى نص؛ النص الناتج يدخل إلى نفس سياق Qwen3-VL، لذلك أسئلة المتابعة تعمل بشكل طبيعي ولا يعاد إرسال ملف الصوت في كل Turn.
 
-- النص يمر كما كتبه المستخدم.
-- الصورة تمر للموديل كمدخل بصري فعلي، وليس OCR فقط.
-- Voice/Audio يمر للموديل كمدخل صوتي فعلي.
-- Caption المرفق بالصورة/الصوت يمر كما هو.
-- إذا أُرسلت صورة أو صوت بلا Caption، لا يخترع PixelPilot تعليمات مخفية من عنده.
+المشروع لا يولّد صورًا.
 
-المحادثة الحالية تحفظ في RAM فقط على Controller كي تعمل أسئلة المتابعة. الأمر `/new` أو زر **محادثة جديدة** يمسح السياق. محتوى المحادثة لا يُكتب إلى SQLite؛ سجل الأحداث يحفظ metadata تشغيلية فقط.
+## لماذا Qwen3-VL 30B FP8؟
 
-## ما يعمل
+التجربة الحية مع Qwen2.5-Omni-7B أظهرت أن جودة الفهم العام والرؤية واتباع السياق أقل من المطلوب للاستخدام الشخصي المقصود. لذلك انتقل المشروع إلى Qwen3-VL 30B-A3B Instruct FP8 بدل الاستمرار في ترقيع موديل أصغر.
 
-- Owner-only Telegram bot.
-- البحث عن عروض Vast حسب VRAM والسعر والموثوقية والقرص والشبكة.
-- سقف استئجار صلب `$0.50/hour` مع تحقق ثانٍ قبل الإنشاء.
-- تحديث حقيقي للعروض في كل ضغطة مع مقارنة النتائج بالتحديث السابق.
-- Rent / Start / Stop / Destroy وإعادة استعادة حالة الـInstance بعد Restart.
-- عداد فوترة نشط بالثانية يحسب وقت التشغيل والتكلفة التقديرية ويحفظ ملخصًا نهائيًا بعد الحذف.
-- Bootstrap تلقائي لـ vLLM وQwen2.5-Omni-7B على السيرفر المؤقت.
-- Endpoint محمي بمفتاح عشوائي خاص بكل Instance.
-- رسائل نصية عربية/إنجليزية وغيرها.
-- الصور وملفات الصور.
-- Telegram Voice والملفات الصوتية.
-- سياق محادثة قصير في الذاكرة فقط، مع `/new` للمسح.
-- Preflight قبل الاستئجار.
-- Cost Guard للتنبيه على GPU الخامل؛ الحذف التلقائي اختياري ومغلق افتراضيًا.
-- SQLite لحالة السيرفر والأحداث التشغيلية وعداد الفوترة فقط.
-- اختبارات تمنع إعادة إدخال System Prompt بالخطأ.
-
-## لماذا Qwen2.5-Omni-7B؟
-
-الهدف هو توازن أفضل بين الجودة والتكلفة للاستخدام الشخصي. النموذج يدعم النص والصور والصوت والفيديو في نموذج واحد، وvLLM يدعم تقديمه عبر OpenAI-compatible API مع مخرجات نصية. مستودع النموذج أصغر بكثير من Qwen3-Omni 30B، لذلك يمكن استهداف فئة 48GB GPU بدل البطاقات 80–96GB مرتفعة السعر.
+النسخة FP8 حجمها أصغر من BF16 وتستهدف فئة 48GB GPU. على Ampere مثل RTX A6000 يستطيع vLLM تشغيل FP8 كـ weight-only W8A16 باستخدام Marlin، بينما البطاقات الأحدث تستفيد من مسارات FP8 الأصلية.
 
 المصادر الرسمية:
-
-- Qwen2.5-Omni: https://github.com/QwenLM/Qwen2.5-Omni
-- Model: https://huggingface.co/Qwen/Qwen2.5-Omni-7B
-- vLLM serving: https://docs.vllm.ai/
+- Qwen3-VL FP8: https://huggingface.co/Qwen/Qwen3-VL-30B-A3B-Instruct-FP8
+- vLLM: https://docs.vllm.ai/
+- Whisper: https://github.com/openai/whisper
 - Vast.ai: https://docs.vast.ai/
 
-## العتاد الافتراضي الاقتصادي
+## القدرات
 
-الملف `.env.example` يبدأ بهذه السياسة:
+- محادثة نصية مع سياق RAM-only.
+- فهم صور فعلي عبر Qwen3-VL.
+- فهم فيديو عبر Qwen3-VL مع sampling مضبوط للإطارات.
+- Telegram Voice والملفات الصوتية عبر Whisper turbo.
+- Streaming حي للرد عبر Telegram message drafts.
+- Rich Messages وRTL وأزرار Telegram الحديثة.
+- شخصيات/سمات/استدلال/تنسيق/لغة قابلة للتعديل من داخل البوت.
+- كل Prompt مستخدم في السلوك قابل للعرض والاستبدال والاستعادة من Telegram.
+- Rent / Start / Stop / Destroy لسيرفر Vast.
+- بحث سوق حي مع سقف استئجار صلب `$0.50/hour`.
+- عداد وقت وتكلفة تقديرية بالثانية.
+- Cost Guard وPreflight واستعادة حالة الـInstance بعد Restart.
+
+## السلوك والبرومتات
+
+الوضع المحايد الافتراضي لا يضيف Prompt سلوكي. عندما يختار المالك شخصية أو سمة أو استدلال أو تنسيق أو لغة، PixelPilot يجمع فقط الأجزاء المرئية والقابلة للتعديل داخل **إعدادات المساعد** في System message واحدة.
+
+لا توجد System/Developer instructions مخفية خارج ما يستطيع المالك رؤيته وتعديله.
+
+تغيير ملف السلوك يبدأ سياق RAM جديد حتى لا تؤثر ردود الشخصية السابقة على الشخصية الجديدة.
+
+## الصوت
+
+الصوت لا يذهب إلى Qwen3-VL كـ audio tokens. التدفق:
+
+1. Telegram يرسل Voice/Audio إلى Controller.
+2. الملف يرسل إلى Whisper turbo على نفس Vast instance.
+3. Whisper يعيد transcript.
+4. Controller يضع transcript بدل الملف الصوتي في رسالة المستخدم.
+5. Qwen3-VL يفهم transcript ضمن نفس الشخصية والسياق.
+6. history يحتفظ بالنص فقط، وليس ملف الصوت/base64.
+
+هذا يمنع تضخم السياق وإعادة معالجة نفس الصوت في كل رسالة متابعة.
+
+## الفيديو
+
+الفيديو يرسل كـ `video_url` فعلي إلى Qwen3-VL. vLLM مضبوط افتراضيًا على:
+- فيديو واحد لكل Prompt.
+- 24 إطارًا sampled.
+- frame recovery للفيديوهات غير المثالية.
+- Context بطول 16384.
+
+عند إرسال فيديو جديد لا يتم إرفاق History القديم بذلك الطلب حتى لا يستهلك الفيديو + المحادثة السابقة نافذة السياق قبل بدء الإجابة.
+
+## العتاد الافتراضي
+
+`.env.example` يبدأ بسياسة:
 
 - GPU VRAM: `48 GB` أو أكثر.
-- Disk: `80 GB`.
-- Model context: `8192`.
-- BF16 على GPU واحد.
-- سقف السعر الصلب للبحث والاستئجار: `$0.50/hour`.
+- Disk: `100 GB`.
+- Model context: `16384`.
+- Qwen3-VL checkpoint: FP8.
+- vLLM GPU utilization: `0.82` لترك headroom لـ Whisper.
+- Whisper device: `auto`؛ يستخدم CUDA إذا وجد ذاكرة حرة كافية وإلا يعود إلى CPU.
+- سقف السعر: `$0.50/hour`.
 
-هذه الإعدادات تستهدف بطاقات مثل A6000 / RTX 6000 Ada / L40S وغيرها من فئة 48GB. إذا لم توجد عروض تحت الحد، ينتظر المستخدم تحديث السوق بدل استئجار عرض أغلى تلقائيًا.
+بطاقات مثل RTX A6000 يمكن أن تشغل الملف الحالي، مع ملاحظة أن FP8 على Ampere يستخدم weight-only Marlin وليس FP8 compute الأصلي.
 
-## تحديث العروض
+## المنافذ
 
-زر **تحديث العروض** لا يعيد استخدام القائمة المخزنة كأنها جديدة. كل ضغطة تنفذ بحثًا جديدًا في السوق ثم تقارن النتيجة بالقائمة السابقة. الواجهة توضح إن كانت النتائج نفسها، أو ظهرت/اختفت عروض، أو تغيّرت الأسعار/الترتيب.
+- `8190`: PixelPilot inference gateway — هو المنفذ الوحيد المعروض للعامة ومحمّي Bearer token.
+- `8191`: vLLM داخلي على `127.0.0.1` فقط.
 
-## عداد الفوترة
+الـGateway يقدّم:
+- `/health`
+- `/v1/models`
+- `/v1/chat/completions`
+- `/v1/audio/transcriptions`
 
-عند نجاح إنشاء عقد الاستئجار يبدأ عداد محلي بالثانية باستخدام السعر المتعاقد. شاشة الحالة تعرض وقت التشغيل المحتسب والتكلفة التقديرية الحالية. عند الإيقاف يتوقف عداد وقت التشغيل، وعند إعادة التشغيل يستأنف، وعند الحذف يحفظ PixelPilot آخر ملخص ويعرضه للمستخدم.
+## ترقية تثبيت موجود
 
-العداد يخص تكلفة الاستئجار النشط المحسوبة من السعر والوقت. Vast قد يفرض رسوم تخزين أو نقل بيانات منفصلة، خصوصًا أن التخزين قد يستمر أثناء توقف الـInstance.
+بعد Pull للإصدار الجديد:
+
+```bash
+cd /opt/pixelpilot
+git pull --ff-only origin main
+/opt/pixelpilot/.venv/bin/python -m pip install -e .
+/opt/pixelpilot/.venv/bin/python scripts/migrate_economy_profile.py
+systemctl restart pixelpilot.service
+```
+
+سكريبت migration:
+- يأخذ Backup من `.env`.
+- لا يغيّر Telegram token أو Vast API key أو HF token.
+- ينقل Profile التشغيل إلى Qwen3-VL + Whisper.
+
+أي Vast instance يعمل بالـruntime القديم يحتاج **Stop ثم Start** بعد تحديث Controller، أو حذفه واستئجار Instance جديد، حتى يعيد `onstart` جلب `main` وتشغيل bootstrap الجديد.
 
 ## الإعداد الأول
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 pip install -e ".[dev]"
 python scripts/configure_secrets.py
 python scripts/preflight.py
 python -m pixelpilot.main
 ```
 
-المطلوب في `.env` على الأقل:
-
+القيم المطلوبة:
 - `TELEGRAM_BOT_TOKEN`
 - `OWNER_TELEGRAM_ID`
 - `VAST_API_KEY`
 - `PIXELPILOT_REPO_URL` أو `VAST_TEMPLATE_HASH`
 
-`HF_TOKEN` اختياري لأن الموديل عام.
+`HF_TOKEN` اختياري.
 
-## التشغيل عبر Docker
+## الخصوصية والأمان
 
-```bash
-docker compose up -d --build
-docker compose logs -f
-```
-
-قاعدة البيانات تحفظ في `./data/pixelpilot.sqlite3`.
-
-## تدفق الاستخدام
-
-1. `/start`
-2. `🧪 فحص الجاهزية`
-3. `🔎 البحث عن سيرفر`
-4. مراجعة السعر والـGPU
-5. `🚀 استئجار وتجهيز`
-6. انتظار رسالة جاهزية الموديل
-7. إرسال نص أو صورة أو Voice/Audio مباشرة للبوت
-8. `/new` عند الرغبة في بدء سياق جديد
-9. `📊 حالة السيرفر` لمتابعة وقت التشغيل والتكلفة
-10. `🗑 حذف السيرفر` عند الانتهاء لإيقاف تكلفة الـInstance
-
-## الأمان والخصوصية
-
-- `VAST_API_KEY` يبقى على Controller ولا يُرسل إلى GPU instance.
-- الـInstance يأخذ token عشوائي للـInference API و`HF_TOKEN` فقط إن كان مضبوطًا.
-- vLLM API يتطلب Bearer token عشوائي خاص بالـInstance.
-- لا تضع `.env` أو أي token في Git.
-- لا يوجد System Prompt مخفي داخل PixelPilot.
-- رسائل المستخدم وصوره وصوته لا تُحفظ في SQLite.
-- ذاكرة المحادثة الحالية RAM-only وتختفي عند `/new` أو Restart للـController.
-- حذف Vast instance يمسح كاش الموديل والبيانات الموجودة على ذلك السيرفر المؤقت.
+- `VAST_API_KEY` يبقى على Controller.
+- الـGPU instance يأخذ inference token عشوائي وHF token فقط إذا تم ضبطه.
+- vLLM لا يتعرض مباشرة للإنترنت؛ الـGateway فقط هو public.
+- رسائل المستخدم ووسائطه لا تُكتب في SQLite.
+- Conversation history في RAM فقط.
+- حذف Vast instance يمسح الـruntime والكاش على السيرفر المؤقت.
+- لا تضع `.env` أو أي Token في Git.
 
 ## ذاكرة المشروع
 

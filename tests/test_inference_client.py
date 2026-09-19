@@ -28,7 +28,8 @@ def test_chat_uses_stable_defaults_without_rewriting_messages():
             "max_tokens": 123,
             "temperature": 0.0,
             "top_p": 1.0,
-            "repetition_penalty": 1.1,
+            "repetition_penalty": 1.0,
+            "top_k": 20,
         }
         assert client.payload["messages"] is messages
     asyncio.run(scenario())
@@ -44,11 +45,12 @@ def test_chat_accepts_owner_selected_generation_controls():
                 self.payload = kwargs.get("json")
                 return httpx.Response(200, json={"model": "model-id", "choices": [{"message": {"role": "assistant", "content": "ok"}}]})
         client = CapturingClient()
-        await client.chat([{"role": "user", "content": "hi"}], max_tokens=777, temperature=0.4, top_p=0.8, repetition_penalty=1.16)
+        await client.chat([{"role": "user", "content": "hi"}], max_tokens=777, temperature=0.4, top_p=0.8, repetition_penalty=1.16, top_k=25)
         assert client.payload["max_tokens"] == 777
         assert client.payload["temperature"] == 0.4
         assert client.payload["top_p"] == 0.8
         assert client.payload["repetition_penalty"] == 1.16
+        assert client.payload["top_k"] == 25
     asyncio.run(scenario())
 
 
@@ -62,6 +64,7 @@ def test_stream_payload_and_sse_delta_parser():
         temperature=0.2,
         top_p=0.9,
         repetition_penalty=1.1,
+        top_k=20,
         stream=True,
     )
     assert payload == {
@@ -71,6 +74,7 @@ def test_stream_payload_and_sse_delta_parser():
         "temperature": 0.2,
         "top_p": 0.9,
         "repetition_penalty": 1.1,
+        "top_k": 20,
         "stream": True,
     }
     assert _extract_stream_delta(
@@ -81,3 +85,51 @@ def test_stream_payload_and_sse_delta_parser():
     ) == "اً"
     assert _extract_stream_delta("data: [DONE]") is None
     assert _extract_stream_delta("event: ping") is None
+
+
+
+def test_audio_transcription_uses_gateway_endpoint():
+    async def scenario():
+        class CapturingClient(InferenceClient):
+            def __init__(self):
+                super().__init__("http://example.invalid", "secret", "model-id")
+                self.method = None
+                self.path = None
+                self.kwargs = None
+
+            async def _request(self, method, path, **kwargs):
+                self.method = method
+                self.path = path
+                self.kwargs = kwargs
+                return httpx.Response(200, json={"text": "مرحبا من الصوت"})
+
+        client = CapturingClient()
+        text = await client.transcribe_audio(b"audio-bytes", mime_type="audio/ogg")
+        assert text == "مرحبا من الصوت"
+        assert client.method == "POST"
+        assert client.path == "/v1/audio/transcriptions"
+        assert client.kwargs["data"]["model"] == "turbo"
+        file_tuple = client.kwargs["files"]["file"]
+        assert file_tuple[1] == b"audio-bytes"
+        assert file_tuple[2] == "audio/ogg"
+
+    asyncio.run(scenario())
+
+
+
+def test_ready_requires_the_configured_model_not_just_any_model():
+    async def scenario():
+        class ModelsClient(InferenceClient):
+            def __init__(self, models):
+                super().__init__("http://example.invalid", "secret", "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8")
+                self._models = models
+            async def health(self):
+                return True
+            async def models(self):
+                return self._models
+
+        assert await ModelsClient(["Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"]).is_ready() is True
+        assert await ModelsClient(["Qwen/Qwen2.5-Omni-7B"]).is_ready() is False
+        assert await ModelsClient([]).is_ready() is False
+
+    asyncio.run(scenario())

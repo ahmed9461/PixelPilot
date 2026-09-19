@@ -14,7 +14,7 @@ class InferenceError(RuntimeError):
 
 
 class InferenceClient:
-    """Thin client for the OpenAI-compatible vLLM endpoint on the rented GPU."""
+    """Client for PixelPilot's authenticated inference gateway on the rented GPU."""
 
     def __init__(
         self,
@@ -62,6 +62,25 @@ class InferenceClient:
         except Exception:
             return False
 
+    async def transcribe_audio(
+        self,
+        data: bytes,
+        *,
+        mime_type: str,
+        filename: str = "audio",
+    ) -> str:
+        response = await self._request(
+            "POST",
+            "/v1/audio/transcriptions",
+            files={"file": (filename, data, mime_type)},
+            data={"model": "turbo"},
+        )
+        payload = response.json()
+        text = payload.get("text") if isinstance(payload, dict) else None
+        if not isinstance(text, str) or not text.strip():
+            raise InferenceError("Speech transcription returned no text")
+        return text.strip()
+
     async def models(self) -> list[str]:
         response = await self._request("GET", "/v1/models")
         payload = response.json()
@@ -81,7 +100,7 @@ class InferenceClient:
             models = await self.models()
         except Exception:
             return False
-        return self.model_id in models or bool(models)
+        return self.model_id in models
 
     def _chat_payload(
         self,
@@ -91,6 +110,7 @@ class InferenceClient:
         temperature: float,
         top_p: float,
         repetition_penalty: float,
+        top_k: int,
         stream: bool = False,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -100,6 +120,7 @@ class InferenceClient:
             "temperature": float(temperature),
             "top_p": float(top_p),
             "repetition_penalty": float(repetition_penalty),
+            "top_k": int(top_k),
         }
         if stream:
             payload["stream"] = True
@@ -112,7 +133,8 @@ class InferenceClient:
         max_tokens: int = 2048,
         temperature: float = 0.0,
         top_p: float = 1.0,
-        repetition_penalty: float = 1.1,
+        repetition_penalty: float = 1.0,
+        top_k: int = 20,
     ) -> InferenceResult:
         # PixelPilot does not rewrite the supplied conversation here. Any
         # optional persona/style prompt is explicitly assembled by the
@@ -123,6 +145,7 @@ class InferenceClient:
             temperature=temperature,
             top_p=top_p,
             repetition_penalty=repetition_penalty,
+            top_k=top_k,
         )
         response = await self._request("POST", "/v1/chat/completions", json=payload)
         data = response.json()
@@ -158,7 +181,8 @@ class InferenceClient:
         max_tokens: int = 2048,
         temperature: float = 0.0,
         top_p: float = 1.0,
-        repetition_penalty: float = 1.1,
+        repetition_penalty: float = 1.0,
+        top_k: int = 20,
     ) -> AsyncIterator[str]:
         """Yield text deltas from vLLM's OpenAI-compatible SSE stream."""
         payload = self._chat_payload(
@@ -167,6 +191,7 @@ class InferenceClient:
             temperature=temperature,
             top_p=top_p,
             repetition_penalty=repetition_penalty,
+            top_k=top_k,
             stream=True,
         )
         async with httpx.AsyncClient(
