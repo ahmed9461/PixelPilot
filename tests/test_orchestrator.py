@@ -37,9 +37,11 @@ class FakeVast:
 class FakeInference:
     def __init__(self): self.messages = None
     async def is_ready(self): return True
+    async def transcribe_audio(self, data, *, mime_type, filename="audio"):
+        return "مرحبا من الصوت"
     async def chat(self, messages, max_tokens):
         self.messages = messages
-        return InferenceResult(text="أهلًا بك", model="Qwen/Qwen2.5-Omni-7B")
+        return InferenceResult(text="أهلًا بك", model="Qwen/Qwen3-VL-30B-A3B-Instruct-FP8")
 
 
 def test_orchestrator_full_fake_lifecycle(tmp_path):
@@ -52,13 +54,18 @@ def test_orchestrator_full_fake_lifecycle(tmp_path):
         await orch.rent_and_prepare(77)
         assert await db.get("instance.phase") == "ready"
         assert "PIXELPILOT_INFERENCE_TOKEN" in vast.create_kwargs["env"]
-        assert "MODEL_ID=Qwen/Qwen2.5-Omni-7B" in vast.create_kwargs["env"]
-        assert "MODEL_MAX_LEN=8192" in vast.create_kwargs["env"]
+        assert "MODEL_ID=Qwen/Qwen3-VL-30B-A3B-Instruct-FP8" in vast.create_kwargs["env"]
+        assert "MODEL_MAX_LEN=16384" in vast.create_kwargs["env"]
+        assert "WHISPER_MODEL=turbo" in vast.create_kwargs["env"]
+        assert "VLLM_INTERNAL_PORT=8191" in vast.create_kwargs["env"]
+        assert "MODEL_LIMIT_VIDEOS=1" in vast.create_kwargs["env"]
         assert "COMFY" not in vast.create_kwargs["env"]
         messages = [{"role": "user", "content": "مرحبا"}]
+        transcript = await orch.transcribe_audio(b"voice", mime_type="audio/ogg")
+        assert transcript == "مرحبا من الصوت"
         result = await orch.chat(messages)
         assert result.text == "أهلًا بك" and inference.messages == messages
-        assert result.model == "Qwen/Qwen2.5-Omni-7B"
+        assert result.model == "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"
         assert all(item.get("role") != "system" for item in inference.messages)
         assert await orch.stop_current() is True and vast.stopped == [321]
         assert await orch.start_current() is True and vast.started == [321]
