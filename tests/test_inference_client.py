@@ -28,7 +28,8 @@ def test_chat_uses_stable_defaults_without_rewriting_messages():
             "max_tokens": 123,
             "temperature": 0.0,
             "top_p": 1.0,
-            "repetition_penalty": 1.1,
+            "repetition_penalty": 1.0,
+            "top_k": 20,
         }
         assert client.payload["messages"] is messages
     asyncio.run(scenario())
@@ -44,11 +45,12 @@ def test_chat_accepts_owner_selected_generation_controls():
                 self.payload = kwargs.get("json")
                 return httpx.Response(200, json={"model": "model-id", "choices": [{"message": {"role": "assistant", "content": "ok"}}]})
         client = CapturingClient()
-        await client.chat([{"role": "user", "content": "hi"}], max_tokens=777, temperature=0.4, top_p=0.8, repetition_penalty=1.16)
+        await client.chat([{"role": "user", "content": "hi"}], max_tokens=777, temperature=0.4, top_p=0.8, repetition_penalty=1.16, top_k=25)
         assert client.payload["max_tokens"] == 777
         assert client.payload["temperature"] == 0.4
         assert client.payload["top_p"] == 0.8
         assert client.payload["repetition_penalty"] == 1.16
+        assert client.payload["top_k"] == 25
     asyncio.run(scenario())
 
 
@@ -62,6 +64,7 @@ def test_stream_payload_and_sse_delta_parser():
         temperature=0.2,
         top_p=0.9,
         repetition_penalty=1.1,
+        top_k=20,
         stream=True,
     )
     assert payload == {
@@ -71,6 +74,7 @@ def test_stream_payload_and_sse_delta_parser():
         "temperature": 0.2,
         "top_p": 0.9,
         "repetition_penalty": 1.1,
+        "top_k": 20,
         "stream": True,
     }
     assert _extract_stream_delta(
