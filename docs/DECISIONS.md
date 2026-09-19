@@ -1,5 +1,28 @@
 # Decisions
 
+## 2026-09-19 — Qwen3-VL 30B FP8 + Whisper replaces Qwen2.5-Omni
+
+Live testing established that Qwen2.5-Omni-7B does not meet the intended personal-assistant quality bar for context following, nuanced instruction following and non-text visual understanding. Stop spending engineering effort trying to prompt around that model ceiling.
+
+Use `Qwen/Qwen3-VL-30B-A3B-Instruct-FP8` for text, images and video. Use OpenAI Whisper `turbo` for speech transcription, then send the transcript through Qwen3-VL so Voice/Audio shares the same reasoning, personality and conversation path.
+
+Keep the 48GB Vast policy and $0.50/hour hard ceiling. The FP8 checkpoint is intended to make the 30B-A3B model practical on that class; Ampere uses vLLM's weight-only FP8/Marlin path rather than native FP8 compute.
+
+## 2026-09-19 — Public inference gateway, private vLLM
+
+Port 8190 is an authenticated PixelPilot gateway. vLLM binds only to `127.0.0.1:8191`. The gateway proxies OpenAI-compatible chat/models/health requests and owns Whisper transcription.
+
+Whisper auto-selects CUDA only if enough free VRAM remains after vLLM starts; otherwise it falls back to CPU. vLLM reserves 0.82 of GPU memory to leave speech headroom.
+
+## 2026-09-19 — Speech becomes transcript before chat history
+
+Telegram Voice/Audio is transcribed before constructing the Qwen conversation turn. Store only the transcript in RAM history. Never keep/re-send audio base64 on future turns. If a caption exists, append it as user text after the transcript without inventing instructions.
+
+## 2026-09-19 — Qwen3-VL video budget
+
+Use 16K model context. vLLM samples 24 frames per video globally with frame recovery. A fresh video turn clears old RAM history before construction so previous conversation cannot crowd out visual tokens.
+
+
 ## 2026-09-18 — Repair prompt migrations and preserve manual edits
 
 Prompt schema migrations must not rely only on very old starter prompt values. Schema v4 explicitly recognizes the v0.5.1/v0.5.2 persona defaults so installations that were incorrectly marked v3 are upgraded on the next controller restart. Every manual prompt edit writes an `assistant.prompt.edited.*` marker; reset clears that marker. Automatic upgrades must preserve marked owner edits.
