@@ -49,7 +49,6 @@ class Settings(BaseSettings):
     model_gpu_memory_utilization: float = 0.82
     model_tensor_parallel_size: int = 1
     model_limit_images: int = 1
-    model_limit_audio: int = 1
     model_limit_videos: int = 1
 
     # Speech recognition sidecar on the same temporary GPU instance.
@@ -104,7 +103,6 @@ class Settings(BaseSettings):
         "model_max_output_tokens",
         "model_tensor_parallel_size",
         "model_limit_images",
-        "model_limit_audio",
         "model_limit_videos",
         "inference_port",
         "vllm_internal_port",
