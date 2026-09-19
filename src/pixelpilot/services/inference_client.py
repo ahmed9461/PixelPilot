@@ -62,6 +62,25 @@ class InferenceClient:
         except Exception:
             return False
 
+    async def transcribe_audio(
+        self,
+        data: bytes,
+        *,
+        mime_type: str,
+        filename: str = "audio",
+    ) -> str:
+        response = await self._request(
+            "POST",
+            "/v1/audio/transcriptions",
+            files={"file": (filename, data, mime_type)},
+            data={"model": "turbo"},
+        )
+        payload = response.json()
+        text = payload.get("text") if isinstance(payload, dict) else None
+        if not isinstance(text, str) or not text.strip():
+            raise InferenceError("Speech transcription returned no text")
+        return text.strip()
+
     async def models(self) -> list[str]:
         response = await self._request("GET", "/v1/models")
         payload = response.json()
