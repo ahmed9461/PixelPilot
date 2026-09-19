@@ -22,12 +22,13 @@ def test_default_profile_has_no_hidden_prompt_and_stable_sampling(tmp_path):
         state = await get_state(db)
         assert state["persona"] == "neutral"
         assert state["tone"] == "balanced"
-        assert state["diversity_pct"] == 100
+        assert state["creativity_pct"] == 70
+        assert state["diversity_pct"] == 80
         assert state["response_length_pct"] == 100
-        assert state["repetition_guard_pct"] == 50
+        assert state["repetition_guard_pct"] == 0
         assert await effective_system_prompt(db) == ""
         params = await generation_params(db, max_output_tokens=2048)
-        assert params == {"temperature": 0.0, "top_p": 1.0, "max_tokens": 2048, "repetition_penalty": 1.1}
+        assert params == {"temperature": 0.7, "top_p": 0.8, "max_tokens": 2048, "repetition_penalty": 1.0, "top_k": 20}
     asyncio.run(scenario())
 
 
@@ -62,7 +63,7 @@ def test_generation_percentages_and_context_are_runtime_settings(tmp_path):
         await set_state(db, "response_length_pct", 100)
         await set_state(db, "repetition_guard_pct", 80)
         params = await generation_params(db, max_output_tokens=2048)
-        assert params == {"temperature": 0.4, "top_p": 0.8, "max_tokens": 2048, "repetition_penalty": 1.16}
+        assert params == {"temperature": 0.5, "top_p": 0.8, "max_tokens": 2048, "repetition_penalty": 1.16, "top_k": 20}
 
         await set_state(db, "context_enabled", False)
         await set_state(db, "context_messages", 20)
@@ -133,5 +134,48 @@ def test_manual_prompt_edit_marker_is_written_and_reset(tmp_path):
         assert await db.get("assistant.prompt.edited.persona.dramatic") is True
         await reset_prompt(db, "persona", "dramatic")
         assert await db.get("assistant.prompt.edited.persona.dramatic") is False
+
+    asyncio.run(scenario())
+
+
+
+def test_legacy_generation_defaults_migrate_to_qwen3_vl_profile(tmp_path):
+    async def scenario():
+        db = Database(tmp_path / "settings.sqlite3")
+        await db.init()
+        await db.set_many({
+            "assistant.state.creativity_pct": 0,
+            "assistant.state.diversity_pct": 100,
+            "assistant.state.response_length_pct": 100,
+            "assistant.state.repetition_guard_pct": 50,
+            "assistant.generation.version": 1,
+        })
+        await ensure_defaults(db)
+        state = await get_state(db)
+        assert state["creativity_pct"] == 70
+        assert state["diversity_pct"] == 80
+        assert state["response_length_pct"] == 100
+        assert state["repetition_guard_pct"] == 0
+        assert await db.get("assistant.generation.version") == 2
+
+    asyncio.run(scenario())
+
+
+def test_nondefault_generation_value_survives_profile_migration(tmp_path):
+    async def scenario():
+        db = Database(tmp_path / "settings.sqlite3")
+        await db.init()
+        await db.set_many({
+            "assistant.state.creativity_pct": 30,
+            "assistant.state.diversity_pct": 100,
+            "assistant.state.response_length_pct": 100,
+            "assistant.state.repetition_guard_pct": 50,
+            "assistant.generation.version": 1,
+        })
+        await ensure_defaults(db)
+        state = await get_state(db)
+        assert state["creativity_pct"] == 30
+        assert state["diversity_pct"] == 80
+        assert state["repetition_guard_pct"] == 0
 
     asyncio.run(scenario())
