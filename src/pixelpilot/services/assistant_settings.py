@@ -467,17 +467,20 @@ async def effective_system_prompt(db: Database) -> str:
 
 async def generation_params(db: Database, *, max_output_tokens: int) -> dict[str, Any]:
     state = await get_state(db)
-    creativity = max(0, min(100, int(state.get("creativity_pct") or 0)))
-    diversity = max(10, min(100, int(state.get("diversity_pct") or 100)))
-    length = max(10, min(100, int(state.get("response_length_pct") or 100)))
-    repetition_guard = max(0, min(100, int(state.get("repetition_guard_pct") or 50)))
+    creativity = max(0, min(100, int(state.get("creativity_pct", DEFAULT_STATE["creativity_pct"]))))
+    diversity = max(10, min(100, int(state.get("diversity_pct", DEFAULT_STATE["diversity_pct"]))))
+    length = max(10, min(100, int(state.get("response_length_pct", DEFAULT_STATE["response_length_pct"]))))
+    repetition_guard = max(
+        0,
+        min(100, int(state.get("repetition_guard_pct", DEFAULT_STATE["repetition_guard_pct"]))),
+    )
 
     temperature = round(creativity / 100.0, 2)
     top_p = round(diversity / 100.0, 2)
     minimum = min(256, max_output_tokens)
     max_tokens = int(minimum + (max_output_tokens - minimum) * (length / 100.0))
-    # Qwen2.5-Omni thinker examples use repetition_penalty=1.1. Keep 50%
-    # mapped to that proven baseline while still allowing owner control.
+    # Qwen3-VL's published generation profile starts at repetition_penalty=1.0.
+    # The owner-facing guard can deliberately raise that up to 1.2.
     repetition_penalty = round(1.0 + (repetition_guard / 100.0) * 0.2, 2)
     return {
         "temperature": temperature,
