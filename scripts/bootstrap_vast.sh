@@ -128,7 +128,7 @@ echo "[PixelPilot] installing inference runtime..."
 "$PYTHON_BIN" -m pip install -U \
   'vllm>=0.13,<1' \
   qwen-vl-utils \
-  'openai-whisper>=20240930' \
+  'openai-whisper>=20250625' \
   fastapi \
   uvicorn \
   python-multipart \
@@ -159,6 +159,7 @@ echo "[PixelPilot] dtype=$MODEL_DTYPE max_model_len=$MODEL_MAX_LEN gpu_util=$MOD
   --tensor-parallel-size "$MODEL_TENSOR_PARALLEL_SIZE" \
   --max-num-seqs 4 \
   --limit-mm-per-prompt "$LIMIT_MM" \
+  --media-io-kwargs '{"video":{"num_frames":24,"frame_recovery":true}}' \
   >"$VLLM_LOG" 2>&1 &
 VLLM_PID=$!
 
