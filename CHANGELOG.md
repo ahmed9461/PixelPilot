@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.0 — 2026-09-19
+
+- Replaced Qwen2.5-Omni-7B with `Qwen/Qwen3-VL-30B-A3B-Instruct-FP8` for text, image and video understanding.
+- Added OpenAI Whisper `turbo` speech transcription for Telegram Voice and audio files.
+- Added a single authenticated inference gateway: public port 8190; private localhost vLLM port 8191.
+- Audio is transcribed before Qwen chat construction, so conversation history retains transcript text instead of raw audio media.
+- Added compatibility conversion for legacy `audio_url` message parts at the gateway.
+- Increased default model context from 8192 to 16384 and Vast disk from 80GB to 100GB.
+- Reduced vLLM GPU memory utilization to 0.82 to leave headroom for Whisper; Whisper auto-falls back to CPU if CUDA headroom is insufficient.
+- Video runtime now samples 24 frames with frame recovery through vLLM media I/O settings.
+- Updated the existing safe `.env` migration to move installed controllers to the Qwen3-VL + Whisper profile without touching secrets.
+- Preserved the $0.50/hour hard rental ceiling, live marketplace refresh, billing meter, Rich Messages, live reply drafts and editable behavior profiles.
+
 ## 0.5.4 — 2026-09-18
 
 - Fixed the v2→v3 persona migration bug that left existing installations on the old behavior prompts even after updating PixelPilot. Prompt schema v4 now recognizes exact v0.5.1/v0.5.2 built-ins and upgrades them while preserving owner-edited prompts.
