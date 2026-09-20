@@ -23,6 +23,7 @@ PERSONAS: tuple[PromptOption, ...] = (
 - تحدث كصديق قريب وواعي: طبيعي، مرتاح، غير رسمي عند ملاءمة أسلوب المستخدم، ومن دون نبرة خدمة عملاء.
 - التقط مزاج المستخدم ولهجته وإيقاعه، ورد بنفس درجة القرب دون تقليد مصطنع.
 - في الأسئلة البسيطة كن خفيفًا وعفويًا؛ في المشاكل أعطِ حلًا عمليًا قبل الكلام العاطفي.
+- لا تحوّل الكلام اليومي إلى فلسفة أو استعارات أو خيال ما لم يطلب المستخدم ذلك صراحة.
 - اسمح بتعليق شخصي صغير أو دعابة خفيفة عندما تناسب، لكن لا تكرر لازمة ثابتة أو عبارة افتتاحية محفوظة.
 - صحّح المعلومة الخاطئة بصراحة لطيفة، ولا توافق لمجرد المجاملة.
 - عند المهام التقنية أو الحساسة تبقى الدقة أولًا، لكن حافظ على صوت الصديق بدل التحول إلى أسلوب روبوتي.""",
@@ -37,6 +38,7 @@ PERSONAS: tuple[PromptOption, ...] = (
 - لا تقبل التناقضات أو الأرقام غير المنطقية بصمت؛ نبه إليها بوضوح.
 - عند نقص البيانات، قل ما تعرفه وما لا تعرفه وما الذي سيغيّر النتيجة، ولا تملأ الفراغ بتخمين.
 - ابدأ بالنتيجة عندما تكون واضحة، ثم أعطِ المبررات القابلة للفحص فقط.
+- لا تستخدم لغة فلسفية أو شعرية أو خيالية إلا إذا كانت جزءًا صريحًا من طلب المستخدم.
 - لا تجعل الأسلوب أكاديميًا ثقيلًا؛ الهدف أن يشعر المستخدم أن أمامه عقلًا دقيقًا وسريع الالتقاط.""",
     ),
     PromptOption(
@@ -61,6 +63,7 @@ PERSONAS: tuple[PromptOption, ...] = (
 - في المشاريع قيّم الوقت والتكلفة والعائد وقابلية التوسع ونقطة الفشل الأساسية.
 - فرّق بين ما يجب فعله الآن وما يمكن تأجيله؛ لا تكدّس مهامًا لمجرد الظهور بمظهر احترافي.
 - لا تخترع أرقامًا أو فرصًا سوقية. استخدم سيناريوهات أو نطاقات عندما تكون البيانات ناقصة.
+- تجنب الفلسفة والاستعارات والخيال في الردود العادية؛ تحدث بلغة تنفيذية واقعية.
 - حافظ على طاقة طموحة وعملية، لكن لا تجعل الرد جافًا أو مليئًا بمصطلحات إدارية فارغة.""",
     ),
     PromptOption(
@@ -95,7 +98,8 @@ PERSONAS: tuple[PromptOption, ...] = (
 - في أسئلة الألعاب ركّز على الميكانيكيات والبِلدات والموارد والـmeta والتكتيكات القابلة للتطبيق.
 - اربط النصيحة بأسلوب لعب المستخدم ومستواه والمنصة والإصدار عندما يغيّر ذلك الجواب.
 - ميّز ما هو ثابت عما يتغير بالباتشات، وإذا لم تكن متأكدًا من تحديث حالي فلا تخترع رقمًا.
-- قدم الحل أو التوصية أولًا، ثم السبب، وتجنب الحشو والتكرار.""",
+- قدم الحل أو التوصية أولًا، ثم السبب، وتجنب الحشو والتكرار.
+- لا تدخل في فلسفة أو خيال لمجرد تزيين الرد؛ استخدمها فقط إذا طلب المستخدم محتوى إبداعيًا.""",
     ),
     PromptOption(
         "weird",
@@ -247,29 +251,38 @@ DEFAULT_STATE: dict[str, Any] = {
     "reasoning": "auto",
     "format": "auto",
     "language": "auto",
-    "creativity_pct": 70,
+    "creativity_pct": 30,
     "diversity_pct": 80,
     "response_length_pct": 100,
     "repetition_guard_pct": 0,
     "context_enabled": True,
     "context_messages": 10,
     "custom_prompt": "",
+    "custom_prompt_enabled": False,
 }
 
 PROMPT_SCHEMA_VERSION = 4
 
-GENERATION_PROFILE_VERSION = 2
+GENERATION_PROFILE_VERSION = 3
 GENERATION_FIELDS = {
     "creativity_pct",
     "diversity_pct",
     "response_length_pct",
     "repetition_guard_pct",
 }
-LEGACY_GENERATION_DEFAULTS: dict[str, int] = {
-    "creativity_pct": 0,
-    "diversity_pct": 100,
-    "response_length_pct": 100,
-    "repetition_guard_pct": 50,
+LEGACY_GENERATION_DEFAULTS_BY_VERSION: dict[int, dict[str, int]] = {
+    1: {
+        "creativity_pct": 0,
+        "diversity_pct": 100,
+        "response_length_pct": 100,
+        "repetition_guard_pct": 50,
+    },
+    2: {
+        "creativity_pct": 70,
+        "diversity_pct": 80,
+        "response_length_pct": 100,
+        "repetition_guard_pct": 0,
+    },
 }
 
 
@@ -346,14 +359,21 @@ async def ensure_defaults(db: Database) -> None:
         for name, default in DEFAULT_STATE.items()
         if _state_key(name) not in current
     }
+    custom_enabled_key = _state_key("custom_prompt_enabled")
+    if custom_enabled_key not in current:
+        missing[custom_enabled_key] = bool(
+            str(current.get(_state_key("custom_prompt")) or "").strip()
+        )
 
     generation_version = int(current.get("assistant.generation.version") or 0)
     if generation_version < GENERATION_PROFILE_VERSION:
+        legacy_version = 2 if generation_version >= 2 else 1
+        legacy_defaults = LEGACY_GENERATION_DEFAULTS_BY_VERSION[legacy_version]
         for name in GENERATION_FIELDS:
             state_key = _state_key(name)
-            current_value = current.get(state_key, LEGACY_GENERATION_DEFAULTS[name])
+            current_value = current.get(state_key, legacy_defaults[name])
             edited = bool(current.get(f"assistant.generation.edited.{name}", False))
-            if not edited and int(current_value) == LEGACY_GENERATION_DEFAULTS[name]:
+            if not edited and int(current_value) == legacy_defaults[name]:
                 missing[state_key] = DEFAULT_STATE[name]
         missing["assistant.generation.version"] = GENERATION_PROFILE_VERSION
 
@@ -407,6 +427,28 @@ async def set_state(db: Database, name: str, value: Any) -> None:
         await db.set(_state_key(name), value)
 
 
+async def apply_group_selection(db: Database, group: str, key: str) -> None:
+    """Apply one behavior selection.
+
+    Persona is the primary voice. Selecting it intentionally clears secondary
+    style modifiers and disables (but does not delete) the custom prompt so
+    stale layers cannot mask the newly selected personality.
+    """
+    if group not in GROUPS:
+        raise KeyError(group)
+    _option(group, key)
+    if group == "persona":
+        await db.set_many({
+            _state_key("persona"): key,
+            _state_key("tone"): DEFAULT_STATE["tone"],
+            _state_key("reasoning"): DEFAULT_STATE["reasoning"],
+            _state_key("format"): DEFAULT_STATE["format"],
+            _state_key("custom_prompt_enabled"): False,
+        })
+        return
+    await set_state(db, group, key)
+
+
 async def get_prompt(db: Database, group: str, key: str) -> str:
     option = _option(group, key)
     saved = await db.get(_prompt_key(group, option.key), None)
@@ -454,14 +496,15 @@ async def effective_system_prompt(db: Database) -> str:
     saved = await db.get_many(prompt_keys)
 
     chunks: list[str] = []
-    custom = str(state.get("custom_prompt") or "").strip()
-    if custom:
-        chunks.append(custom)
     for group, key in selections:
         option = _option(group, key)
         prompt = str(saved.get(_prompt_key(group, option.key), option.prompt)).strip()
         if prompt:
             chunks.append(prompt)
+
+    custom = str(state.get("custom_prompt") or "").strip()
+    if bool(state.get("custom_prompt_enabled")) and custom:
+        chunks.append(custom)
     return "\n\n".join(chunks)
 
 
