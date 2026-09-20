@@ -487,11 +487,11 @@ async def _render_prompt(callback: CallbackQuery, group: str, key: str, origin: 
     )
 
 
-@router.callback_query(lambda q: q.data == "assistant:prompt:custom")
-async def custom_prompt(callback: CallbackQuery) -> None:
-    _cancel_pending()
-    await safe_callback_answer(callback)
-    state = await get_state(orch().db)
+async def _show_custom_prompt(
+    callback: CallbackQuery,
+    state: dict[str, Any] | None = None,
+) -> None:
+    state = state or await get_state(orch().db)
     prompt = str(state.get("custom_prompt") or "")
     enabled = bool(state.get("custom_prompt_enabled"))
     shown = escape(prompt) if prompt else "<i>لا يوجد نص محفوظ</i>"
@@ -512,6 +512,13 @@ async def custom_prompt(callback: CallbackQuery) -> None:
     )
 
 
+@router.callback_query(lambda q: q.data == "assistant:prompt:custom")
+async def custom_prompt(callback: CallbackQuery) -> None:
+    _cancel_pending()
+    await safe_callback_answer(callback)
+    await _show_custom_prompt(callback)
+
+
 @router.callback_query(lambda q: q.data == "assistant:prompt:custom_toggle")
 async def custom_prompt_toggle(callback: CallbackQuery) -> None:
     _cancel_pending()
@@ -523,10 +530,11 @@ async def custom_prompt_toggle(callback: CallbackQuery) -> None:
 
     enabled = not bool(state.get("custom_prompt_enabled"))
     await set_state(orch().db, "custom_prompt_enabled", enabled)
+    state["custom_prompt_enabled"] = enabled
     from pixelpilot.bot.routers.chat import clear_history
     clear_history()
     await safe_callback_answer(callback, "تم التفعيل" if enabled else "تم الإيقاف")
-    await custom_prompt(callback)
+    await _show_custom_prompt(callback, state)
 
 
 @router.callback_query(lambda q: q.data and q.data.startswith("assistant:prompt:open:"))
