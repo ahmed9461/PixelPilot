@@ -16,15 +16,18 @@ def test_settings_rich_message_uses_table():
             "reasoning": "✨ تلقائي",
             "format": "✨ تلقائي",
             "language": "🌐 تلقائي",
-            "creativity": 70,
+            "creativity": 30,
             "diversity": 80,
             "length": 100,
             "repetition": 0,
+            "custom": "متوقف",
         }
     )
     assert card.is_rtl is True
     assert "<table bordered striped compact>" in (card.html or "")
-    assert "70%" in (card.html or "")
+    assert "30%" in (card.html or "")
+    assert "البرومت المخصص" in (card.html or "")
+    assert "متوقف" in (card.html or "")
 
 
 

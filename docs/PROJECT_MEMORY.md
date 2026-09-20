@@ -26,7 +26,7 @@ Output is text. Image generation is no longer part of the project.
 9. The rental hard ceiling is `$0.50/hour`. PixelPilot must reject any cached/selected offer above that ceiling even if it was visible in an older search.
 10. Offer refresh must perform a fresh marketplace query every time. Compare the new result set with the previously cached set and tell the user whether offers/prices/order actually changed.
 11. Track rental time and estimated active rental cost per second from rent until stop/destroy. Pausing stops the active-time meter; restarting resumes it. Preserve the final billing snapshot after destroy.
-12. Qwen3-VL generation starts from its published profile: `temperature=0.7`, `top_p=0.8`, `top_k=20`, `repetition_penalty=1.0`. The owner can change creativity/diversity/repetition controls from Telegram; owner-edited values survive automatic profile migrations.
+12. PixelPilot uses a calmer daily-assistant default on Qwen3-VL: `temperature=0.3`, `top_p=0.8`, `top_k=20`, `repetition_penalty=1.0`. The published Qwen profile is more creative, but live assistant use showed unwanted philosophical/fantasy drift at higher creativity. Owner-edited generation settings survive automatic profile migrations.
 13. Personality, tone, reasoning depth, formatting, language, custom prompt, context depth and generation controls are runtime owner settings stored in SQLite. Each prompt profile must be viewable, replaceable and resettable from Telegram.
 14. Assistant Settings navigation must be deterministic: a Back button returns to the screen that opened the current screen. Prompt edit/view/reset flows must preserve whether they came from a behavior group or the central prompt hub.
 15. Settings callbacks must feel immediate. Avoid repeated SQLite open/read cycles and avoid Telegram edits that intentionally submit identical text/markup. Use batched KV operations and safe no-op handling.
@@ -34,7 +34,7 @@ Output is text. Image generation is no longer part of the project.
 17. PixelPilot is visual-first. Prefer Telegram-native Rich Messages, structured dashboards and styled action buttons over plain walls of text whenever the feature is available, while preserving a graceful plain-message fallback.
 18. AI replies stream live through Telegram message drafts while vLLM generates. Draft updates must be throttled, ephemeral, and followed by one persistent final response.
 19. Qwen generation uses an owner-adjustable repetition guard. Qwen3-VL starts at 0% (`repetition_penalty=1.0`); the control can raise the penalty to 1.2 if a future workload needs stronger loop suppression.
-20. Personality/tone/reasoning/format/language changes start a new RAM-only conversation context. A new behavior profile must not be diluted by assistant messages generated under the previous profile.
+20. Personality/tone/reasoning/format/language changes start a new RAM-only conversation context. A new behavior profile must not be diluted by assistant messages generated under the previous profile. Selecting a personality additionally resets tone/reasoning/format to neutral defaults and disables the custom-prompt layer so the chosen persona is actually observable.
 21. Persona profiles must have an observable everyday voice signature. Task adaptation may reduce stylistic intensity for technical/sensitive work, but it must not make different personalities indistinguishable in normal conversation.
 22. Prompt migrations are versioned and must recognize the immediately previous built-in prompt values. Manual prompt edits are tracked with explicit edit markers and must never be overwritten by automatic schema upgrades.
 23. Video requests reserve context aggressively: sample 24 frames and discard older conversation turns before a new video turn.
@@ -42,6 +42,8 @@ Output is text. Image generation is no longer part of the project.
 25. The public Vast port is a PixelPilot inference gateway. vLLM binds localhost only; the gateway owns auth, speech transcription and proxying.
 26. Runtime target is 48GB+ VRAM, 100GB disk, 16K model context and $0.50/hour hard rental ceiling.
 27. Qwen2.5-Omni-7B is retired as the default because live personal-use testing showed insufficient general understanding, context following and non-text visual interpretation.
+28. The custom prompt is an explicit optional layer with its own enabled/disabled state. Disabling it never deletes its stored text. It must never silently remain active after a new persona selection.
+29. Non-creative personas should explicitly avoid unsolicited philosophy, poetic metaphor and fantasy framing unless the user asks for that style.
 
 ## Architecture
 
@@ -79,9 +81,9 @@ The main Telegram menu includes `⚙️ إعدادات المساعد` with:
 - `🧠 الاستدلال`: automatic/fast/balanced/deep/critical response approach.
 - `🧾 التنسيق`: automatic/compact/structured/steps.
 - `🌐 اللغة`: automatic/Arabic/English.
-- `🎚️ التوليد`: creativity, diversity, response length and repetition-guard percentages. Qwen3-VL defaults are 70% / 80% / 100% / 0%.
+- `🎚️ التوليد`: creativity, diversity, response length and repetition-guard percentages. Daily-assistant defaults are 30% / 80% / 100% / 0%.
 - `🧠 السياق`: enable/disable RAM-only context, choose retained message depth, clear context.
-- `📝 البرومتات`: view/edit/reset current profile prompts, edit a custom prompt layer, view/export the final composed prompt, reset all settings.
+- `📝 البرومتات`: view/edit/reset current profile prompts, explicitly enable/disable the custom prompt layer, view/export the final composed prompt, reset all settings.
 
 Prompt changes take effect on the next request; they do not require GPU reinstall or controller `.env` edits. The built-in v0.5.1 profiles use structured behavior contracts rather than short style sentences. A prompt-schema version is stored so untouched old starter prompts can be upgraded without overwriting owner customizations.
 

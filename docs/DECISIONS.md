@@ -1,5 +1,20 @@
 # Decisions
 
+## 2026-09-20 — Persona is the primary voice
+
+Selecting a new persona must produce an immediately observable change. The persona selection therefore resets tone, reasoning and formatting to their neutral defaults, disables the optional custom-prompt layer, and clears RAM chat history. Language selection is preserved because it is orthogonal to personality.
+
+Re-selecting the already active persona performs the same cleanup if stale modifiers are still active. This prevents a custom prompt, deep reasoning mode or old tone from masking the chosen persona.
+
+## 2026-09-20 — Custom prompt has explicit activation
+
+Custom prompt text and custom prompt activation are separate states. Editing a non-empty custom prompt enables it; clearing it disables it. Persona selection disables it without deleting the stored text. The Telegram UI must show whether the layer is currently active.
+
+## 2026-09-20 — Lower creativity for daily assistant use
+
+Although Qwen3-VL publishes a 0.7 temperature profile, live personal-assistant use showed excessive philosophical/imaginary phrasing. PixelPilot therefore defaults untouched installs to 30% creativity (`temperature=0.3`) while keeping `top_p=0.8`, `top_k=20` and `repetition_penalty=1.0`. Owner-edited generation values remain untouched.
+
+
 ## 2026-09-19 — Qwen3-VL 30B FP8 + Whisper replaces Qwen2.5-Omni
 
 Live testing established that Qwen2.5-Omni-7B does not meet the intended personal-assistant quality bar for context following, nuanced instruction following and non-text visual understanding. Stop spending engineering effort trying to prompt around that model ceiling.
