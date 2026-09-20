@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.1 — 2026-09-20
+
+- Fixed personality changes being masked by stale secondary behavior layers.
+- Selecting a personality now makes it the primary voice, clears RAM conversation history, resets tone/reasoning/format to their neutral defaults, and disables (without deleting) the custom prompt layer.
+- Re-selecting the already active personality also cleans stale modifiers when any are still active.
+- Added explicit enable/disable state for the custom prompt and surfaced that state in Telegram settings.
+- Custom prompt text remains stored when disabled and can be re-enabled manually from the Prompt Hub.
+- Lowered untouched default creativity from 70% to 30% for normal assistant chat; owner-edited generation settings are preserved.
+- Strengthened non-creative persona prompts to explicitly avoid unsolicited philosophy, metaphor and fantasy framing.
+- Prompt schema v5 upgrades untouched v0.6.0 persona defaults while preserving owner-edited prompts.
+- Added persona-isolation, custom-prompt activation and generation-profile migration regression tests.
+
+
 ## 0.6.0 — 2026-09-19
 
 - Replaced Qwen2.5-Omni-7B with `Qwen/Qwen3-VL-30B-A3B-Instruct-FP8` for text, image and video understanding.
