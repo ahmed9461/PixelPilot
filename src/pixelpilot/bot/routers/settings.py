@@ -17,6 +17,7 @@ from pixelpilot.bot.rich_ui import settings_card
 from pixelpilot.services.assistant_settings import (
     DEFAULT_STATE,
     GROUPS,
+    apply_group_selection,
     context_policy,
     effective_system_prompt,
     get_prompt,
@@ -103,7 +104,8 @@ async def _settings_text() -> str:
         f"🎨 الإبداع: <b>{int(state['creativity_pct'])}%</b>\n"
         f"🧪 التنوع: <b>{int(state['diversity_pct'])}%</b>\n"
         f"📏 طول الرد: <b>{int(state['response_length_pct'])}%</b>\n"
-        f"🔁 منع التكرار: <b>{int(state['repetition_guard_pct'])}%</b>"
+        f"🔁 منع التكرار: <b>{int(state['repetition_guard_pct'])}%</b>\n"
+        f"🧩 البرومت المخصص: <b>{'مفعّل' if bool(state.get('custom_prompt_enabled')) else 'متوقف'}</b>"
     )
 
 
@@ -127,6 +129,7 @@ async def settings_home(callback: CallbackQuery) -> None:
         "diversity": int(state["diversity_pct"]),
         "length": int(state["response_length_pct"]),
         "repetition": int(state["repetition_guard_pct"]),
+        "custom": "مفعّل" if bool(state.get("custom_prompt_enabled")) else "متوقف",
     }
     try:
         await callback.message.edit_text(
@@ -166,7 +169,12 @@ def _group_keyboard(group: str, selected: str) -> InlineKeyboardMarkup:
 
 def _group_title(group: str) -> str:
     return {
-        "persona": "🎭 <b>روح المساعد</b>\n\nاختر الشخصية الأساسية. تغييرها يبدأ سياقًا جديدًا حتى تظهر البصمة فورًا:",
+        "persona": (
+            "🎭 <b>روح المساعد</b>\n\n"
+            "اختر الشخصية الأساسية. عند اختيار شخصية جديدة يبدأ سياق جديد، "
+            "وتعود السمة والاستدلال والتنسيق إلى الوضع التلقائي ويُوقف البرومت المخصص "
+            "حتى لا تطغى أي طبقة قديمة على الشخصية."
+        ),
         "tone": "⚡ <b>السمة</b>\n\nاختر نبرة الرد. تغييرها يبدأ سياقًا جديدًا:",
         "reasoning": "🧠 <b>الاستدلال</b>\n\nاختر عمق معالجة الأسئلة. تغيير الخيار يبدأ سياقًا جديدًا:",
         "format": "🧾 <b>التنسيق</b>\n\nاختر طريقة تنظيم الرد. تغيير الخيار يبدأ سياقًا جديدًا:",
@@ -202,14 +210,25 @@ async def select_group(callback: CallbackQuery) -> None:
         await safe_callback_answer(callback, "خيار غير معروف")
         return
     state = await get_state(orch().db)
-    if str(state[group]) == key:
+    same_value = str(state[group]) == key
+    persona_is_clean = (
+        str(state.get("tone")) == str(DEFAULT_STATE["tone"])
+        and str(state.get("reasoning")) == str(DEFAULT_STATE["reasoning"])
+        and str(state.get("format")) == str(DEFAULT_STATE["format"])
+        and not bool(state.get("custom_prompt_enabled"))
+    )
+    if same_value and (group != "persona" or persona_is_clean):
         await safe_callback_answer(callback, "محدد بالفعل")
         return
+
     from pixelpilot.bot.routers.chat import clear_history
 
-    await set_state(orch().db, group, key)
+    await apply_group_selection(orch().db, group, key)
     clear_history()
-    await safe_callback_answer(callback, "تم التطبيق وبدأ سياق جديد")
+    if group == "persona":
+        await safe_callback_answer(callback, "تم تطبيق الشخصية وتنظيف المؤثرات")
+    else:
+        await safe_callback_answer(callback, "تم التطبيق وبدأ سياق جديد")
     await safe_edit_reply_markup(callback.message, reply_markup=_group_keyboard(group, key))
 
 
@@ -244,7 +263,8 @@ async def _show_generation(callback: CallbackQuery, state: dict[str, Any] | None
         "🧪 التنوع: يتحكم بنطاق الاحتمالات اللغوية.\n"
         "📏 طول الرد: يتحكم بالحد الأقصى التقريبي للإجابة.\n"
         "🔁 منع التكرار: يرفع عقوبة إعادة الكلمات والجمل عند الحاجة.\n\n"
-        "الافتراضي مضبوط على ملف Qwen3-VL: 70% إبداع، 80% تنوع، و0% منع تكرار.",
+        "الافتراضي للمساعد اليومي: 30% إبداع، 80% تنوع، و0% منع تكرار. "
+        "ارفع الإبداع فقط عندما تريد كتابة أكثر حرية أو خيالًا.",
         reply_markup=_generation_keyboard(state),
     )
 
@@ -285,7 +305,7 @@ async def reset_generation(callback: CallbackQuery) -> None:
         "assistant.state.diversity_pct": DEFAULT_STATE["diversity_pct"],
         "assistant.state.response_length_pct": DEFAULT_STATE["response_length_pct"],
         "assistant.state.repetition_guard_pct": DEFAULT_STATE["repetition_guard_pct"],
-        "assistant.generation.version": 2,
+        "assistant.generation.version": 3,
         "assistant.generation.edited.creativity_pct": False,
         "assistant.generation.edited.diversity_pct": False,
         "assistant.generation.edited.response_length_pct": False,
@@ -419,8 +439,18 @@ def _prompt_actions(
     *,
     origin: PromptOrigin,
     custom: bool = False,
+    custom_enabled: bool = False,
 ) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(
+    rows: list[list[InlineKeyboardButton]] = []
+    if custom:
+        rows.append([
+            InlineKeyboardButton(
+                text=f"🧩 {'مفعّل ✓' if custom_enabled else 'متوقف ○'}",
+                callback_data="assistant:prompt:custom_toggle",
+                style="success" if custom_enabled else "primary",
+            )
+        ])
+    rows.append([InlineKeyboardButton(
         text="✏️ تعديل/استبدال",
         style="primary",
         callback_data=(
@@ -428,7 +458,7 @@ def _prompt_actions(
             if custom
             else f"assistant:prompt:edit:{group}:{key}:{origin}"
         ),
-    )]]
+    )])
     if not custom:
         rows.append([
             InlineKeyboardButton(
@@ -463,12 +493,40 @@ async def custom_prompt(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback)
     state = await get_state(orch().db)
     prompt = str(state.get("custom_prompt") or "")
-    shown = escape(prompt) if prompt else "<i>غير مفعّل</i>"
+    enabled = bool(state.get("custom_prompt_enabled"))
+    shown = escape(prompt) if prompt else "<i>لا يوجد نص محفوظ</i>"
+    status = "مفعّل" if enabled and prompt.strip() else "متوقف"
     await safe_edit_text(
         callback.message,
-        f"🧩 <b>البرومت المخصص</b>\n\n{shown}",
-        reply_markup=_prompt_actions("custom", "base", origin="hub", custom=True),
+        f"🧩 <b>البرومت المخصص</b>\n\n"
+        f"الحالة: <b>{status}</b>\n\n{shown}\n\n"
+        "هذا البرومت طبقة إضافية اختيارية. تغيير الشخصية يوقفه تلقائيًا "
+        "حتى لا يخفي بصمة الشخصية الجديدة.",
+        reply_markup=_prompt_actions(
+            "custom",
+            "base",
+            origin="hub",
+            custom=True,
+            custom_enabled=enabled and bool(prompt.strip()),
+        ),
     )
+
+
+@router.callback_query(lambda q: q.data == "assistant:prompt:custom_toggle")
+async def custom_prompt_toggle(callback: CallbackQuery) -> None:
+    _cancel_pending()
+    state = await get_state(orch().db)
+    prompt = str(state.get("custom_prompt") or "").strip()
+    if not prompt:
+        await safe_callback_answer(callback, "أضف برومتًا مخصصًا أولًا")
+        return
+
+    enabled = not bool(state.get("custom_prompt_enabled"))
+    await set_state(orch().db, "custom_prompt_enabled", enabled)
+    from pixelpilot.bot.routers.chat import clear_history
+    clear_history()
+    await safe_callback_answer(callback, "تم التفعيل" if enabled else "تم الإيقاف")
+    await custom_prompt(callback)
 
 
 @router.callback_query(lambda q: q.data and q.data.startswith("assistant:prompt:open:"))
@@ -589,7 +647,10 @@ async def receive_prompt_edit(message: Message) -> None:
 
     value = "" if text == "-" else message.text or ""
     if target.group == "custom":
-        await set_state(orch().db, "custom_prompt", value)
+        await orch().db.set_many({
+            "assistant.state.custom_prompt": value,
+            "assistant.state.custom_prompt_enabled": bool(value.strip()),
+        })
         reopen = "assistant:prompt:custom"
     else:
         await set_prompt(orch().db, target.group, target.key, value)
