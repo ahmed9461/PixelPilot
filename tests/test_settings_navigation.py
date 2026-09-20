@@ -35,7 +35,7 @@ def test_prompt_back_button_returns_to_the_screen_it_came_from():
 
 def test_generation_value_buttons_are_noop_instead_of_reediting_same_screen():
     state = {
-        "creativity_pct": 70,
+        "creativity_pct": 30,
         "diversity_pct": 80,
         "response_length_pct": 100,
         "repetition_guard_pct": 0,
