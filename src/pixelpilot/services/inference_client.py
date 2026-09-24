@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import json
-from collections.abc import AsyncIterator
+import base64
 from typing import Any
 
 import httpx
 
-from pixelpilot.domain import InferenceResult
+from pixelpilot.domain import GeneratedImage, ReferenceImage
 
 
 class InferenceError(RuntimeError):
@@ -14,7 +13,7 @@ class InferenceError(RuntimeError):
 
 
 class InferenceClient:
-    """Client for PixelPilot's authenticated inference gateway on the rented GPU."""
+    """Client for PixelPilot's authenticated Qwen-Image gateway."""
 
     def __init__(
         self,
@@ -23,7 +22,7 @@ class InferenceClient:
         model_id: str,
         *,
         verify_tls: bool = False,
-        timeout_seconds: float = 600.0,
+        timeout_seconds: float = 1800.0,
     ):
         self.base_url = base_url.rstrip("/")
         self.token = token
@@ -49,7 +48,7 @@ class InferenceClient:
             try:
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
-                detail = response.text[:1000]
+                detail = response.text[:2000]
                 raise InferenceError(
                     f"Inference API returned HTTP {response.status_code}: {detail}"
                 ) from exc
@@ -61,25 +60,6 @@ class InferenceClient:
             return 200 <= response.status_code < 300
         except Exception:
             return False
-
-    async def transcribe_audio(
-        self,
-        data: bytes,
-        *,
-        mime_type: str,
-        filename: str = "audio",
-    ) -> str:
-        response = await self._request(
-            "POST",
-            "/v1/audio/transcriptions",
-            files={"file": (filename, data, mime_type)},
-            data={"model": "turbo"},
-        )
-        payload = response.json()
-        text = payload.get("text") if isinstance(payload, dict) else None
-        if not isinstance(text, str) or not text.strip():
-            raise InferenceError("Speech transcription returned no text")
-        return text.strip()
 
     async def models(self) -> list[str]:
         response = await self._request("GET", "/v1/models")
@@ -97,157 +77,86 @@ class InferenceClient:
         if not await self.health():
             return False
         try:
-            models = await self.models()
+            return self.model_id in await self.models()
         except Exception:
             return False
-        return self.model_id in models
 
-    def _chat_payload(
+    async def generate(
         self,
-        messages: list[dict[str, Any]],
+        prompt: str,
         *,
-        max_tokens: int,
-        temperature: float,
-        top_p: float,
-        repetition_penalty: float,
-        top_k: int,
-        stream: bool = False,
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "model": self.model_id,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": float(temperature),
-            "top_p": float(top_p),
-            "repetition_penalty": float(repetition_penalty),
-            "top_k": int(top_k),
+        width: int,
+        height: int,
+        steps: int,
+        seed: int | None = None,
+        reference_images: tuple[ReferenceImage, ...] = (),
+        true_cfg_scale: float = 1.0,
+        negative_prompt: str | None = None,
+    ) -> GeneratedImage:
+        if not prompt.strip():
+            raise InferenceError("Prompt cannot be empty")
+
+        common: dict[str, str] = {
+            "prompt": prompt,
+            "width": str(int(width)),
+            "height": str(int(height)),
+            "num_inference_steps": str(int(steps)),
+            "true_cfg_scale": str(float(true_cfg_scale)),
         }
-        if stream:
-            payload["stream"] = True
-        return payload
+        if seed is not None:
+            common["seed"] = str(int(seed))
+        if negative_prompt is not None:
+            common["negative_prompt"] = negative_prompt
 
-    async def chat(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        max_tokens: int = 2048,
-        temperature: float = 0.0,
-        top_p: float = 1.0,
-        repetition_penalty: float = 1.0,
-        top_k: int = 20,
-    ) -> InferenceResult:
-        # PixelPilot does not rewrite the supplied conversation here. Any
-        # optional persona/style prompt is explicitly assembled by the
-        # controller from the owner's in-bot settings before this call.
-        payload = self._chat_payload(
-            messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            repetition_penalty=repetition_penalty,
-            top_k=top_k,
-        )
-        response = await self._request("POST", "/v1/chat/completions", json=payload)
-        data = response.json()
-        choices = data.get("choices") if isinstance(data, dict) else None
-        if not isinstance(choices, list) or not choices:
-            raise InferenceError(f"Inference API returned no choices: {str(data)[:1000]}")
-
-        choice = choices[0]
-        if not isinstance(choice, dict):
-            raise InferenceError("Inference API returned an invalid choice")
-
-        message = choice.get("message")
-        if not isinstance(message, dict):
-            raise InferenceError("Inference API returned no assistant message")
-
-        text = _extract_text(message.get("content"))
-        if text == "":
-            raise InferenceError("Model returned an empty text response")
-
-        usage = data.get("usage")
-        return InferenceResult(
-            text=text,
-            model=str(data.get("model") or self.model_id),
-            finish_reason=str(choice.get("finish_reason")) if choice.get("finish_reason") is not None else None,
-            usage=usage if isinstance(usage, dict) else None,
-        )
-
-
-    async def stream_chat(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        max_tokens: int = 2048,
-        temperature: float = 0.0,
-        top_p: float = 1.0,
-        repetition_penalty: float = 1.0,
-        top_k: int = 20,
-    ) -> AsyncIterator[str]:
-        """Yield text deltas from vLLM's OpenAI-compatible SSE stream."""
-        payload = self._chat_payload(
-            messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            repetition_penalty=repetition_penalty,
-            top_k=top_k,
-            stream=True,
-        )
-        async with httpx.AsyncClient(
-            verify=self.verify_tls,
-            timeout=self.timeout_seconds,
-            follow_redirects=True,
-        ) as client:
-            async with client.stream(
+        if reference_images:
+            files = [
+                (
+                    "image",
+                    (f"reference-{index + 1}.png", item.data, item.mime_type),
+                )
+                for index, item in enumerate(reference_images)
+            ]
+            response = await self._request(
                 "POST",
-                f"{self.base_url}/v1/chat/completions",
-                headers=self._headers(),
+                "/v1/images/edits",
+                data=common,
+                files=files,
+            )
+        else:
+            payload: dict[str, Any] = {
+                "prompt": prompt,
+                "width": int(width),
+                "height": int(height),
+                "num_inference_steps": int(steps),
+                "true_cfg_scale": float(true_cfg_scale),
+            }
+            if seed is not None:
+                payload["seed"] = int(seed)
+            if negative_prompt is not None:
+                payload["negative_prompt"] = negative_prompt
+            response = await self._request(
+                "POST",
+                "/v1/images/generations",
                 json=payload,
-            ) as response:
-                if response.is_error:
-                    body = (await response.aread()).decode("utf-8", errors="replace")[:1000]
-                    raise InferenceError(
-                        f"Inference API returned HTTP {response.status_code}: {body}"
-                    )
-                async for line in response.aiter_lines():
-                    delta = _extract_stream_delta(line)
-                    if delta is not None:
-                        yield delta
+            )
 
+        data = response.json()
+        if not isinstance(data, dict):
+            raise InferenceError("Image endpoint returned an invalid response")
+        encoded = data.get("b64_json")
+        if not isinstance(encoded, str) or not encoded:
+            raise InferenceError("Image endpoint returned no image data")
+        try:
+            raw = base64.b64decode(encoded, validate=True)
+        except Exception as exc:
+            raise InferenceError("Image endpoint returned invalid base64") from exc
 
-def _extract_stream_delta(line: str) -> str | None:
-    """Parse one OpenAI SSE line and return only assistant text deltas."""
-    if not line.startswith("data:"):
-        return None
-    payload = line[5:].strip()
-    if not payload or payload == "[DONE]":
-        return None
-    try:
-        data = json.loads(payload)
-    except json.JSONDecodeError:
-        return None
-    choices = data.get("choices") if isinstance(data, dict) else None
-    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
-        return None
-    delta = choices[0].get("delta")
-    if not isinstance(delta, dict):
-        return None
-    text = _extract_text(delta.get("content"))
-    return text or None
-
-
-def _extract_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        chunks: list[str] = []
-        for item in content:
-            if isinstance(item, str):
-                chunks.append(item)
-            elif isinstance(item, dict):
-                value = item.get("text") or item.get("content")
-                if isinstance(value, str):
-                    chunks.append(value)
-        return "".join(chunks)
-    return ""
+        return GeneratedImage(
+            data=raw,
+            mime_type=str(data.get("mime_type") or "image/png"),
+            seed=int(data.get("seed") or 0),
+            width=int(data.get("width") or width),
+            height=int(data.get("height") or height),
+            model=str(data.get("model") or self.model_id),
+            reference_count=int(data.get("reference_count") or len(reference_images)),
+        )
