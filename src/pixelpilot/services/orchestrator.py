@@ -551,7 +551,6 @@ class Orchestrator:
             "IMAGE_MAX_UPLOAD_MB": str(self.settings.image_max_upload_mb),
             "PROMPT_ENHANCER_T2I_ID": self.settings.prompt_enhancer_t2i_id,
             "PROMPT_ENHANCER_I2I_ID": self.settings.prompt_enhancer_i2i_id,
-            "PROMPT_ENHANCER_MAX_NEW_TOKENS": str(self.settings.prompt_enhancer_max_new_tokens),
             "PROMPT_ENHANCER_FAIL_OPEN": str(self.settings.prompt_enhancer_fail_open).lower(),
             "HF_HOME": "/workspace/hf-cache",
             "DATA_DIRECTORY": "/workspace",
