@@ -403,6 +403,12 @@ async def health(authorization: str | None = Header(default=None)) -> dict[str, 
         "memory_mode": state.memory_mode,
         "gpu_vram_gb": round(state.gpu_vram_gb, 2),
         "max_reference_images": MAX_REFERENCE_IMAGES,
+        "prompt_enhancer": {
+            "mode": "on_demand",
+            "t2i_model": PE_T2I_ID,
+            "i2i_model": PE_I2I_ID,
+            "fail_open": PE_FAIL_OPEN,
+        },
     }
 
 
@@ -429,6 +435,7 @@ async def image_generations(
         reference_images=[],
         true_cfg_scale=request.true_cfg_scale,
         negative_prompt=request.negative_prompt,
+        enhance_prompt=request.enhance_prompt,
     )
 
 
@@ -442,6 +449,7 @@ async def image_edits(
     seed: int | None = Form(None),
     true_cfg_scale: float = Form(1.0),
     negative_prompt: str | None = Form(None),
+    enhance_prompt: bool = Form(False),
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     _check_auth(authorization)
@@ -469,4 +477,5 @@ async def image_edits(
         reference_images=reference_images,
         true_cfg_scale=true_cfg_scale,
         negative_prompt=negative_prompt,
+        enhance_prompt=enhance_prompt,
     )
