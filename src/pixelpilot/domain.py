@@ -72,3 +72,4 @@ class GeneratedImage:
     prompt_enhanced: bool = False
     enhancer_model: str | None = None
     enhancer_ratio: str | None = None
+    enhancer_fallback: bool = False
