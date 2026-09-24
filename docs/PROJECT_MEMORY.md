@@ -139,3 +139,14 @@ SQLite does not store:
 - Server status uses a short probe timeout and must return quickly even while the image endpoint is still booting.
 - Rapid repeated lifecycle button clicks must not create duplicate provisioning/start tasks.
 - The owner must retain access to status/stop/destroy controls while provisioning is active.
+
+
+## Vast rental validation
+
+- A displayed GPU label is not the rental identity; the Vast offer/ask ID is.
+- Revalidate the exact selected offer ID immediately before `create_instance`.
+- If the exact ID disappears, do not silently substitute a similar GPU listing.
+- If price or core visible hardware changes, require a refreshed list and explicit reconfirmation.
+- Keep `cancel_unavail=true`: scheduling failure should return an error rather than leave a stopped instance with storage billing.
+- Surface safe rejection reasons to the owner while keeping raw diagnostic details in logs/events.
+- Preserve unique-label reconciliation for ambiguous network failures where Vast may have created the instance despite a lost response.
