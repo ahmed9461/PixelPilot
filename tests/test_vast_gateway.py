@@ -10,6 +10,7 @@ def test_build_query_contains_cost_ram_and_safety_filters():
         verified_only=True,
         min_direct_ports=2,
         min_inet_down_mbps=100,
+        min_cpu_ram_gb=48,
     )
     assert "gpu_ram>=48" in q
     assert "gpu_ram>=48000" not in q
@@ -20,6 +21,7 @@ def test_build_query_contains_cost_ram_and_safety_filters():
     assert "verified=true" in q
     assert "direct_port_count>=2" in q
     assert "inet_down>=100" in q
+    assert "cpu_ram>=48" in q
 
 
 def test_normalize_offer():
