@@ -46,3 +46,14 @@ Completed:
 - added a dedicated “48GB+ only” search mode and mode-preserving refresh/back buttons
 - overlapping marketplace requests are serialized
 - added tests for search breadth, preferred-only mode, configuration and UI callbacks
+
+
+## 2026-09-24 — Responsive server controls
+
+Active plan:
+- move long rent/provision and start/wait flows out of Telegram callback handlers into background tasks
+- keep the main control keyboard available while provisioning is in progress
+- make server status probes use a short health timeout instead of the long generation timeout
+- prevent duplicate background lifecycle tasks from rapid button clicks
+- keep destroy/stop controls responsive while provisioning
+- add tests for short status probes and lifecycle task deduplication
