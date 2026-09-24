@@ -28,6 +28,7 @@ async def _main() -> int:
             datacenter_only=settings.vast_datacenter_only,
             min_direct_ports=settings.vast_min_direct_ports,
             min_inet_down_mbps=settings.vast_min_inet_down_mbps,
+            min_cpu_ram_gb=settings.vast_min_cpu_ram_gb,
         )
         offers = await gateway.search_offers(query, settings.vast_default_limit)
         print("PASS", f"Vast API/search: {len(offers)} matching offer(s)")
