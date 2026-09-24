@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from html import escape
 from typing import Any
 
 from aiogram import Router
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, Message
 
 from pixelpilot.bot.callbacks import safe_callback_answer
 from pixelpilot.bot.keyboards import destroy_confirm_keyboard, main_menu, offer_confirm_keyboard, offers_keyboard
@@ -15,6 +16,7 @@ from pixelpilot.services.orchestrator import Orchestrator
 router = Router(name="servers")
 logger = logging.getLogger(__name__)
 _orchestrator: Orchestrator | None = None
+_lifecycle_task: asyncio.Task[None] | None = None
 
 
 def configure(orchestrator: Orchestrator) -> None:
@@ -26,6 +28,45 @@ def orch() -> Orchestrator:
     if _orchestrator is None:
         raise RuntimeError("Server router not configured")
     return _orchestrator
+
+
+def _lifecycle_busy() -> bool:
+    return _lifecycle_task is not None and not _lifecycle_task.done()
+
+
+def _track_lifecycle(coro: Any, *, name: str) -> None:
+    global _lifecycle_task
+    task = asyncio.create_task(coro, name=name)
+    _lifecycle_task = task
+
+    def _done(completed: asyncio.Task[None]) -> None:
+        global _lifecycle_task
+        if _lifecycle_task is completed:
+            _lifecycle_task = None
+        if completed.cancelled():
+            return
+        try:
+            exc = completed.exception()
+        except asyncio.CancelledError:
+            return
+        if exc is not None:
+            logger.exception(
+                "Background server lifecycle task failed",
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
+
+    task.add_done_callback(_done)
+
+
+async def _cancel_lifecycle_if_running() -> None:
+    global _lifecycle_task
+    task = _lifecycle_task
+    if task is None or task.done():
+        return
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    if _lifecycle_task is task:
+        _lifecycle_task = None
 
 
 def _offer_signature(item: Any) -> tuple[Any, ...]:
@@ -90,7 +131,12 @@ def _billing_lines(billing: Any, *, final: bool = False) -> list[str]:
 
 @router.callback_query(lambda q: q.data == "servers:preflight")
 async def preflight(callback: CallbackQuery) -> None:
-    await safe_callback_answer(callback)
+    await safe_callback_answer(callback, "جاري الفحص...")
+    await callback.message.edit_text(
+        "🧪 <b>جاري فحص الجاهزية...</b>\n\n"
+        "أتحقق من الإعدادات والاتصال والخدمات الخارجية.",
+        reply_markup=main_menu(),
+    )
     checks = run_local_preflight(orch().settings)
     if all(item.ok for item in checks):
         checks.extend(await run_external_preflight(orch().settings))
@@ -245,44 +291,81 @@ async def offer_details(callback: CallbackQuery) -> None:
     )
 
 
-@router.callback_query(lambda q: q.data and q.data.startswith("servers:rent:"))
-async def rent(callback: CallbackQuery) -> None:
-    offer_id = int(callback.data.rsplit(":", 1)[1])
-    await safe_callback_answer(callback, "بدء الاستئجار")
-    await callback.message.edit_text("🚀 جاري إنشاء السيرفر...")
-
+async def _rent_and_prepare_background(
+    offer_id: int,
+    status_message: Message,
+) -> None:
     async def progress(_text: str) -> None:
         try:
             state = await orch().current_state(probe_inference=False)
             billing = state.get("billing") if isinstance(state, dict) else None
-            lines = ["⏳ <b>جاري تجهيز محرك الصور...</b>", "", "يتم تنزيل النموذج وتحميله إلى الذاكرة."]
+            lines = [
+                "⏳ <b>جاري تجهيز محرك الصور...</b>",
+                "",
+                "التجهيز يعمل في الخلفية؛ تستطيع استخدام أزرار الحالة والحذف أثناء ذلك.",
+            ]
             lines.extend(_billing_lines(billing))
-            await callback.message.edit_text("\n".join(lines))
+            await status_message.edit_text("\n".join(lines))
         except Exception:
             pass
 
     try:
         await orch().rent_and_prepare(offer_id, progress=progress)
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("Server rent/provision failed")
+        current_id = await orch().db.get("instance.id")
+        if not current_id:
+            text = "ℹ️ انتهت مهمة التجهيز لأن السيرفر لم يعد موجودًا."
+        else:
+            text = (
+                "❌ <b>تعذر تجهيز السيرفر</b>\n\n"
+                "يمكنك فحص الحالة أو حذف السيرفر لإيقاف التكلفة."
+            )
         try:
-            state = await orch().current_state(probe_inference=False)
-            billing = state.get("billing") if isinstance(state, dict) else None
+            await status_message.edit_text(text, reply_markup=main_menu())
         except Exception:
-            billing = None
-        lines = [
-            "❌ <b>تعذر تجهيز السيرفر</b>",
-            "",
-            "إذا ظهر لديك كسيرفر حالي، احذفه من زر «حذف السيرفر» لإيقاف التكلفة.",
-        ]
-        lines.extend(_billing_lines(billing))
-        await callback.message.edit_text("\n".join(lines), reply_markup=main_menu())
+            pass
         return
 
-    state = await orch().current_state(probe_inference=False)
-    lines = ["✅ <b>السيرفر جاهز</b>", "", "أرسل وصفًا لإنشاء صورة، أو صورة مع تعليمات لتعديلها."]
-    lines.extend(_billing_lines(state.get("billing")))
-    await callback.message.edit_text("\n".join(lines), reply_markup=main_menu())
+    try:
+        state = await orch().current_state(probe_inference=False)
+        lines = [
+            "✅ <b>السيرفر جاهز</b>",
+            "",
+            "أرسل وصفًا لإنشاء صورة، أو صورة مع تعليمات لتعديلها.",
+        ]
+        lines.extend(_billing_lines(state.get("billing")))
+        await status_message.edit_text("\n".join(lines), reply_markup=main_menu())
+    except Exception:
+        logger.exception("Could not render ready status")
+
+
+@router.callback_query(lambda q: q.data and q.data.startswith("servers:rent:"))
+async def rent(callback: CallbackQuery) -> None:
+    if _lifecycle_busy():
+        await safe_callback_answer(
+            callback,
+            "يوجد تجهيز أو تشغيل جارٍ بالفعل",
+            show_alert=True,
+        )
+        return
+
+    offer_id = int(callback.data.rsplit(":", 1)[1])
+    await safe_callback_answer(callback, "بدأ التجهيز بالخلفية")
+    await callback.message.edit_text(
+        "🚀 <b>بدأ استئجار وتجهيز السيرفر</b>\n\n"
+        "يمكنك الآن استخدام «حالة السيرفر» و«فحص الجاهزية» بدون انتظار انتهاء التجهيز.",
+        reply_markup=main_menu(),
+    )
+    status_message = await callback.message.answer(
+        "⏳ <b>جاري بدء التجهيز...</b>"
+    )
+    _track_lifecycle(
+        _rent_and_prepare_background(offer_id, status_message),
+        name="pixelpilot-rent-and-prepare",
+    )
 
 
 @router.callback_query(lambda q: q.data == "servers:destroy_confirm")
@@ -346,36 +429,69 @@ async def stop(callback: CallbackQuery) -> None:
     await callback.message.edit_text("\n".join(lines), reply_markup=main_menu())
 
 
-@router.callback_query(lambda q: q.data == "servers:start")
-async def start_instance(callback: CallbackQuery) -> None:
-    await safe_callback_answer(callback, "جاري التشغيل...")
-    await callback.message.edit_text("▶️ جاري تشغيل السيرفر...")
-
+async def _start_background(status_message: Message) -> None:
     async def progress(_text: str) -> None:
         try:
             state = await orch().current_state(probe_inference=False)
-            lines = ["⏳ <b>جاري تشغيل السيرفر...</b>"]
+            lines = [
+                "⏳ <b>جاري تشغيل السيرفر...</b>",
+                "",
+                "التشغيل مستمر في الخلفية.",
+            ]
             lines.extend(_billing_lines(state.get("billing")))
-            await callback.message.edit_text("\n".join(lines))
+            await status_message.edit_text("\n".join(lines))
         except Exception:
             pass
 
     try:
         started = await orch().start_current(progress=progress)
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("Server start failed")
-        await callback.message.edit_text(
-            "❌ تعذر تشغيل السيرفر الآن.",
+        try:
+            await status_message.edit_text(
+                "❌ تعذر تشغيل السيرفر الآن.",
+                reply_markup=main_menu(),
+            )
+        except Exception:
+            pass
+        return
+
+    if not started:
+        await status_message.edit_text(
+            "لا يوجد سيرفر حالي.",
             reply_markup=main_menu(),
         )
         return
-    if not started:
-        await callback.message.edit_text("لا يوجد سيرفر حالي.", reply_markup=main_menu())
-        return
+
     state = await orch().current_state(probe_inference=False)
     lines = ["✅ السيرفر جاهز."]
     lines.extend(_billing_lines(state.get("billing")))
-    await callback.message.edit_text("\n".join(lines), reply_markup=main_menu())
+    await status_message.edit_text("\n".join(lines), reply_markup=main_menu())
+
+
+@router.callback_query(lambda q: q.data == "servers:start")
+async def start_instance(callback: CallbackQuery) -> None:
+    if _lifecycle_busy():
+        await safe_callback_answer(
+            callback,
+            "يوجد تجهيز أو تشغيل جارٍ بالفعل",
+            show_alert=True,
+        )
+        return
+
+    await safe_callback_answer(callback, "بدأ التشغيل بالخلفية")
+    await callback.message.edit_text(
+        "▶️ <b>بدأ تشغيل السيرفر</b>\n\n"
+        "يمكنك متابعة الحالة أثناء التشغيل.",
+        reply_markup=main_menu(),
+    )
+    status_message = await callback.message.answer("⏳ جاري تشغيل السيرفر...")
+    _track_lifecycle(
+        _start_background(status_message),
+        name="pixelpilot-start-instance",
+    )
 
 
 def _status_label(state: dict) -> str:
@@ -399,7 +515,11 @@ def _status_label(state: dict) -> str:
 
 @router.callback_query(lambda q: q.data == "servers:status")
 async def status(callback: CallbackQuery) -> None:
-    await safe_callback_answer(callback)
+    await safe_callback_answer(callback, "جاري قراءة الحالة...")
+    await callback.message.edit_text(
+        "📊 <b>جاري قراءة حالة السيرفر...</b>",
+        reply_markup=main_menu(),
+    )
     try:
         state = await orch().current_state(probe_inference=True)
     except Exception:
