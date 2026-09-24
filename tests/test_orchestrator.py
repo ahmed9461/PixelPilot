@@ -94,6 +94,8 @@ def test_orchestrator_full_fake_lifecycle(tmp_path):
         assert "MODEL_ID=Qwen/Qwen-Image-2.1" in env
         assert "IMAGE_MEMORY_MODE=auto" in env
         assert "IMAGE_MAX_REFERENCE_IMAGES=10" in env
+        assert "PROMPT_ENHANCER_T2I_ID=Qwen/Qwen-Image-2.1-PE-T2I" in env
+        assert "PROMPT_ENHANCER_I2I_ID=Qwen/Qwen-Image-2.1-PE-I2I" in env
         assert "WHISPER" not in env
         assert "VLLM" not in env
 
@@ -104,9 +106,11 @@ def test_orchestrator_full_fake_lifecycle(tmp_path):
             height=1024,
             steps=40,
             reference_images=(ReferenceImage(b"x"),),
+            enhance_prompt=True,
         )
         assert result.data == b"png"
         assert inference.request[0] == prompt
+        assert inference.request[1]["enhance_prompt"] is True
 
         assert await orch.stop_current() is True
         assert await orch.start_current() is True

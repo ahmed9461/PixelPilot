@@ -19,10 +19,10 @@ Output:
 ## Non-negotiable behavior
 
 1. No assistant personality, emotion, tone, role or chat-style profile is part of image generation.
-2. Do not translate, improve, prepend, append or rewrite the user's prompt.
-3. Validate that a prompt is non-empty, but send the original prompt string to the model.
+2. Raw mode remains available and must send the user's prompt unchanged.
+3. Official Qwen Prompt Enhancer is an explicit owner-controlled mode, never a hidden layer. When enabled, use only Qwen/Qwen-Image-2.1-PE-T2I for text-to-image or Qwen/Qwen-Image-2.1-PE-I2I for editing, together with the system_prompt.txt shipped by that model.
 4. Do not maintain conversational context or chat history. Each image request is independent.
-5. User-facing controls are generation controls: aspect ratio, resolution quality and inference steps.
+5. User-facing controls are generation controls: aspect ratio, resolution quality, inference steps, and prompt mode (Original or Official Qwen Enhance).
 6. Support up to 10 user-supplied reference images.
 7. Preserve PNG output so alpha/transparency is not destroyed.
 8. Keep generated/reference image bytes ephemeral; do not persist them in SQLite.
@@ -38,8 +38,8 @@ Output:
 
 - Search minimum: 24 GB VRAM.
 - Preferred tier: 48 GB+ VRAM.
-- Default disk: 100 GB.
-- Minimum host RAM: 48 GB for the supported CPU-offload profile.
+- Default disk: 100 GB. Prompt-enhancer checkpoints are downloaded lazily; monitor free space if both T2I and I2I enhancer caches are used on the same instance.
+- Minimum host RAM: 64 GB for safe Qwen-Image offload plus on-demand 9B prompt enhancement.
 - 24–47 GB VRAM: automatic CPU model offload with VAE tiling/slicing.
 - 48 GB+: automatic full-GPU placement.
 - Default dtype: BF16.
@@ -77,6 +77,8 @@ Telegram owner
         -> QwenImage21Pipeline
            -> CUDA GPU
            -> optional CPU offload when VRAM < 48 GB
+        -> on-demand official Qwen 9B prompt enhancer
+           -> loaded only for rewrite, then released before diffusion
 ```
 
 ## Persistence
@@ -107,3 +109,15 @@ SQLite does not store:
 - custom chat prompts
 - chat context/history
 - response streaming
+
+
+## Official prompt enhancer
+
+- Mode is stored in SQLite and defaults to `original`.
+- `original`: prompt reaches Qwen-Image unchanged.
+- `qwen`: use the official Qwen prompt enhancer before generation.
+- T2I enhancer: `Qwen/Qwen-Image-2.1-PE-T2I`.
+- I2I enhancer: `Qwen/Qwen-Image-2.1-PE-I2I`.
+- The enhancer is loaded on demand on the rented GPU, used for one rewrite, then destroyed and CUDA cache is cleared before image generation.
+- Enhancer failures are fail-open by default: log the failure and continue with the original prompt rather than losing the image request.
+- Do not persist original or rewritten prompt bodies to SQLite.

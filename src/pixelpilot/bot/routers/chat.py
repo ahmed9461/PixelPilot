@@ -83,11 +83,18 @@ async def _generate(
         return
 
     image_settings = await get_state(orch().db)
-    status_text = (
-        "🎨 جاري تعديل الصورة..."
-        if references
-        else "🎨 جاري إنشاء الصورة..."
-    )
+    if image_settings.enhance_prompt:
+        status_text = (
+            "✨ جاري تحسين تعليمات التعديل بواسطة Qwen الرسمي..."
+            if references
+            else "✨ جاري تحسين البرومت بواسطة Qwen الرسمي..."
+        )
+    else:
+        status_text = (
+            "🎨 جاري تعديل الصورة..."
+            if references
+            else "🎨 جاري إنشاء الصورة..."
+        )
     status = await message.answer(status_text)
 
     try:
@@ -97,6 +104,7 @@ async def _generate(
             height=image_settings.height,
             steps=image_settings.steps,
             reference_images=references,
+            enhance_prompt=image_settings.enhance_prompt,
         )
     except Exception as exc:
         logger.exception("Image request failed")
@@ -108,9 +116,16 @@ async def _generate(
     except Exception:
         pass
 
+    if result.prompt_enhanced:
+        enhancer_line = "\n✨ تحسين Qwen الرسمي: <b>تم</b>"
+    elif result.enhancer_fallback:
+        enhancer_line = "\n⚠️ تعذر تحسين Qwen؛ تم استخدام البرومت الأصلي"
+    else:
+        enhancer_line = ""
     caption = (
         f"✅ تم — {result.width}×{result.height}\n"
         f"🎲 Seed: <code>{result.seed}</code>"
+        f"{enhancer_line}"
     )
     await message.answer_document(
         BufferedInputFile(result.data, filename=f"pixelpilot-{result.seed}.png"),
@@ -170,8 +185,9 @@ async def chat_help(callback: CallbackQuery) -> None:
         "• لإنشاء صورة: أرسل وصفك كنص عادي.\n"
         "• لتعديل صورة: أرسل الصورة واكتب تعليمات التعديل في الوصف.\n"
         "• يمكنك إرسال ألبوم يصل إلى 10 صور مرجعية مع تعليماتك.\n"
-        "• من «إعدادات الصور» تستطيع تغيير النسبة والجودة وعدد خطوات التوليد.\n\n"
-        "لا يتم إضافة شخصية أو مشاعر أو برومت مخفي إلى طلبك.",
+        "• من «إعدادات الصور» تستطيع تغيير النسبة والجودة وعدد خطوات التوليد.\n"
+        "• يمكنك الاختيار بين البرومت الأصلي أو «تحسين Qwen» الرسمي.\n\n"
+        "لا توجد شخصية أو مشاعر أو طبقة برومت مخفية؛ تحسين Qwen يعمل فقط عندما تختاره بنفسك.",
         reply_markup=main_menu(),
     )
 

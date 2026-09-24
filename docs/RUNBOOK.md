@@ -55,7 +55,7 @@ Recommended:
 
 Fallback:
 - 24 GB VRAM with automatic model CPU offload
-- at least 48 GB host RAM
+- at least 64 GB host RAM
 - start with Standard quality when editing multiple references
 
 ## Vast worker logs
@@ -87,7 +87,7 @@ CUDA out of memory:
 - reduce reference-image count
 - use a 48 GB+ GPU
 
-Host RAM pressure while using a 24 GB GPU:
+Host RAM pressure while using a 24 GB GPU or the on-demand prompt enhancer:
 - choose a host with more system RAM
 - prefer a 48 GB+ GPU to avoid CPU model offload
 

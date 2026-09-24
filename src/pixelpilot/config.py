@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     vast_min_gpu_ram_gb: int = 24
     vast_preferred_gpu_ram_gb: int = 48
     # CPU offload keeps large model components in host memory on 24 GB GPUs.
-    vast_min_cpu_ram_gb: int = 48
+    vast_min_cpu_ram_gb: int = 64
     vast_min_reliability: float = 0.98
     vast_max_price_usd_hour: float = 0.50
     vast_default_limit: int = 8
@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     image_default_steps: int = 40
     image_max_reference_images: int = 10
     image_max_upload_mb: int = 25
+    prompt_enhancer_t2i_id: str = "Qwen/Qwen-Image-2.1-PE-T2I"
+    prompt_enhancer_i2i_id: str = "Qwen/Qwen-Image-2.1-PE-I2I"
+    prompt_enhancer_fail_open: bool = True
 
     # Public authenticated image inference endpoint.
     inference_port: int = 8190
@@ -133,8 +136,8 @@ class Settings(BaseSettings):
     @field_validator("vast_min_cpu_ram_gb")
     @classmethod
     def host_ram_large_enough_for_offload(cls, value: int) -> int:
-        if value < 48:
-            raise ValueError("VAST_MIN_CPU_RAM_GB must be >= 48 for the supported offload profile")
+        if value < 64:
+            raise ValueError("VAST_MIN_CPU_RAM_GB must be >= 64 for the supported Qwen-Image + prompt-enhancer profile")
         return value
 
     @field_validator("image_memory_mode")

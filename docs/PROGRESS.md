@@ -22,3 +22,14 @@ Completed on branch `qwen-image-2.1-transition`:
 
 Deployment note:
 The repository branch is ready for integration, but the persistent controller must be updated together with `main`. Merging a new GPU runtime while leaving an old controller process running would create a protocol mismatch on the next rental.
+
+
+## 2026-09-24 — Official Qwen Prompt Enhancer
+
+Active plan:
+- add Original / Official Qwen prompt mode to Telegram settings
+- integrate T2I and I2I official Qwen 9B PE checkpoints
+- keep enhancer on-demand so 24 GB GPU support remains possible
+- fail open to original prompt if enhancement fails
+- surface whether enhancement was used in the image result
+- extend runtime tests and CI before merging

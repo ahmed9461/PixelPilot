@@ -21,11 +21,15 @@ def test_qwen_image_profile_defaults():
     assert settings.vast_min_gpu_ram_gb == 24
     assert settings.vast_preferred_gpu_ram_gb == 48
     assert settings.vast_disk_gb == 100
+    assert settings.vast_min_cpu_ram_gb == 64
     assert settings.vast_max_price_usd_hour == 0.50
     assert settings.model_dtype == "bfloat16"
     assert settings.image_memory_mode == "auto"
     assert settings.image_default_steps == 40
     assert settings.image_max_reference_images == 10
+    assert settings.prompt_enhancer_t2i_id == "Qwen/Qwen-Image-2.1-PE-T2I"
+    assert settings.prompt_enhancer_i2i_id == "Qwen/Qwen-Image-2.1-PE-I2I"
+    assert settings.prompt_enhancer_fail_open is True
 
 
 def test_qwen_image_profile_rejects_gpu_below_24gb():
@@ -55,4 +59,4 @@ def test_qwen_image_profile_rejects_small_disk():
 
 def test_qwen_image_profile_rejects_low_host_ram():
     with pytest.raises(ValidationError):
-        Settings(_env_file=None, vast_min_cpu_ram_gb=32)
+        Settings(_env_file=None, vast_min_cpu_ram_gb=48)

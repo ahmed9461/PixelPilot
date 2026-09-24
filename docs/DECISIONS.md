@@ -31,3 +31,29 @@ Use PNG rather than JPEG so image quality and alpha/transparency are preserved.
 
 ### Removed architecture
 Remove vLLM, Whisper, Qwen3-VL, audio/video understanding, assistant profiles, chat history and text-response streaming from active code.
+
+
+## 2026-09-24 — Optional official Qwen Prompt Enhancer
+
+Add two explicit prompt modes:
+- `original`: byte-preserving user prompt path.
+- `qwen`: official Qwen prompt rewriting.
+
+Use the official 9B PE checkpoints:
+- `Qwen/Qwen-Image-2.1-PE-T2I`
+- `Qwen/Qwen-Image-2.1-PE-I2I`
+
+The PE model must not stay resident beside Qwen-Image-2.1. The worker temporarily frees/moves the diffusion pipeline, loads the required PE model on CUDA, rewrites once using the checkpoint's shipped `system_prompt.txt`, unloads it, clears CUDA, restores the diffusion placement, and then generates.
+
+This preserves 24 GB GPU compatibility at the cost of extra latency on enhanced requests. Original mode remains the default and has no extra model download/load cost.
+
+
+### Official enhancer inference profile
+
+The Transformers path follows Qwen's published `prompt_rewrite/run_transformers.py` contract rather than a simplified text-only approximation:
+- both T2I and edit use `AutoProcessor` + `AutoModelForImageTextToText`
+- T2I uses presence penalty `1.5` and `max_new_tokens=16256`
+- edit uses presence penalty `0` and `max_new_tokens=24000`
+- both use temperature `1.0`, top-p `0.95`, top-k `20`, thinking enabled, and seed `42`
+- edit references are capped to about 1 megapixel before prompt rewriting, matching Qwen's reference profile
+- minimum Vast host RAM is 64 GB for safer diffusion offload plus temporary 9B enhancer loading

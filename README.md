@@ -12,7 +12,7 @@ PixelPilot is an owner-only Telegram image studio that rents a temporary Vast.ai
 - Vast lifecycle: live offer search, rent, provision, stop, start, destroy, cost meter, recovery and preflight.
 - Owner-only Telegram access.
 
-PixelPilot does **not** inject a hidden system/developer prompt, personality, emotion, tone, chat history or prompt rewriting. The user's prompt is sent to Qwen-Image as supplied.
+PixelPilot does **not** inject a hidden system/developer prompt, personality, emotion, tone or chat history. The owner chooses between **Original Prompt** (sent unchanged) and the official **Qwen Prompt Enhancer** for Qwen-Image-2.1.
 
 ## Runtime
 
@@ -32,11 +32,11 @@ The GPU instance loads the Diffusers `QwenImage21Pipeline` directly. vLLM, Qwen3
 
 The BF16 Qwen-Image-2.1 checkpoint is roughly 33 GB before runtime overhead.
 
-- **24 GB VRAM**: supported through model CPU offload + VAE tiling/slicing when the host has at least **48 GB system RAM**. Best with Standard resolution; edits with many references can be slower and may need lower memory pressure.
+- **24 GB VRAM**: supported through model CPU offload + VAE tiling/slicing when the host has at least **64 GB system RAM**. Best with Standard resolution; edits with many references can be slower and may need lower memory pressure.
 - **48 GB+ VRAM**: preferred. PixelPilot keeps the pipeline on GPU in `auto` mode for better speed and 2K work.
 - Vast search minimum: **24 GB**.
 - Preferred offer tier: **48 GB+**.
-- Minimum host RAM for the supported offload profile: **48 GB**.
+- Minimum host RAM for the supported image + prompt-enhancer profile: **64 GB**.
 - Default disk: **100 GB**.
 - Hard rental ceiling: **$0.50/hour**.
 

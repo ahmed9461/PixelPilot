@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import gc
 import io
 import logging
 import os
@@ -12,6 +13,8 @@ from typing import Any
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel, Field
+
+from pixelpilot.services.prompt_enhancer import PromptEnhancement, enhance_i2i, enhance_t2i
 
 
 logger = logging.getLogger(__name__)
@@ -25,6 +28,9 @@ VAE_TILING = os.environ.get("IMAGE_VAE_TILING", "true").strip().lower() not in {
 VAE_SLICING = os.environ.get("IMAGE_VAE_SLICING", "true").strip().lower() not in {"0", "false", "no"}
 MAX_REFERENCE_IMAGES = int(os.environ.get("IMAGE_MAX_REFERENCE_IMAGES", "10"))
 MAX_UPLOAD_BYTES = int(os.environ.get("IMAGE_MAX_UPLOAD_MB", "25")) * 1024 * 1024
+PE_T2I_ID = os.environ.get("PROMPT_ENHANCER_T2I_ID", "Qwen/Qwen-Image-2.1-PE-T2I")
+PE_I2I_ID = os.environ.get("PROMPT_ENHANCER_I2I_ID", "Qwen/Qwen-Image-2.1-PE-I2I")
+PE_FAIL_OPEN = os.environ.get("PROMPT_ENHANCER_FAIL_OPEN", "true").strip().lower() not in {"0", "false", "no"}
 
 
 class GenerationRequest(BaseModel):
@@ -35,6 +41,7 @@ class GenerationRequest(BaseModel):
     seed: int | None = None
     true_cfg_scale: float = 1.0
     negative_prompt: str | None = None
+    enhance_prompt: bool = False
 
 
 @dataclass(slots=True)
@@ -200,6 +207,54 @@ def _decode_uploaded_image(data: bytes) -> Any:
     return image.convert("RGBA" if has_alpha else "RGB")
 
 
+def _prepare_diffusion_for_enhancer() -> None:
+    pipe = state.pipe
+    torch = state.torch
+    if pipe is None or torch is None:
+        raise RuntimeError("Image runtime is unavailable")
+
+    if state.memory_mode == "gpu":
+        pipe.to("cpu")
+    else:
+        free_hooks = getattr(pipe, "maybe_free_model_hooks", None)
+        if callable(free_hooks):
+            free_hooks()
+
+    gc.collect()
+    torch.cuda.empty_cache()
+
+
+def _restore_diffusion_after_enhancer() -> None:
+    pipe = state.pipe
+    if pipe is None:
+        raise RuntimeError("Image model is not loaded")
+    if state.memory_mode == "gpu":
+        pipe.to("cuda")
+
+
+def _enhance_prompt(prompt: str, reference_images: list[Any]) -> PromptEnhancement:
+    torch = state.torch
+    if torch is None:
+        raise RuntimeError("Torch runtime is unavailable")
+
+    _prepare_diffusion_for_enhancer()
+    try:
+        if reference_images:
+            return enhance_i2i(
+                prompt,
+                reference_images,
+                torch=torch,
+                model_id=PE_I2I_ID,
+            )
+        return enhance_t2i(
+            prompt,
+            torch=torch,
+            model_id=PE_T2I_ID,
+        )
+    finally:
+        _restore_diffusion_after_enhancer()
+
+
 def _run_pipeline(
     *,
     prompt: str,
@@ -253,9 +308,9 @@ async def _generate_response(
     reference_images: list[Any],
     true_cfg_scale: float,
     negative_prompt: str | None,
+    enhance_prompt: bool,
 ) -> dict[str, Any]:
-    clean_prompt = prompt.strip()
-    if not clean_prompt:
+    if not prompt.strip():
         raise HTTPException(status_code=422, detail="prompt cannot be empty")
     _validate_dimensions(width, height)
     _validate_steps(steps)
@@ -266,11 +321,44 @@ async def _generate_response(
         )
 
     actual_seed = _normalize_seed(seed)
+    effective_prompt = prompt
+    prompt_enhanced = False
+    enhancer_model: str | None = None
+    enhancer_ratio: str | None = None
+    enhancer_ratio_follow: str | None = None
+    enhancer_fallback = False
+
     async with generation_lock:
+        if enhance_prompt:
+            try:
+                enhanced = await asyncio.to_thread(
+                    _enhance_prompt,
+                    prompt,
+                    reference_images,
+                )
+                effective_prompt = enhanced.prompt
+                prompt_enhanced = True
+                enhancer_model = enhanced.model_id
+                enhancer_ratio = enhanced.ratio
+                enhancer_ratio_follow = enhanced.ratio_follow
+                logger.info(
+                    "Official Qwen prompt enhancement completed model=%s ratio=%s",
+                    enhancer_model,
+                    enhancer_ratio,
+                )
+            except Exception as exc:
+                logger.exception("Official Qwen prompt enhancement failed")
+                if not PE_FAIL_OPEN:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Prompt enhancement failed: {str(exc)[:1000]}",
+                    ) from exc
+                enhancer_fallback = True
+
         try:
             image = await asyncio.to_thread(
                 _run_pipeline,
-                prompt=prompt,
+                prompt=effective_prompt,
                 width=width,
                 height=height,
                 steps=steps,
@@ -287,7 +375,7 @@ async def _generate_response(
             if "out of memory" in detail.lower():
                 detail = (
                     "GPU ran out of memory. Try Standard quality, fewer/lower-resolution "
-                    "reference images, or a GPU with more VRAM."
+                    "reference images, disable prompt enhancement, or use a GPU with more VRAM."
                 )
             raise HTTPException(status_code=500, detail=detail[:1000]) from exc
 
@@ -299,8 +387,12 @@ async def _generate_response(
         "height": height,
         "model": MODEL_ID,
         "reference_count": len(reference_images),
+        "prompt_enhanced": prompt_enhanced,
+        "enhancer_model": enhancer_model,
+        "enhancer_ratio": enhancer_ratio,
+        "enhancer_ratio_follow": enhancer_ratio_follow,
+        "enhancer_fallback": enhancer_fallback,
     }
-
 
 @app.get("/health")
 async def health(authorization: str | None = Header(default=None)) -> dict[str, Any]:
@@ -314,6 +406,12 @@ async def health(authorization: str | None = Header(default=None)) -> dict[str, 
         "memory_mode": state.memory_mode,
         "gpu_vram_gb": round(state.gpu_vram_gb, 2),
         "max_reference_images": MAX_REFERENCE_IMAGES,
+        "prompt_enhancer": {
+            "mode": "on_demand",
+            "t2i_model": PE_T2I_ID,
+            "i2i_model": PE_I2I_ID,
+            "fail_open": PE_FAIL_OPEN,
+        },
     }
 
 
@@ -340,6 +438,7 @@ async def image_generations(
         reference_images=[],
         true_cfg_scale=request.true_cfg_scale,
         negative_prompt=request.negative_prompt,
+        enhance_prompt=request.enhance_prompt,
     )
 
 
@@ -353,6 +452,7 @@ async def image_edits(
     seed: int | None = Form(None),
     true_cfg_scale: float = Form(1.0),
     negative_prompt: str | None = Form(None),
+    enhance_prompt: bool = Form(False),
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     _check_auth(authorization)
@@ -380,4 +480,5 @@ async def image_edits(
         reference_images=reference_images,
         true_cfg_scale=true_cfg_scale,
         negative_prompt=negative_prompt,
+        enhance_prompt=enhance_prompt,
     )
