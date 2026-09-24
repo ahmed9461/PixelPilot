@@ -60,3 +60,8 @@ def test_qwen_image_profile_rejects_small_disk():
 def test_qwen_image_profile_rejects_low_host_ram():
     with pytest.raises(ValidationError):
         Settings(_env_file=None, vast_min_cpu_ram_gb=32)
+
+
+def test_prompt_enhancer_token_budget_range():
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, prompt_enhancer_max_new_tokens=64)
