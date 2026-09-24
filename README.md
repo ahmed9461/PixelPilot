@@ -40,7 +40,7 @@ The BF16 Qwen-Image-2.1 checkpoint is roughly 33 GB before runtime overhead.
 - Default disk: **100 GB**.
 - Hard rental ceiling: **$0.50/hour**.
 
-The offer list keeps 24 GB fallback machines available while ranking suitable 48 GB+ machines first.
+Offer discovery scans a wider live pool than the 8 rows shown in Telegram. Normal search performs a dedicated 48 GB+ marketplace query plus a 24 GB+ fallback query, deduplicates them, then ranks 48 GB+ offers first. The offer list also exposes a `48GB+ only` mode.
 
 ## Image presets
 
