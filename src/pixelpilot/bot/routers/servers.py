@@ -134,9 +134,10 @@ async def preflight(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback, "جاري الفحص...")
     await callback.message.edit_text(
         "🧪 <b>جاري فحص الجاهزية...</b>\n\n"
-        "أتحقق من الإعدادات والاتصال والخدمات الخارجية.",
+        "أتحقق من إعدادات المشروع والوصول إلى Git وQwen.",
         reply_markup=main_menu(),
     )
+
     checks = run_local_preflight(orch().settings)
     if all(item.ok for item in checks):
         checks.extend(await run_external_preflight(orch().settings))
@@ -146,24 +147,22 @@ async def preflight(callback: CallbackQuery) -> None:
             "PixelPilot preflight failed: %s",
             [(item.name, item.detail) for item in checks if not item.ok],
         )
+        failed = [
+            f"❌ {escape(item.name)}: {escape(item.detail)}"
+            for item in checks
+            if not item.ok
+        ]
         await callback.message.edit_text(
-            "❌ <b>يوجد خلل في الإعدادات</b>\n\nتأكد من إعدادات المشروع ثم أعد الفحص.",
-            reply_markup=main_menu(),
-        )
-        return
-
-    try:
-        offers = await orch().offers()
-    except Exception:
-        logger.exception("Server availability check failed")
-        await callback.message.edit_text(
-            "❌ تعذر إكمال الفحص الآن. جرّب مرة أخرى بعد قليل.",
+            "❌ <b>يوجد خلل في الجاهزية</b>\n\n"
+            + "\n".join(failed),
             reply_markup=main_menu(),
         )
         return
 
     await callback.message.edit_text(
-        f"✅ <b>كل شيء جاهز</b>\n\nيوجد {len(offers)} عرض متاح حاليًا.",
+        "✅ <b>فحص الجاهزية ناجح</b>\n\n"
+        "الإعدادات ومصدر المشروع والوصول إلى Qwen سليمة. "
+        "البحث عن عروض Vast أصبح منفصلًا حتى يبقى هذا الفحص سريعًا.",
         reply_markup=main_menu(),
     )
 
@@ -388,6 +387,7 @@ async def destroy_confirm(callback: CallbackQuery) -> None:
 @router.callback_query(lambda q: q.data == "servers:destroy")
 async def destroy(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback, "جاري الحذف...")
+    await _cancel_lifecycle_if_running()
     try:
         destroyed = await orch().destroy_current()
     except Exception:
@@ -411,6 +411,7 @@ async def destroy(callback: CallbackQuery) -> None:
 @router.callback_query(lambda q: q.data == "servers:stop")
 async def stop(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback, "جاري الإيقاف...")
+    await _cancel_lifecycle_if_running()
     try:
         stopped = await orch().stop_current()
     except Exception:
@@ -531,8 +532,13 @@ async def status(callback: CallbackQuery) -> None:
         return
 
     if not state.get("instance_id"):
+        phase = str(state.get("phase") or "none")
+        if phase == "none":
+            body = "لا يوجد سيرفر حالي."
+        else:
+            body = _status_label(state)
         await callback.message.edit_text(
-            "📊 <b>حالة السيرفر</b>\n\nلا يوجد سيرفر حالي.",
+            f"📊 <b>حالة السيرفر</b>\n\n{body}",
             reply_markup=main_menu(),
         )
         return
