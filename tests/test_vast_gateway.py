@@ -1,4 +1,10 @@
-from pixelpilot.services.vast_gateway import build_offer_query, extract_mapped_port, normalize_offer
+from pixelpilot.services.vast_gateway import (
+    VastCreateRejected,
+    VastSdkGateway,
+    build_offer_query,
+    extract_mapped_port,
+    normalize_offer,
+)
 
 
 def test_build_query_contains_cost_ram_and_safety_filters():
@@ -172,4 +178,52 @@ def test_find_instances_by_label_parses_instance_list():
         assert len(refs) == 1
         assert refs[0].instance_id == 91
         assert refs[0].status == "loading"
+    asyncio.run(scenario())
+
+
+
+def test_create_instance_classifies_explicit_rejection():
+    import asyncio
+
+    class FakeClient:
+        def create_instance(self, **kwargs):
+            return {
+                "success": False,
+                "msg": "offer is no longer available",
+            }
+
+    async def scenario():
+        gateway = VastSdkGateway("secret")
+        gateway._client = FakeClient()
+        try:
+            await gateway.create_instance(
+                123,
+                image="vastai/pytorch:test",
+                disk_gb=100,
+            )
+        except VastCreateRejected as exc:
+            assert exc.reason == "offer is no longer available"
+        else:
+            raise AssertionError("expected explicit Vast rejection")
+
+    asyncio.run(scenario())
+
+
+def test_create_instance_keeps_success_contract():
+    import asyncio
+
+    class FakeClient:
+        def create_instance(self, **kwargs):
+            return {"success": True, "new_contract": 987}
+
+    async def scenario():
+        gateway = VastSdkGateway("secret")
+        gateway._client = FakeClient()
+        result = await gateway.create_instance(
+            123,
+            image="vastai/pytorch:test",
+            disk_gb=100,
+        )
+        assert result["new_contract"] == 987
+
     asyncio.run(scenario())
