@@ -48,7 +48,7 @@ Telegram text/caption
   -> QwenImage21Pipeline
 ```
 
-There is no chat history, persona layer, tone layer or prompt rewrite between the Telegram request and the image pipeline.
+There is no chat history, persona layer or tone layer. Prompt rewriting occurs only when the owner explicitly selects the official Qwen Prompt Enhancer; Original mode sends the prompt unchanged.
 
 ## Reference images
 
