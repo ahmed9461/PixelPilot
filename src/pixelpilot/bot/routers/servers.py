@@ -179,6 +179,12 @@ async def offer_details(callback: CallbackQuery) -> None:
         f"السعر: <b>${offer.price_per_hour:.3f}/ساعة</b>",
         f"الموثوقية: <b>{'?' if offer.reliability is None else f'{offer.reliability * 100:.1f}%'} </b>",
     ]
+    profile = (
+        "🚀 مفضّل — مناسب لوضع GPU الكامل و2K"
+        if offer.gpu_ram_gb >= orch().settings.vast_preferred_gpu_ram_gb
+        else "💡 اقتصادي — يعمل بوضع توفير الذاكرة، ويفضّل معه القياسي"
+    )
+    lines.append(f"ملف التشغيل: <b>{profile}</b>")
     if offer.inet_down_mbps:
         lines.append(f"سرعة التنزيل: <b>{offer.inet_down_mbps:.0f} Mbps</b>")
     if offer.location:
