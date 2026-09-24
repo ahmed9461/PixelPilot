@@ -2,7 +2,7 @@ from aiogram import Router
 from aiogram.filters import CommandStart
 from aiogram.types import CallbackQuery, Message
 
-from pixelpilot.bot.callbacks import safe_callback_answer
+from pixelpilot.bot.callbacks import safe_callback_answer, safe_edit_text
 from pixelpilot.bot.keyboards import main_menu
 from pixelpilot.bot.rich_ui import home_card
 
@@ -39,4 +39,4 @@ async def home(callback: CallbackQuery) -> None:
             reply_markup=main_menu(),
         )
     except Exception:
-        await callback.message.edit_text(WELCOME, reply_markup=main_menu())
+        await safe_edit_text(callback.message, WELCOME, reply_markup=main_menu())

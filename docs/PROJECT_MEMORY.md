@@ -130,3 +130,12 @@ SQLite does not store:
 - A separate owner-controlled “48 GB+ only” search mode is available from the offer list.
 - Search refreshes must remain live; do not rotate cached results to simulate market changes.
 - Rapid refresh clicks should not launch overlapping marketplace searches.
+
+
+## Telegram server-control responsiveness
+
+- Long Vast lifecycle waits must never occupy a Telegram callback handler.
+- Rent/provision and start/wait operations run as named background tasks.
+- Server status uses a short probe timeout and must return quickly even while the image endpoint is still booting.
+- Rapid repeated lifecycle button clicks must not create duplicate provisioning/start tasks.
+- The owner must retain access to status/stop/destroy controls while provisioning is active.

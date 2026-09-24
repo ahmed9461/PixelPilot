@@ -46,3 +46,19 @@ Completed:
 - added a dedicated “48GB+ only” search mode and mode-preserving refresh/back buttons
 - overlapping marketplace requests are serialized
 - added tests for search breadth, preferred-only mode, configuration and UI callbacks
+
+
+## 2026-09-24 — Responsive server controls
+
+Completed:
+- moved long rent/provision and start/wait flows out of Telegram callback handlers into background tasks
+- main server controls remain usable while provisioning or starting
+- readiness probes use a short 5-second timeout instead of the long image-generation timeout
+- Vast status reads are bounded to 8 seconds
+- duplicate lifecycle tasks from rapid button presses are blocked
+- stop/destroy cancel the waiting task only after a real Instance ID exists, preventing untracked paid instances
+- stopped instances no longer get pushed back into a booting/error state by the readiness loop
+- preflight no longer performs an unnecessary marketplace search
+- repeated Telegram edits that produce “message is not modified” are treated as harmless no-ops
+- offers above the final configured hourly ceiling are filtered locally
+- added tests for bounded probes, stopped-state preservation, lifecycle task cancellation, repeated edits and final price filtering

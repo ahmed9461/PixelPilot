@@ -24,6 +24,8 @@ def test_qwen_image_profile_defaults():
     assert settings.vast_min_cpu_ram_gb == 64
     assert settings.vast_default_limit == 8
     assert settings.vast_search_pool_limit == 64
+    assert settings.inference_probe_timeout_seconds == 5.0
+    assert settings.vast_status_timeout_seconds == 8.0
     assert settings.vast_max_price_usd_hour == 0.50
     assert settings.model_dtype == "bfloat16"
     assert settings.image_memory_mode == "auto"
@@ -62,3 +64,11 @@ def test_qwen_image_profile_rejects_small_disk():
 def test_qwen_image_profile_rejects_low_host_ram():
     with pytest.raises(ValidationError):
         Settings(_env_file=None, vast_min_cpu_ram_gb=48)
+
+
+
+def test_runtime_timeouts_must_be_positive():
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, inference_probe_timeout_seconds=0)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, vast_status_timeout_seconds=0)

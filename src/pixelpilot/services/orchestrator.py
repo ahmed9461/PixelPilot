@@ -56,6 +56,28 @@ class Orchestrator:
             timeout_seconds=self.settings.inference_request_timeout_seconds,
         )
 
+    async def _probe_inference_ready(self, inference: InferenceClient) -> bool:
+        try:
+            return await asyncio.wait_for(
+                inference.is_ready(),
+                timeout=float(self.settings.inference_probe_timeout_seconds),
+            )
+        except (TimeoutError, asyncio.TimeoutError):
+            return False
+        except Exception:
+            return False
+
+    async def _show_instance_bounded(self, instance_id: int) -> Any:
+        try:
+            return await asyncio.wait_for(
+                self.vast.show_instance(instance_id),
+                timeout=float(self.settings.vast_status_timeout_seconds),
+            )
+        except (TimeoutError, asyncio.TimeoutError) as exc:
+            raise OrchestratorError(
+                "انتهت مهلة قراءة حالة السيرفر من Vast؛ حاول مرة أخرى."
+            ) from exc
+
     async def offers(self, *, preferred_only: bool = False) -> list[GpuOffer]:
         async with self._offers_lock:
             return await self._offers_locked(preferred_only=preferred_only)
@@ -99,7 +121,11 @@ class Orchestrator:
         for row in (*preferred_rows, *fallback_rows):
             deduped[row.offer_id] = row
 
-        candidates = list(deduped.values())
+        candidates = [
+            row
+            for row in deduped.values()
+            if 0 < row.price_per_hour <= self.settings.vast_max_price_usd_hour
+        ]
         candidates.sort(
             key=lambda row: (
                 row.gpu_ram_gb < self.settings.vast_preferred_gpu_ram_gb,
@@ -259,6 +285,16 @@ class Orchestrator:
                     {"instance_id": result["instance_id"], "error": str(exc)},
                 )
                 raise
+            current_phase = await self.db.get(
+                "instance.phase",
+                InstancePhase.NONE.value,
+            )
+            if current_phase == InstancePhase.STOPPED.value:
+                await self.db.event(
+                    "instance.provision_stopped",
+                    {"instance_id": result["instance_id"], "error": str(exc)},
+                )
+                raise
             await self.db.set("instance.phase", InstancePhase.ERROR.value)
             await self.db.event(
                 "instance.provision_failed",
@@ -289,10 +325,13 @@ class Orchestrator:
             if not current_id or int(current_id) != int(instance_id):
                 raise OrchestratorError("Provisioning was cancelled because this instance is no longer current")
 
-            ref = await self.vast.show_instance(instance_id)
+            ref = await self._show_instance_bounded(instance_id)
             status = ref.status.lower()
             if status in {"running", "frozen", "stopped"}:
                 await sync_billing_status(self.db, status)
+            if status == "stopped":
+                await self.db.set("instance.phase", InstancePhase.STOPPED.value)
+                raise OrchestratorError("تم إيقاف السيرفر أثناء التجهيز")
             if status in {"exited", "error", "failed", "dead"}:
                 raise OrchestratorError(f"Vast instance entered terminal state: {ref.status}")
 
@@ -308,7 +347,7 @@ class Orchestrator:
                 await self.db.set("inference.url", url)
                 token = await self.db.get("inference.token")
                 inference = self._inference_factory(url, str(token or ""))
-                if await inference.is_ready():
+                if await self._probe_inference_ready(inference):
                     await self.db.set("instance.phase", InstancePhase.READY.value)
                     await self._touch_activity()
                     await self.db.event(
@@ -397,11 +436,21 @@ class Orchestrator:
         if not instance_id:
             return state_data
 
-        ref = await self.vast.show_instance(int(instance_id))
-        if ref.status.lower() in {"running", "frozen", "stopped"}:
+        ref = await self._show_instance_bounded(int(instance_id))
+        vast_status = ref.status.lower()
+        if vast_status in {"running", "frozen", "stopped"}:
             await sync_billing_status(self.db, ref.status)
+
+        if vast_status == "stopped":
+            phase = InstancePhase.STOPPED.value
+            await self.db.set("instance.phase", phase)
+        elif vast_status in {"exited", "error", "failed", "dead"}:
+            phase = InstancePhase.ERROR.value
+            await self.db.set("instance.phase", phase)
+
         state_data.update(
             {
+                "phase": phase,
                 "vast_status": ref.status,
                 "public_ip": ref.public_ip,
                 "mapped_port": ref.mapped_port,
@@ -411,7 +460,9 @@ class Orchestrator:
         if probe_inference:
             try:
                 inference = await self._current_inference()
-                state_data["inference_ready"] = await inference.is_ready()
+                state_data["inference_ready"] = await self._probe_inference_ready(
+                    inference
+                )
             except Exception:
                 state_data["inference_ready"] = False
         return state_data
@@ -531,7 +582,7 @@ class Orchestrator:
             )
 
         try:
-            ref = await self.vast.show_instance(int(instance_id))
+            ref = await self._show_instance_bounded(int(instance_id))
         except Exception as exc:
             await self.db.event(
                 "instance.recovery_probe_failed",

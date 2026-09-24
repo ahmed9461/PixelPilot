@@ -3,7 +3,7 @@ import asyncio
 from pixelpilot.config import Settings
 from pixelpilot.db import Database
 from pixelpilot.domain import GeneratedImage, GpuOffer, InstanceRef, ReferenceImage
-from pixelpilot.services.orchestrator import Orchestrator, _extract_instance_id
+from pixelpilot.services.orchestrator import Orchestrator, OrchestratorError, _extract_instance_id
 
 
 def test_extract_instance_id_direct():
@@ -212,5 +212,219 @@ def test_preferred_only_offer_search_skips_fallback_pool(tmp_path):
         assert offers
         assert all(item.gpu_ram_gb >= 48 for item in offers)
         assert await db.get("offers.search_mode") == "preferred"
+
+    asyncio.run(scenario())
+
+
+
+def test_readiness_probe_times_out_without_blocking(tmp_path):
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            telegram_bot_token="t",
+            owner_telegram_id=1,
+            vast_api_key="v",
+            pixelpilot_repo_url="https://example.invalid/PixelPilot.git",
+            database_path=tmp_path / "db.sqlite3",
+            inference_probe_timeout_seconds=0.01,
+        )
+        db = Database(settings.database_path)
+        await db.init()
+        orch = Orchestrator(
+            settings,
+            db,
+            FakeVast(),
+            inference_factory=lambda url, token: FakeInference(),
+        )
+
+        class SlowInference:
+            async def is_ready(self):
+                await asyncio.sleep(1)
+                return True
+
+        started = asyncio.get_running_loop().time()
+        ready = await orch._probe_inference_ready(SlowInference())
+        elapsed = asyncio.get_running_loop().time() - started
+        assert ready is False
+        assert elapsed < 0.2
+
+    asyncio.run(scenario())
+
+
+def test_vast_status_read_is_bounded(tmp_path):
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            telegram_bot_token="t",
+            owner_telegram_id=1,
+            vast_api_key="v",
+            pixelpilot_repo_url="https://example.invalid/PixelPilot.git",
+            database_path=tmp_path / "db.sqlite3",
+            vast_status_timeout_seconds=0.01,
+        )
+        db = Database(settings.database_path)
+        await db.init()
+
+        class SlowVast(FakeVast):
+            async def show_instance(self, instance_id):
+                await asyncio.sleep(1)
+                return InstanceRef(instance_id=instance_id, status="running")
+
+        orch = Orchestrator(
+            settings,
+            db,
+            SlowVast(),
+            inference_factory=lambda url, token: FakeInference(),
+        )
+        started = asyncio.get_running_loop().time()
+        try:
+            await orch._show_instance_bounded(1)
+        except OrchestratorError:
+            pass
+        else:
+            raise AssertionError("expected bounded Vast status timeout")
+        elapsed = asyncio.get_running_loop().time() - started
+        assert elapsed < 0.2
+
+    asyncio.run(scenario())
+
+
+def test_wait_until_ready_preserves_stopped_state(tmp_path):
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            telegram_bot_token="t",
+            owner_telegram_id=1,
+            vast_api_key="v",
+            pixelpilot_repo_url="https://example.invalid/PixelPilot.git",
+            database_path=tmp_path / "db.sqlite3",
+            provision_poll_seconds=0.01,
+            inference_ready_timeout_seconds=1,
+        )
+        db = Database(settings.database_path)
+        await db.init()
+        await db.set("instance.id", 55)
+        await db.set("instance.phase", "provisioning")
+
+        class StoppedVast(FakeVast):
+            async def show_instance(self, instance_id):
+                return InstanceRef(instance_id=instance_id, status="stopped")
+
+        orch = Orchestrator(
+            settings,
+            db,
+            StoppedVast(),
+            inference_factory=lambda url, token: FakeInference(),
+        )
+        try:
+            await orch.wait_until_ready(55)
+        except OrchestratorError:
+            pass
+        else:
+            raise AssertionError("expected stopped provisioning to end")
+        assert await db.get("instance.phase") == "stopped"
+
+    asyncio.run(scenario())
+
+
+def test_offer_search_hides_rows_above_final_price_ceiling(tmp_path):
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            telegram_bot_token="t",
+            owner_telegram_id=1,
+            vast_api_key="v",
+            pixelpilot_repo_url="https://example.invalid/PixelPilot.git",
+            database_path=tmp_path / "db.sqlite3",
+            vast_max_price_usd_hour=0.50,
+        )
+        db = Database(settings.database_path)
+        await db.init()
+
+        class PriceVast(FakeVast):
+            async def search_offers(self, query, limit, **kwargs):
+                if "gpu_ram>=48" in query:
+                    return [
+                        GpuOffer(1, "RTX A6000", 48, 0.49, 0.99, 40),
+                        GpuOffer(2, "RTX A6000", 48, 0.53, 0.99, 42),
+                    ]
+                return [
+                    GpuOffer(3, "RTX 3090", 24, 0.25, 0.99, 60),
+                ]
+
+        orch = Orchestrator(
+            settings,
+            db,
+            PriceVast(),
+            inference_factory=lambda url, token: FakeInference(),
+        )
+        offers = await orch.offers()
+        assert [item.offer_id for item in offers] == [1, 3]
+        assert all(item.price_per_hour <= 0.50 for item in offers)
+
+    asyncio.run(scenario())
+
+
+
+def test_current_state_reconciles_stopped_phase(tmp_path):
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            telegram_bot_token="t",
+            owner_telegram_id=1,
+            vast_api_key="v",
+            pixelpilot_repo_url="https://example.invalid/PixelPilot.git",
+            database_path=tmp_path / "db.sqlite3",
+        )
+        db = Database(settings.database_path)
+        await db.init()
+        await db.set("instance.id", 101)
+        await db.set("instance.phase", "ready")
+
+        class StoppedVast(FakeVast):
+            async def show_instance(self, instance_id):
+                return InstanceRef(instance_id=instance_id, status="stopped")
+
+        orch = Orchestrator(
+            settings,
+            db,
+            StoppedVast(),
+            inference_factory=lambda url, token: FakeInference(),
+        )
+        state = await orch.current_state(probe_inference=False)
+        assert state["phase"] == "stopped"
+        assert await db.get("instance.phase") == "stopped"
+
+    asyncio.run(scenario())
+
+
+def test_current_state_reconciles_terminal_phase(tmp_path):
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            telegram_bot_token="t",
+            owner_telegram_id=1,
+            vast_api_key="v",
+            pixelpilot_repo_url="https://example.invalid/PixelPilot.git",
+            database_path=tmp_path / "db.sqlite3",
+        )
+        db = Database(settings.database_path)
+        await db.init()
+        await db.set("instance.id", 102)
+        await db.set("instance.phase", "ready")
+
+        class DeadVast(FakeVast):
+            async def show_instance(self, instance_id):
+                return InstanceRef(instance_id=instance_id, status="exited")
+
+        orch = Orchestrator(
+            settings,
+            db,
+            DeadVast(),
+            inference_factory=lambda url, token: FakeInference(),
+        )
+        state = await orch.current_state(probe_inference=False)
+        assert state["phase"] == "error"
+        assert await db.get("instance.phase") == "error"
 
     asyncio.run(scenario())
