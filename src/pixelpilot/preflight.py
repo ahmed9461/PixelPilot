@@ -24,9 +24,10 @@ def run_local_preflight(settings: Settings, *, repo_root: Path | None = None) ->
     checks.append(Check("HF read token", True, "configured" if settings.hf_token else "optional; model is public"))
     source_ok = bool(settings.pixelpilot_repo_url or settings.vast_template_hash)
     checks.append(Check("Vast bootstrap source", source_ok, "repository URL configured" if settings.pixelpilot_repo_url else "template hash configured" if settings.vast_template_hash else "missing repo URL/template hash"))
-    checks.append(Check("Model", bool(settings.model_id), settings.model_id or "missing"))
-    checks.append(Check("Vast disk", settings.vast_disk_gb >= 90, f"{settings.vast_disk_gb} GB"))
-    checks.append(Check("GPU VRAM policy", settings.vast_min_gpu_ram_gb >= 48, f">= {settings.vast_min_gpu_ram_gb} GB"))
+    checks.append(Check("Image model", settings.model_id == "Qwen/Qwen-Image-2.1", settings.model_id or "missing"))
+    checks.append(Check("Vast disk", settings.vast_disk_gb >= 70, f"{settings.vast_disk_gb} GB"))
+    checks.append(Check("GPU VRAM minimum", settings.vast_min_gpu_ram_gb >= 24, f">= {settings.vast_min_gpu_ram_gb} GB"))
+    checks.append(Check("Preferred GPU VRAM", settings.vast_preferred_gpu_ram_gb >= 48, f">= {settings.vast_preferred_gpu_ram_gb} GB"))
     return checks
 
 
@@ -55,14 +56,15 @@ def _git_source_check(settings: Settings) -> Check:
 def _hf_access_check(settings: Settings) -> Check:
     try:
         from huggingface_hub import get_hf_file_metadata, hf_hub_url
-        url = hf_hub_url(settings.model_id, "config.json")
+
+        url = hf_hub_url(settings.model_id, "model_index.json")
         metadata = get_hf_file_metadata(url, token=settings.hf_token or None, timeout=15)
         size = int(metadata.size or 0)
         if size <= 0:
-            return Check("Qwen3-VL model access", False, "config metadata returned no size")
-        return Check("Qwen3-VL model access", True, f"{settings.model_id} reachable")
+            return Check("Qwen-Image model access", False, "model metadata returned no size")
+        return Check("Qwen-Image model access", True, f"{settings.model_id} reachable")
     except Exception as exc:
-        return Check("Qwen3-VL model access", False, f"metadata failed: {type(exc).__name__}")
+        return Check("Qwen-Image model access", False, f"metadata failed: {type(exc).__name__}")
 
 
 async def run_external_preflight(settings: Settings) -> list[Check]:
