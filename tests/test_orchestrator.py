@@ -363,3 +363,68 @@ def test_offer_search_hides_rows_above_final_price_ceiling(tmp_path):
         assert all(item.price_per_hour <= 0.50 for item in offers)
 
     asyncio.run(scenario())
+
+
+
+def test_current_state_reconciles_stopped_phase(tmp_path):
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            telegram_bot_token="t",
+            owner_telegram_id=1,
+            vast_api_key="v",
+            pixelpilot_repo_url="https://example.invalid/PixelPilot.git",
+            database_path=tmp_path / "db.sqlite3",
+        )
+        db = Database(settings.database_path)
+        await db.init()
+        await db.set("instance.id", 101)
+        await db.set("instance.phase", "ready")
+
+        class StoppedVast(FakeVast):
+            async def show_instance(self, instance_id):
+                return InstanceRef(instance_id=instance_id, status="stopped")
+
+        orch = Orchestrator(
+            settings,
+            db,
+            StoppedVast(),
+            inference_factory=lambda url, token: FakeInference(),
+        )
+        state = await orch.current_state(probe_inference=False)
+        assert state["phase"] == "stopped"
+        assert await db.get("instance.phase") == "stopped"
+
+    asyncio.run(scenario())
+
+
+def test_current_state_reconciles_terminal_phase(tmp_path):
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            telegram_bot_token="t",
+            owner_telegram_id=1,
+            vast_api_key="v",
+            pixelpilot_repo_url="https://example.invalid/PixelPilot.git",
+            database_path=tmp_path / "db.sqlite3",
+        )
+        db = Database(settings.database_path)
+        await db.init()
+        await db.set("instance.id", 102)
+        await db.set("instance.phase", "ready")
+
+        class DeadVast(FakeVast):
+            async def show_instance(self, instance_id):
+                return InstanceRef(instance_id=instance_id, status="exited")
+
+        orch = Orchestrator(
+            settings,
+            db,
+            DeadVast(),
+            inference_factory=lambda url, token: FakeInference(),
+        )
+        state = await orch.current_state(probe_inference=False)
+        assert state["phase"] == "error"
+        assert await db.get("instance.phase") == "error"
+
+    asyncio.run(scenario())
