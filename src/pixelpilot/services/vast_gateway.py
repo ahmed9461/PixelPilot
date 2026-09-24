@@ -105,6 +105,32 @@ def _safe_error_text(value: Any, *, limit: int = 300) -> str:
     return text[:limit]
 
 
+def _http_rejection_reason(exc: Exception) -> str | None:
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    try:
+        status_code = int(status)
+    except (TypeError, ValueError):
+        return None
+    if not 400 <= status_code < 500:
+        return None
+
+    payload: Any = None
+    try:
+        payload = response.json()
+    except Exception:
+        payload = None
+
+    if isinstance(payload, dict):
+        for key in ("msg", "message", "error", "detail", "reason"):
+            if payload.get(key):
+                return f"HTTP {status_code}: {_safe_error_text(payload.get(key))}"
+    body = getattr(response, "text", None)
+    if body:
+        return f"HTTP {status_code}: {_safe_error_text(body)}"
+    return f"HTTP {status_code}"
+
+
 def _create_rejection_reason(mapped: dict[str, Any]) -> str | None:
     success = mapped.get("success")
     if success is False:
@@ -283,6 +309,9 @@ class VastSdkGateway:
         try:
             result = await asyncio.to_thread(client.create_instance, **kwargs)
         except Exception as exc:
+            rejection = _http_rejection_reason(exc)
+            if rejection:
+                raise VastCreateRejected(rejection) from exc
             raise VastError(f"Vast create_instance failed: {exc}") from exc
         mapped = _coerce_mapping(result)
         if mapped:
