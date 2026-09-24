@@ -33,9 +33,10 @@ def test_generation_payload_preserves_prompt_exactly():
 
         prompt = "  ارسم قطة بلا أي تعديل على النص  "
         client = CapturingClient()
-        result = await client.generate(prompt, width=1024, height=1024, steps=40)
+        result = await client.generate(prompt, width=1024, height=1024, steps=40, enhance_prompt=False)
         assert client.path == "/v1/images/generations"
         assert client.kwargs["json"]["prompt"] == prompt
+        assert client.kwargs["json"]["enhance_prompt"] is False
         assert "system" not in client.kwargs["json"]
         assert result.data == b"png"
         assert result.seed == 99
@@ -77,9 +78,11 @@ def test_edit_uses_multipart_and_multiple_reference_images():
             height=1152,
             steps=40,
             reference_images=refs,
+            enhance_prompt=True,
         )
         assert client.path == "/v1/images/edits"
         assert client.kwargs["data"]["prompt"] == "عدّل الإضاءة"
+        assert client.kwargs["data"]["enhance_prompt"] == "true"
         assert len(client.kwargs["files"]) == 2
         assert result.reference_count == 2
 
