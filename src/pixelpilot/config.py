@@ -165,6 +165,13 @@ class Settings(BaseSettings):
             raise ValueError("IMAGE_DEFAULT_STEPS must be between 1 and 80")
         return value
 
+    @field_validator("prompt_enhancer_max_new_tokens")
+    @classmethod
+    def prompt_enhancer_token_range(cls, value: int) -> int:
+        if not 128 <= value <= 4096:
+            raise ValueError("PROMPT_ENHANCER_MAX_NEW_TOKENS must be between 128 and 4096")
+        return value
+
     @field_validator("image_max_reference_images")
     @classmethod
     def reference_limit(cls, value: int) -> int:
