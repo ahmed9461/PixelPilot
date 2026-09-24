@@ -4,17 +4,17 @@ import asyncio
 import base64
 import gc
 import io
-import json
 import logging
 import os
 import secrets
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel, Field
+
+from pixelpilot.services.prompt_enhancer import PromptEnhancement, enhance_i2i, enhance_t2i
 
 
 logger = logging.getLogger(__name__)
@@ -52,14 +52,6 @@ class RuntimeState:
     device: str = "unknown"
     memory_mode: str = "unknown"
     gpu_vram_gb: float = 0.0
-
-
-class EnhancementResult:
-    def __init__(self, prompt: str, enhanced: bool, model_id: str | None = None, ratio: str | None = None):
-        self.prompt = prompt
-        self.enhanced = enhanced
-        self.model_id = model_id
-        self.ratio = ratio
 
 
 state = RuntimeState()
