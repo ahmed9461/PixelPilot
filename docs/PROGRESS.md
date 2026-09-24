@@ -37,11 +37,12 @@ Active plan:
 
 ## 2026-09-24 — Smarter Vast offer discovery
 
-Active plan:
-- keep Telegram display compact at 8 offers
-- scan a much wider live Vast candidate pool in the background
-- query 48 GB+ offers separately so they cannot be hidden by cheaper 24–25 GB cards
-- merge/dedupe preferred and fallback candidates, then rank 48 GB+ first
-- add a dedicated 48 GB+ only search toggle in Telegram
-- preserve live refresh behavior and cached-offer safety for renting
-- add tests for search breadth, preferred-only mode, ranking and UI callbacks
+Completed:
+- Telegram still displays a compact maximum of 8 offers
+- live discovery scans up to 64 candidates per query, while the Vast gateway requests an even wider backend slice for local ranking
+- normal search queries 48 GB+ separately from the 24 GB+ fallback pool
+- preferred and fallback candidates are deduplicated before ranking
+- 48 GB+ offers rank ahead of lower-VRAM fallback cards
+- added a dedicated “48GB+ only” search mode and mode-preserving refresh/back buttons
+- overlapping marketplace requests are serialized
+- added tests for search breadth, preferred-only mode, configuration and UI callbacks
