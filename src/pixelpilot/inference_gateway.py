@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import gc
 import io
+import json
 import logging
 import os
 import secrets
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
@@ -25,6 +28,10 @@ VAE_TILING = os.environ.get("IMAGE_VAE_TILING", "true").strip().lower() not in {
 VAE_SLICING = os.environ.get("IMAGE_VAE_SLICING", "true").strip().lower() not in {"0", "false", "no"}
 MAX_REFERENCE_IMAGES = int(os.environ.get("IMAGE_MAX_REFERENCE_IMAGES", "10"))
 MAX_UPLOAD_BYTES = int(os.environ.get("IMAGE_MAX_UPLOAD_MB", "25")) * 1024 * 1024
+PE_T2I_ID = os.environ.get("PROMPT_ENHANCER_T2I_ID", "Qwen/Qwen-Image-2.1-PE-T2I")
+PE_I2I_ID = os.environ.get("PROMPT_ENHANCER_I2I_ID", "Qwen/Qwen-Image-2.1-PE-I2I")
+PE_MAX_NEW_TOKENS = int(os.environ.get("PROMPT_ENHANCER_MAX_NEW_TOKENS", "1024"))
+PE_FAIL_OPEN = os.environ.get("PROMPT_ENHANCER_FAIL_OPEN", "true").strip().lower() not in {"0", "false", "no"}
 
 
 class GenerationRequest(BaseModel):
@@ -35,6 +42,7 @@ class GenerationRequest(BaseModel):
     seed: int | None = None
     true_cfg_scale: float = 1.0
     negative_prompt: str | None = None
+    enhance_prompt: bool = False
 
 
 @dataclass(slots=True)
@@ -44,6 +52,14 @@ class RuntimeState:
     device: str = "unknown"
     memory_mode: str = "unknown"
     gpu_vram_gb: float = 0.0
+
+
+class EnhancementResult:
+    def __init__(self, prompt: str, enhanced: bool, model_id: str | None = None, ratio: str | None = None):
+        self.prompt = prompt
+        self.enhanced = enhanced
+        self.model_id = model_id
+        self.ratio = ratio
 
 
 state = RuntimeState()
