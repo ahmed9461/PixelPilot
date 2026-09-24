@@ -83,11 +83,18 @@ async def _generate(
         return
 
     image_settings = await get_state(orch().db)
-    status_text = (
-        "🎨 جاري تعديل الصورة..."
-        if references
-        else "🎨 جاري إنشاء الصورة..."
-    )
+    if image_settings.enhance_prompt:
+        status_text = (
+            "✨ جاري تحسين تعليمات التعديل بواسطة Qwen الرسمي..."
+            if references
+            else "✨ جاري تحسين البرومت بواسطة Qwen الرسمي..."
+        )
+    else:
+        status_text = (
+            "🎨 جاري تعديل الصورة..."
+            if references
+            else "🎨 جاري إنشاء الصورة..."
+        )
     status = await message.answer(status_text)
 
     try:
@@ -97,6 +104,7 @@ async def _generate(
             height=image_settings.height,
             steps=image_settings.steps,
             reference_images=references,
+            enhance_prompt=image_settings.enhance_prompt,
         )
     except Exception as exc:
         logger.exception("Image request failed")
@@ -108,9 +116,15 @@ async def _generate(
     except Exception:
         pass
 
+    enhancer_line = (
+        f"\n✨ تحسين Qwen الرسمي: <b>مفعّل</b>"
+        if result.prompt_enhanced
+        else ""
+    )
     caption = (
         f"✅ تم — {result.width}×{result.height}\n"
         f"🎲 Seed: <code>{result.seed}</code>"
+        f"{enhancer_line}"
     )
     await message.answer_document(
         BufferedInputFile(result.data, filename=f"pixelpilot-{result.seed}.png"),
