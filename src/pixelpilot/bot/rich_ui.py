@@ -30,6 +30,7 @@ def settings_card(values: Mapping[str, str | int]) -> InputRichMessage:
         is_rtl=True,
         html=(
             "<h2>⚙️ إعدادات الصور</h2>"
+            f"<p>وضع البرومت: <b>{values.get('prompt_mode', '')}</b></p>"
             f"<p>الجودة: <b>{values.get('quality', '')}</b></p>"
             f"<p>النسبة: <b>{values.get('aspect_ratio', '')}</b></p>"
             f"<p>الخطوات: <b>{values.get('steps', '')}</b></p>"
