@@ -328,6 +328,7 @@ async def _generate_response(
     prompt_enhanced = False
     enhancer_model: str | None = None
     enhancer_ratio: str | None = None
+    enhancer_fallback = False
 
     async with generation_lock:
         if enhance_prompt:
@@ -353,6 +354,7 @@ async def _generate_response(
                         status_code=500,
                         detail=f"Prompt enhancement failed: {str(exc)[:1000]}",
                     ) from exc
+                enhancer_fallback = True
 
         try:
             image = await asyncio.to_thread(
@@ -389,6 +391,7 @@ async def _generate_response(
         "prompt_enhanced": prompt_enhanced,
         "enhancer_model": enhancer_model,
         "enhancer_ratio": enhancer_ratio,
+        "enhancer_fallback": enhancer_fallback,
     }
 
 @app.get("/health")
