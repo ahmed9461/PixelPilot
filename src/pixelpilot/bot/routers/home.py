@@ -6,13 +6,14 @@ from pixelpilot.bot.callbacks import safe_callback_answer
 from pixelpilot.bot.keyboards import main_menu
 from pixelpilot.bot.rich_ui import home_card
 
+
 router = Router(name="home")
 
 
 WELCOME = (
-    "🤖 <b>PixelPilot</b>\n\n"
-    "مساعدك الشخصي.\n"
-    "بعد تجهيز السيرفر، أرسل نصًا أو صورة أو صوتًا أو فيديو وابدأ المحادثة مباشرة."
+    "🎨 <b>PixelPilot</b>\n\n"
+    "استوديو الصور الشخصي.\n"
+    "بعد تجهيز السيرفر، أرسل وصفًا لإنشاء صورة أو أرسل صورة مع تعليمات لتعديلها."
 )
 
 
