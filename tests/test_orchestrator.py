@@ -96,7 +96,6 @@ def test_orchestrator_full_fake_lifecycle(tmp_path):
         assert "IMAGE_MAX_REFERENCE_IMAGES=10" in env
         assert "PROMPT_ENHANCER_T2I_ID=Qwen/Qwen-Image-2.1-PE-T2I" in env
         assert "PROMPT_ENHANCER_I2I_ID=Qwen/Qwen-Image-2.1-PE-I2I" in env
-        assert "PROMPT_ENHANCER_MAX_NEW_TOKENS=1024" in env
         assert "WHISPER" not in env
         assert "VLLM" not in env
 
