@@ -65,6 +65,7 @@ class Settings(BaseSettings):
     inference_use_https: bool = False
     inference_verify_tls: bool = False
     inference_request_timeout_seconds: int = 1800
+    inference_probe_timeout_seconds: int = 5
     inference_ready_timeout_seconds: int = 2400
     provision_poll_seconds: float = 5.0
 
@@ -106,6 +107,7 @@ class Settings(BaseSettings):
         "image_max_upload_mb",
         "inference_port",
         "inference_request_timeout_seconds",
+        "inference_probe_timeout_seconds",
         "inference_ready_timeout_seconds",
     )
     @classmethod
