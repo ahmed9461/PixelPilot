@@ -208,6 +208,56 @@ def _decode_uploaded_image(data: bytes) -> Any:
     return image.convert("RGBA" if has_alpha else "RGB")
 
 
+def _prepare_diffusion_for_enhancer() -> None:
+    pipe = state.pipe
+    torch = state.torch
+    if pipe is None or torch is None:
+        raise RuntimeError("Image runtime is unavailable")
+
+    if state.memory_mode == "gpu":
+        pipe.to("cpu")
+    else:
+        free_hooks = getattr(pipe, "maybe_free_model_hooks", None)
+        if callable(free_hooks):
+            free_hooks()
+
+    gc.collect()
+    torch.cuda.empty_cache()
+
+
+def _restore_diffusion_after_enhancer() -> None:
+    pipe = state.pipe
+    if pipe is None:
+        raise RuntimeError("Image model is not loaded")
+    if state.memory_mode == "gpu":
+        pipe.to("cuda")
+
+
+def _enhance_prompt(prompt: str, reference_images: list[Any]) -> PromptEnhancement:
+    torch = state.torch
+    if torch is None:
+        raise RuntimeError("Torch runtime is unavailable")
+
+    _prepare_diffusion_for_enhancer()
+    try:
+        if reference_images:
+            return enhance_i2i(
+                prompt,
+                reference_images,
+                torch=torch,
+                model_id=PE_I2I_ID,
+                max_new_tokens=PE_MAX_NEW_TOKENS,
+            )
+        return enhance_t2i(
+            prompt,
+            torch=torch,
+            model_id=PE_T2I_ID,
+            max_new_tokens=PE_MAX_NEW_TOKENS,
+        )
+    finally:
+        _restore_diffusion_after_enhancer()
+
+
 def _run_pipeline(
     *,
     prompt: str,
