@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     image_default_steps: int = 40
     image_max_reference_images: int = 10
     image_max_upload_mb: int = 25
+    prompt_enhancer_t2i_id: str = "Qwen/Qwen-Image-2.1-PE-T2I"
+    prompt_enhancer_i2i_id: str = "Qwen/Qwen-Image-2.1-PE-I2I"
+    prompt_enhancer_max_new_tokens: int = 1024
+    prompt_enhancer_fail_open: bool = True
 
     # Public authenticated image inference endpoint.
     inference_port: int = 8190
@@ -99,6 +103,7 @@ class Settings(BaseSettings):
         "image_default_steps",
         "image_max_reference_images",
         "image_max_upload_mb",
+        "prompt_enhancer_max_new_tokens",
         "inference_port",
         "inference_request_timeout_seconds",
         "inference_ready_timeout_seconds",
