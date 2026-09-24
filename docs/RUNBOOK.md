@@ -1,88 +1,81 @@
 # Runbook
 
-## Controller setup
+## Controller update
+
+On the persistent controller host:
 
 ```bash
-python -m venv .venv
+cd /opt/pixelpilot
+git fetch origin main
+git reset --hard origin/main
 source .venv/bin/activate
-pip install -e ".[dev]"
-python scripts/configure_secrets.py
+pip install -e .
 python scripts/preflight.py
-python -m pixelpilot.main
+sudo systemctl restart pixelpilot.service
+sudo systemctl status pixelpilot.service --no-pager
 ```
 
-## Existing installation migration to v0.6
+Do not merge/deploy the new GPU runtime while deliberately keeping the old controller code active; the protocols differ.
 
-For an installation such as `/opt/pixelpilot`:
+## Preflight
 
 ```bash
-cd /opt/pixelpilot
-systemctl stop pixelpilot.service
-git pull --ff-only origin main
-/opt/pixelpilot/.venv/bin/python -m pip install -e .
-/opt/pixelpilot/.venv/bin/python scripts/migrate_economy_profile.py
-/opt/pixelpilot/.venv/bin/python scripts/preflight.py
-systemctl start pixelpilot.service
-systemctl status pixelpilot.service --no-pager -l
+python scripts/preflight.py
 ```
 
-The migration helper creates a backup of `.env` and changes only non-secret runtime/profile values. Telegram, Vast and Hugging Face credentials are preserved.
+Expected:
+- Telegram credentials valid locally
+- Vast API configured
+- repository/template source configured
+- Qwen-Image-2.1 metadata reachable
+- at least one matching GPU offer if the marketplace currently has one
 
-The v0.6 profile uses:
-- Qwen3-VL-30B-A3B-Instruct-FP8
-- Whisper turbo
-- 48GB+ VRAM search
-- 100GB disk
-- 16K context
-- $0.50/hour hard ceiling
+## GPU profiles
 
-## Existing Vast instance after Controller upgrade
+Recommended:
+- 48 GB+ VRAM for 2K and faster execution
 
-A currently running Vast instance may still be serving the old runtime. Updating the Controller alone cannot replace model processes already running remotely.
+Fallback:
+- 24 GB VRAM with automatic model CPU offload
+- use Standard quality first when editing multiple references
 
-Use one of these:
-1. **Preferred while testing:** delete the old instance and rent a fresh offer. The new instance clones current `main` and provisions Qwen3-VL + Whisper cleanly.
-2. Stop then Start the existing instance if its onstart hook is intact; it fetches current `main` before bootstrap. Confirm diagnostics show the new model before testing.
+## Vast worker logs
 
-Do not assume READY from an old instance means the new runtime is active.
-
-## Normal use
-
-1. `/start`
-2. Run readiness check.
-3. Search Vast.
-4. Review/rent an offer.
-5. Wait for READY; READY now requires both Qwen3-VL and Whisper gateway health.
-6. Send text/image/video/Voice/audio directly.
-7. Use `/new` for a clean conversation.
-8. Check server status/cost as needed.
-9. Delete the Vast instance when finished.
-
-## Diagnostics
-
-```bash
-cd /opt/pixelpilot
-/opt/pixelpilot/.venv/bin/python scripts/diagnose_vast.py
-```
-
-The model line should be:
+The bootstrap log is:
 ```text
-Qwen/Qwen3-VL-30B-A3B-Instruct-FP8
+/workspace/pixelpilot-bootstrap.log
 ```
 
-Gateway `health: OK` means both the public gateway and its required runtime are ready.
+The image gateway log is:
+```text
+/workspace/pixelpilot-image-gateway.log
+```
 
-For remote bootstrap failures, inspect Vast instance logs. The bootstrap also writes:
-- `/workspace/pixelpilot-bootstrap.log`
-- `/workspace/pixelpilot-vllm.log`
-- `/workspace/pixelpilot-gateway.log`
+## Health
 
-## Memory pressure
+The controller probes the authenticated public mapped port. A ready worker reports:
+- configured model id
+- memory mode
+- detected GPU VRAM
+- maximum reference count
 
-Default vLLM GPU utilization is 0.82 to reserve headroom for Whisper. Whisper auto mode uses GPU only if enough free VRAM remains; otherwise it loads on CPU.
+## Failure guidance
 
-On a tight 48GB host:
-1. Keep `WHISPER_DEVICE=auto`.
-2. Do not raise `MODEL_GPU_MEMORY_UTILIZATION` first.
-3. Check actual VRAM use and speech latency.
-4. If Qwen3-VL itself is tight, lower `MODEL_MAX_LEN` before changing to a more expensive GPU.
+CUDA out of memory:
+- switch to Standard quality
+- reduce reference-image count
+- use a 48 GB+ GPU
+
+Model download failure:
+- check worker network
+- optionally configure `HF_TOKEN`
+- inspect the bootstrap log
+
+Worker is running but not ready:
+- inspect the image gateway log
+- verify the model finished downloading/loading
+- verify the mapped inference port exists
+
+## Lifecycle
+
+Stop pauses GPU billing according to provider behavior but storage can still incur cost. Destroy removes the instance and records the final PixelPilot billing estimate.
