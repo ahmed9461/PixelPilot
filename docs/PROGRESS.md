@@ -62,3 +62,15 @@ Completed:
 - repeated Telegram edits that produce “message is not modified” are treated as harmless no-ops
 - offers above the final configured hourly ceiling are filtered locally
 - added tests for bounded probes, stopped-state preservation, lifecycle task cancellation, repeated edits and final price filtering
+
+
+## 2026-09-24 — Vast offer rent validation and error clarity
+
+Active plan:
+- revalidate the exact selected offer ID against the live marketplace immediately before renting
+- require reconfirmation if the exact offer disappears or its visible price/specs change
+- keep `cancel_unavail=true` so failed scheduling does not silently leave a stopped paid-storage instance
+- surface safe, specific rental errors in Telegram instead of the misleading “server no longer exists” message
+- show the offer ID in details so visually identical listings can be distinguished
+- preserve ambiguous-create reconciliation by unique PixelPilot label
+- add tests for stale offers, changed prices/specs, rejected Vast responses, and user-facing rental errors
