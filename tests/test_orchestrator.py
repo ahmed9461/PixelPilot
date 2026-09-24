@@ -20,11 +20,16 @@ class FakeVast:
         self.stopped = []
         self.started = []
         self.create_kwargs = None
+        self.search_calls = []
 
     async def search_offers(self, query, limit, **kwargs):
+        self.search_calls.append((query, limit, kwargs))
+        preferred = GpuOffer(78, "RTX A6000", 48, 0.40, 0.99, 40)
+        if "gpu_ram>=48" in query:
+            return [preferred]
         return [
             GpuOffer(77, "RTX 4090", 24, 0.25, 0.99, 60),
-            GpuOffer(78, "RTX A6000", 48, 0.40, 0.99, 40),
+            preferred,
         ]
 
     async def create_instance(self, offer_id, **kwargs):
@@ -88,6 +93,10 @@ def test_orchestrator_full_fake_lifecycle(tmp_path):
 
         offers = await orch.offers()
         assert offers[0].gpu_ram_gb == 48
+        assert len(vast.search_calls) == 2
+        assert "gpu_ram>=48" in vast.search_calls[0][0]
+        assert "gpu_ram>=24" in vast.search_calls[1][0]
+        assert vast.search_calls[0][1] == settings.vast_search_pool_limit
         await orch.rent_and_prepare(78)
         assert await db.get("instance.phase") == "ready"
         env = vast.create_kwargs["env"]
@@ -172,5 +181,36 @@ def test_rent_recovers_instance_after_ambiguous_create_failure(tmp_path):
         result = await orch.rent(78)
         assert result["instance_id"] == 654
         assert await db.get("instance.id") == 654
+
+    asyncio.run(scenario())
+
+
+
+def test_preferred_only_offer_search_skips_fallback_pool(tmp_path):
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            telegram_bot_token="t",
+            owner_telegram_id=1,
+            vast_api_key="v",
+            pixelpilot_repo_url="https://example.invalid/PixelPilot.git",
+            database_path=tmp_path / "db.sqlite3",
+        )
+        db = Database(settings.database_path)
+        await db.init()
+        vast = FakeVast()
+        orch = Orchestrator(
+            settings,
+            db,
+            vast,
+            inference_factory=lambda url, token: FakeInference(),
+        )
+
+        offers = await orch.offers(preferred_only=True)
+        assert len(vast.search_calls) == 1
+        assert "gpu_ram>=48" in vast.search_calls[0][0]
+        assert offers
+        assert all(item.gpu_ram_gb >= 48 for item in offers)
+        assert await db.get("offers.search_mode") == "preferred"
 
     asyncio.run(scenario())

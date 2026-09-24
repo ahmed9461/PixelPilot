@@ -122,15 +122,23 @@ async def preflight(callback: CallbackQuery) -> None:
     )
 
 
-@router.callback_query(lambda q: q.data == "servers:search")
-async def search(callback: CallbackQuery) -> None:
+async def _search_offers(callback: CallbackQuery, *, preferred_only: bool) -> None:
+    mode = "preferred" if preferred_only else "all"
     await safe_callback_answer(callback, "جاري التحديث...")
-    await callback.message.edit_text("🔎 أبحث عن السيرفرات المتاحة...")
+    loading = (
+        "🔥 أبحث عن سيرفرات 48GB+ المتاحة..."
+        if preferred_only
+        else "🔎 أبحث عن أفضل السيرفرات المتاحة..."
+    )
+    await callback.message.edit_text(loading)
+
+    previous_mode = str(await orch().db.get("offers.search_mode", "all") or "all")
     previous = await orch().db.get("offers.last", [])
-    if not isinstance(previous, list):
+    if previous_mode != mode or not isinstance(previous, list):
         previous = []
+
     try:
-        offers = await orch().offers()
+        offers = await orch().offers(preferred_only=preferred_only)
     except Exception:
         logger.exception("Server offer search failed")
         await callback.message.edit_text(
@@ -142,22 +150,53 @@ async def search(callback: CallbackQuery) -> None:
     refresh_no = int(await orch().db.get("offers.refresh_serial", 0) or 0) + 1
     await orch().db.set("offers.refresh_serial", refresh_no)
 
+    candidate_count = int(await orch().db.get("offers.candidate_count", 0) or 0)
+    preferred_count = int(
+        await orch().db.get("offers.preferred_candidate_count", 0) or 0
+    )
+
     if not offers:
+        scope = (
+            "لا توجد حاليًا عروض 48GB+ مطابقة للفلاتر وسقف السعر."
+            if preferred_only
+            else "لا توجد عروض مناسبة حاليًا ضمن الفلاتر وسقف السعر المحدد."
+        )
         await callback.message.edit_text(
-            f"🔄 <b>تحديث السوق #{refresh_no}</b>\n\n"
-            "تم فحص السوق الآن، ولا توجد عروض مناسبة ضمن سقف السعر المحدد.",
-            reply_markup=main_menu(),
+            f"🔄 <b>تحديث السوق #{refresh_no}</b>\n\n{scope}",
+            reply_markup=offers_keyboard([], preferred_only=preferred_only),
         )
         return
 
     note = _refresh_note(previous, offers, refresh_no)
     await orch().db.set("offers.last_refresh_note", note)
+
+    if preferred_only:
+        title = "🔥 <b>عروض 48GB+ المتاحة</b>"
+        discovery = f"المرشحون المطابقون: <b>{candidate_count}</b>"
+    else:
+        title = "🧾 <b>أفضل العروض المتاحة</b>"
+        discovery = (
+            f"المرشحون المطابقون: <b>{candidate_count}</b> "
+            f"— منها 48GB+: <b>{preferred_count}</b>"
+        )
+
     await callback.message.edit_text(
-        f"🧾 <b>العروض المتاحة</b>\n{note}\n"
-        f"العروض المطابقة الآن: <b>{len(offers)}</b>\n\n"
+        f"{title}\n{note}\n"
+        f"{discovery}\n"
+        f"المعروض لك الآن: <b>{len(offers)}</b>\n\n"
         "اختر عرضًا لمراجعة السعر والمواصفات:",
-        reply_markup=offers_keyboard(offers),
+        reply_markup=offers_keyboard(offers, preferred_only=preferred_only),
     )
+
+
+@router.callback_query(lambda q: q.data == "servers:search")
+async def search(callback: CallbackQuery) -> None:
+    await _search_offers(callback, preferred_only=False)
+
+
+@router.callback_query(lambda q: q.data == "servers:search48")
+async def search_preferred(callback: CallbackQuery) -> None:
+    await _search_offers(callback, preferred_only=True)
 
 
 @router.callback_query(lambda q: q.data and q.data.startswith("servers:offer:"))
@@ -193,7 +232,17 @@ async def offer_details(callback: CallbackQuery) -> None:
         "",
         "⚠️ يبدأ عداد التكلفة عند الاستئجار، ويُحسب بالثانية حتى الإيقاف أو الحذف.",
     ])
-    await callback.message.edit_text("\n".join(lines), reply_markup=offer_confirm_keyboard(offer_id))
+    preferred_only = (
+        str(await orch().db.get("offers.search_mode", "all") or "all")
+        == "preferred"
+    )
+    await callback.message.edit_text(
+        "\n".join(lines),
+        reply_markup=offer_confirm_keyboard(
+            offer_id,
+            preferred_only=preferred_only,
+        ),
+    )
 
 
 @router.callback_query(lambda q: q.data and q.data.startswith("servers:rent:"))

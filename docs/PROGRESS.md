@@ -33,3 +33,16 @@ Active plan:
 - fail open to original prompt if enhancement fails
 - surface whether enhancement was used in the image result
 - extend runtime tests and CI before merging
+
+
+## 2026-09-24 — Smarter Vast offer discovery
+
+Completed:
+- Telegram still displays a compact maximum of 8 offers
+- live discovery scans up to 64 candidates per query, while the Vast gateway requests an even wider backend slice for local ranking
+- normal search queries 48 GB+ separately from the 24 GB+ fallback pool
+- preferred and fallback candidates are deduplicated before ranking
+- 48 GB+ offers rank ahead of lower-VRAM fallback cards
+- added a dedicated “48GB+ only” search mode and mode-preserving refresh/back buttons
+- overlapping marketplace requests are serialized
+- added tests for search breadth, preferred-only mode, configuration and UI callbacks

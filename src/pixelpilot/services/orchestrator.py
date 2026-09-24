@@ -43,6 +43,7 @@ class Orchestrator:
         self.vast = vast
         self._inference_factory = inference_factory or self._default_inference_factory
         self._inference_lock = asyncio.Lock()
+        self._offers_lock = asyncio.Lock()
         self._rent_lock = asyncio.Lock()
         self._control_lock = asyncio.Lock()
 
@@ -55,35 +56,82 @@ class Orchestrator:
             timeout_seconds=self.settings.inference_request_timeout_seconds,
         )
 
-    async def offers(self) -> list[GpuOffer]:
-        query = build_offer_query(
-            self.settings.vast_min_gpu_ram_gb,
-            self.settings.vast_min_reliability,
-            self.settings.vast_max_price_usd_hour,
-            disk_gb=self.settings.vast_disk_gb,
-            verified_only=self.settings.vast_verified_only,
-            datacenter_only=self.settings.vast_datacenter_only,
-            min_direct_ports=self.settings.vast_min_direct_ports,
-            min_inet_down_mbps=self.settings.vast_min_inet_down_mbps,
-            min_cpu_ram_gb=self.settings.vast_min_cpu_ram_gb,
-        )
-        rows = await self.vast.search_offers(
-            query,
-            self.settings.vast_default_limit,
+    async def offers(self, *, preferred_only: bool = False) -> list[GpuOffer]:
+        async with self._offers_lock:
+            return await self._offers_locked(preferred_only=preferred_only)
+
+    async def _offers_locked(self, *, preferred_only: bool) -> list[GpuOffer]:
+        def query_for(min_vram_gb: int) -> str:
+            return build_offer_query(
+                min_vram_gb,
+                self.settings.vast_min_reliability,
+                self.settings.vast_max_price_usd_hour,
+                disk_gb=self.settings.vast_disk_gb,
+                verified_only=self.settings.vast_verified_only,
+                datacenter_only=self.settings.vast_datacenter_only,
+                min_direct_ports=self.settings.vast_min_direct_ports,
+                min_inet_down_mbps=self.settings.vast_min_inet_down_mbps,
+                min_cpu_ram_gb=self.settings.vast_min_cpu_ram_gb,
+            )
+
+        preferred_query = query_for(self.settings.vast_preferred_gpu_ram_gb)
+        preferred_rows = await self.vast.search_offers(
+            preferred_query,
+            self.settings.vast_search_pool_limit,
             storage_gb=float(self.settings.vast_disk_gb),
         )
-        # Prefer GPUs that can keep the full BF16 pipeline resident while still
-        # keeping cheaper 24 GB offload-capable offers visible as fallbacks.
-        rows.sort(
+
+        fallback_query: str | None = None
+        fallback_rows: list[GpuOffer] = []
+        if (
+            not preferred_only
+            and self.settings.vast_min_gpu_ram_gb
+            < self.settings.vast_preferred_gpu_ram_gb
+        ):
+            fallback_query = query_for(self.settings.vast_min_gpu_ram_gb)
+            fallback_rows = await self.vast.search_offers(
+                fallback_query,
+                self.settings.vast_search_pool_limit,
+                storage_gb=float(self.settings.vast_disk_gb),
+            )
+
+        deduped: dict[int, GpuOffer] = {}
+        for row in (*preferred_rows, *fallback_rows):
+            deduped[row.offer_id] = row
+
+        candidates = list(deduped.values())
+        candidates.sort(
             key=lambda row: (
                 row.gpu_ram_gb < self.settings.vast_preferred_gpu_ram_gb,
                 row.price_per_hour,
                 -(row.dlperf or 0.0),
             )
         )
-        await self.db.set("offers.last", [row.public_dict() for row in rows])
-        await self.db.set("offers.last_refreshed_at", datetime.now(UTC).isoformat())
-        await self.db.event("offers.search", {"query": query, "count": len(rows)})
+        rows = candidates[: self.settings.vast_default_limit]
+        mode = "preferred" if preferred_only else "all"
+
+        await self.db.set_many(
+            {
+                "offers.last": [row.public_dict() for row in rows],
+                "offers.last_refreshed_at": datetime.now(UTC).isoformat(),
+                "offers.search_mode": mode,
+                "offers.candidate_count": len(candidates),
+                "offers.preferred_candidate_count": sum(
+                    row.gpu_ram_gb >= self.settings.vast_preferred_gpu_ram_gb
+                    for row in candidates
+                ),
+            }
+        )
+        await self.db.event(
+            "offers.search",
+            {
+                "mode": mode,
+                "preferred_query": preferred_query,
+                "fallback_query": fallback_query,
+                "candidate_count": len(candidates),
+                "display_count": len(rows),
+            },
+        )
         return rows
 
     async def cached_offer(self, offer_id: int) -> GpuOffer | None:

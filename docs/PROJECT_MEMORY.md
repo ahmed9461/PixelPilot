@@ -121,3 +121,12 @@ SQLite does not store:
 - The enhancer is loaded on demand on the rented GPU, used for one rewrite, then destroyed and CUDA cache is cleared before image generation.
 - Enhancer failures are fail-open by default: log the failure and continue with the original prompt rather than losing the image request.
 - Do not persist original or rewritten prompt bodies to SQLite.
+
+
+## Vast offer discovery
+
+- Telegram should display only the best 8 offers, but discovery must scan a wider live candidate pool.
+- Normal search performs a dedicated 48 GB+ query plus a 24 GB+ fallback query, deduplicates results, then ranks 48 GB+ first.
+- A separate owner-controlled “48 GB+ only” search mode is available from the offer list.
+- Search refreshes must remain live; do not rotate cached results to simulate market changes.
+- Rapid refresh clicks should not launch overlapping marketplace searches.
