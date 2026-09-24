@@ -173,4 +173,5 @@ class InferenceClient:
                 if data.get("enhancer_ratio")
                 else None
             ),
+            enhancer_fallback=bool(data.get("enhancer_fallback", False)),
         )
