@@ -7,42 +7,93 @@ from pathlib import Path
 from typing import Any
 
 
+T2I_MAX_NEW_TOKENS = 16256
+EDIT_MAX_NEW_TOKENS = 24000
+IMAGE_MAX_PIXELS = 1024 * 1024
+TEMPERATURE = 1.0
+TOP_P = 0.95
+TOP_K = 20
+T2I_PRESENCE_PENALTY = 1.5
+EDIT_PRESENCE_PENALTY = 0.0
+DEFAULT_SEED = 42
+
+
 @dataclass(slots=True, frozen=True)
 class PromptEnhancement:
     prompt: str
     model_id: str
     ratio: str | None = None
+    ratio_follow: str | None = None
 
 
-def parse_enhancer_output(generated: str) -> tuple[str, str | None]:
-    _thinking, separator, answer = generated.partition("</think>")
-    candidate = (answer if separator else generated).strip()
+def _balanced_json_objects(text: str) -> list[str]:
+    spans: list[str] = []
+    depth = 0
+    start = -1
+    in_string = False
+    escaped = False
+    for index, char in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start >= 0:
+                spans.append(text[start : index + 1])
+    return spans
 
-    if candidate.startswith("```"):
-        parts = candidate.split("```")
-        if len(parts) >= 3:
-            candidate = parts[1].strip()
-            if candidate.startswith("json"):
-                candidate = candidate[4:].lstrip()
 
-    try:
-        payload = json.loads(candidate)
-    except json.JSONDecodeError:
-        start = candidate.find("{")
-        end = candidate.rfind("}")
-        if start < 0 or end <= start:
-            raise RuntimeError("Prompt enhancer returned no JSON object")
-        payload = json.loads(candidate[start : end + 1])
+def _answer_section(generated: str) -> str:
+    if "</think>" in generated:
+        return generated.partition("</think>")[2].strip()
+    if "<think>" in generated:
+        return ""
+    return generated.strip()
 
-    if not isinstance(payload, dict):
-        raise RuntimeError("Prompt enhancer returned an invalid JSON payload")
-    rewritten = payload.get("rewritten_prompt")
-    if not isinstance(rewritten, str) or not rewritten.strip():
-        raise RuntimeError("Prompt enhancer returned no rewritten_prompt")
 
-    ratio = payload.get("wh_ratio")
-    normalized_ratio = str(ratio) if isinstance(ratio, str) and ratio else None
-    return rewritten, normalized_ratio
+def parse_enhancer_output(
+    generated: str,
+    *,
+    include_ratio_follow: bool = False,
+) -> tuple[str, str | None, str | None]:
+    answer = _answer_section(generated)
+    if not answer:
+        raise RuntimeError("Prompt enhancer returned no answer after thinking")
+
+    for candidate in reversed(_balanced_json_objects(answer)):
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+
+        rewritten = payload.get("rewritten_prompt") or payload.get("rewrited_prompt")
+        if not isinstance(rewritten, str) or not rewritten.strip():
+            continue
+
+        ratio_value = payload.get("wh_ratio")
+        ratio = str(ratio_value).strip() if isinstance(ratio_value, str) and ratio_value.strip() else None
+        ratio_follow: str | None = None
+        if include_ratio_follow:
+            follow_value = payload.get("ratio_follow")
+            if isinstance(follow_value, str) and follow_value.strip():
+                ratio_follow = follow_value.strip()
+
+        return rewritten.strip(), ratio, ratio_follow
+
+    raise RuntimeError("Prompt enhancer returned no valid rewritten_prompt JSON object")
 
 
 def _system_prompt(model_id: str) -> str:
@@ -61,72 +112,67 @@ def _cleanup(torch: Any) -> None:
         pass
 
 
-def enhance_t2i(
-    prompt: str,
+def _resize_reference(image: Any) -> Any:
+    from PIL import Image
+
+    rgb = image.convert("RGB")
+    width, height = rgb.size
+    pixels = width * height
+    if pixels <= IMAGE_MAX_PIXELS:
+        return rgb
+
+    scale = (IMAGE_MAX_PIXELS / float(pixels)) ** 0.5
+    target = (max(1, int(width * scale)), max(1, int(height * scale)))
+    return rgb.resize(target, Image.Resampling.LANCZOS)
+
+
+def _build_messages(system_prompt: str, prompt: str, images: list[Any]) -> list[dict[str, Any]]:
+    user_content: list[dict[str, Any]] = [
+        {"type": "image", "image": image}
+        for image in images
+    ]
+    user_content.append({"type": "text", "text": prompt})
+    return [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": system_prompt}],
+        },
+        {
+            "role": "user",
+            "content": user_content,
+        },
+    ]
+
+
+def _presence_penalty_processor(
     *,
-    torch: Any,
-    model_id: str,
-    max_new_tokens: int,
-) -> PromptEnhancement:
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    penalty: float,
+    prompt_len: int,
+) -> Any:
+    from transformers import LogitsProcessor
 
-    tokenizer = None
-    model = None
-    inputs = None
-    output = None
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            dtype=torch.bfloat16,
-            device_map={"": 0},
-            low_cpu_mem_usage=True,
-        ).eval()
-        text = tokenizer.apply_chat_template(
-            [
-                {"role": "system", "content": _system_prompt(model_id)},
-                {"role": "user", "content": prompt},
-            ],
-            tokenize=False,
-            add_generation_prompt=True,
-            enable_thinking=True,
-        )
-        inputs = tokenizer(text, return_tensors="pt").to("cuda")
-        with torch.inference_mode():
-            output = model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                do_sample=True,
-                temperature=1.0,
-                top_p=0.95,
-                top_k=20,
-            )
-        generated = tokenizer.decode(
-            output[0, inputs["input_ids"].shape[1] :],
-            skip_special_tokens=True,
-        )
-        rewritten, ratio = parse_enhancer_output(generated)
-        return PromptEnhancement(prompt=rewritten, model_id=model_id, ratio=ratio)
-    finally:
-        output = None
-        inputs = None
-        model = None
-        tokenizer = None
-        _cleanup(torch)
+    class PresencePenalty(LogitsProcessor):
+        def __call__(self, input_ids: Any, scores: Any) -> Any:
+            for batch_index in range(input_ids.shape[0]):
+                generated = input_ids[batch_index, prompt_len:]
+                if generated.numel():
+                    scores[batch_index, generated.unique()] -= penalty
+            return scores
+
+    return PresencePenalty()
 
 
-def enhance_i2i(
+def _enhance(
     prompt: str,
     images: list[Any],
     *,
     torch: Any,
     model_id: str,
     max_new_tokens: int,
+    presence_penalty: float,
+    include_ratio_follow: bool,
 ) -> PromptEnhancement:
-    from transformers import AutoModelForImageTextToText, AutoProcessor
-
-    if not images:
-        raise RuntimeError("I2I prompt enhancer requires at least one reference image")
+    from transformers import AutoModelForImageTextToText, AutoProcessor, LogitsProcessorList
 
     processor = None
     model = None
@@ -137,21 +183,14 @@ def enhance_i2i(
         model = AutoModelForImageTextToText.from_pretrained(
             model_id,
             dtype=torch.bfloat16,
-            device_map={"": 0},
             low_cpu_mem_usage=True,
-        ).eval()
-        user_content: list[dict[str, Any]] = [
-            {"type": "image", "image": image.convert("RGB")}
-            for image in images
-        ]
-        user_content.append({"type": "text", "text": prompt})
-        messages = [
-            {
-                "role": "system",
-                "content": [{"type": "text", "text": _system_prompt(model_id)}],
-            },
-            {"role": "user", "content": user_content},
-        ]
+        ).to("cuda").eval()
+
+        messages = _build_messages(
+            _system_prompt(model_id),
+            prompt,
+            images,
+        )
         inputs = processor.apply_chat_template(
             messages,
             add_generation_prompt=True,
@@ -159,25 +198,95 @@ def enhance_i2i(
             return_dict=True,
             return_tensors="pt",
             enable_thinking=True,
-        ).to("cuda")
+        ).to(model.device)
+
+        if (
+            "mm_token_type_ids" not in inputs
+            and hasattr(processor, "create_mm_token_type_ids")
+        ):
+            inputs["mm_token_type_ids"] = processor.create_mm_token_type_ids(
+                inputs["input_ids"]
+            )
+
+        prompt_len = inputs["input_ids"].shape[1]
+        logits_processors = LogitsProcessorList()
+        if presence_penalty:
+            logits_processors.append(
+                _presence_penalty_processor(
+                    penalty=presence_penalty,
+                    prompt_len=prompt_len,
+                )
+            )
+
+        torch.manual_seed(DEFAULT_SEED)
         with torch.inference_mode():
             output = model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
                 do_sample=True,
-                temperature=1.0,
-                top_p=0.95,
-                top_k=20,
+                temperature=TEMPERATURE,
+                top_p=TOP_P,
+                top_k=TOP_K,
+                logits_processor=logits_processors,
+                pad_token_id=processor.tokenizer.eos_token_id,
             )
+
         generated = processor.tokenizer.decode(
-            output[0, inputs["input_ids"].shape[1] :],
+            output[0, prompt_len:],
             skip_special_tokens=True,
         )
-        rewritten, ratio = parse_enhancer_output(generated)
-        return PromptEnhancement(prompt=rewritten, model_id=model_id, ratio=ratio)
+        rewritten, ratio, ratio_follow = parse_enhancer_output(
+            generated,
+            include_ratio_follow=include_ratio_follow,
+        )
+        return PromptEnhancement(
+            prompt=rewritten,
+            model_id=model_id,
+            ratio=ratio,
+            ratio_follow=ratio_follow,
+        )
     finally:
         output = None
         inputs = None
         model = None
         processor = None
         _cleanup(torch)
+
+
+def enhance_t2i(
+    prompt: str,
+    *,
+    torch: Any,
+    model_id: str,
+) -> PromptEnhancement:
+    return _enhance(
+        prompt,
+        [],
+        torch=torch,
+        model_id=model_id,
+        max_new_tokens=T2I_MAX_NEW_TOKENS,
+        presence_penalty=T2I_PRESENCE_PENALTY,
+        include_ratio_follow=False,
+    )
+
+
+def enhance_i2i(
+    prompt: str,
+    images: list[Any],
+    *,
+    torch: Any,
+    model_id: str,
+) -> PromptEnhancement:
+    if not images:
+        raise RuntimeError("I2I prompt enhancer requires at least one reference image")
+
+    resized = [_resize_reference(image) for image in images]
+    return _enhance(
+        prompt,
+        resized,
+        torch=torch,
+        model_id=model_id,
+        max_new_tokens=EDIT_MAX_NEW_TOKENS,
+        presence_penalty=EDIT_PRESENCE_PENALTY,
+        include_ratio_follow=True,
+    )
