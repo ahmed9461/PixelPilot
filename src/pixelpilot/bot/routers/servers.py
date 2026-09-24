@@ -69,6 +69,27 @@ async def _cancel_lifecycle_if_running() -> None:
         _lifecycle_task = None
 
 
+async def _prepare_manual_control(callback: CallbackQuery) -> bool:
+    instance_id = await orch().db.get("instance.id")
+    phase = str(
+        await orch().db.get("instance.phase", "none")
+        or "none"
+    )
+    if not instance_id and phase == "renting":
+        await callback.message.edit_text(
+            "⏳ <b>Vast ما زال ينشئ السيرفر</b>\n\n"
+            "لم يصل رقم الـInstance بعد، لذلك لن ألغي الطلب بطريقة قد تترك "
+            "سيرفرًا مدفوعًا بدون تتبع. انتظر ظهور رقم السيرفر ثم استخدم "
+            "الإيقاف أو الحذف.",
+            reply_markup=main_menu(),
+        )
+        return False
+
+    if instance_id:
+        await _cancel_lifecycle_if_running()
+    return True
+
+
 def _offer_signature(item: Any) -> tuple[Any, ...]:
     if isinstance(item, dict):
         return (
@@ -387,7 +408,8 @@ async def destroy_confirm(callback: CallbackQuery) -> None:
 @router.callback_query(lambda q: q.data == "servers:destroy")
 async def destroy(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback, "جاري الحذف...")
-    await _cancel_lifecycle_if_running()
+    if not await _prepare_manual_control(callback):
+        return
     try:
         destroyed = await orch().destroy_current()
     except Exception:
@@ -411,7 +433,8 @@ async def destroy(callback: CallbackQuery) -> None:
 @router.callback_query(lambda q: q.data == "servers:stop")
 async def stop(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback, "جاري الإيقاف...")
-    await _cancel_lifecycle_if_running()
+    if not await _prepare_manual_control(callback):
+        return
     try:
         stopped = await orch().stop_current()
     except Exception:
