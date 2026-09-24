@@ -426,6 +426,7 @@ class Orchestrator:
                         "model": result.model,
                         "prompt_enhanced": result.prompt_enhanced,
                         "enhancer_model": result.enhancer_model,
+                        "enhancer_fallback": result.enhancer_fallback,
                     },
                 )
                 return result
