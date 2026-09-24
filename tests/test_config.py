@@ -26,6 +26,10 @@ def test_qwen_image_profile_defaults():
     assert settings.image_memory_mode == "auto"
     assert settings.image_default_steps == 40
     assert settings.image_max_reference_images == 10
+    assert settings.prompt_enhancer_t2i_id == "Qwen/Qwen-Image-2.1-PE-T2I"
+    assert settings.prompt_enhancer_i2i_id == "Qwen/Qwen-Image-2.1-PE-I2I"
+    assert settings.prompt_enhancer_max_new_tokens == 1024
+    assert settings.prompt_enhancer_fail_open is True
 
 
 def test_qwen_image_profile_rejects_gpu_below_24gb():
