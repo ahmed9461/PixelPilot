@@ -121,7 +121,11 @@ class Orchestrator:
         for row in (*preferred_rows, *fallback_rows):
             deduped[row.offer_id] = row
 
-        candidates = list(deduped.values())
+        candidates = [
+            row
+            for row in deduped.values()
+            if 0 < row.price_per_hour <= self.settings.vast_max_price_usd_hour
+        ]
         candidates.sort(
             key=lambda row: (
                 row.gpu_ram_gb < self.settings.vast_preferred_gpu_ram_gb,
