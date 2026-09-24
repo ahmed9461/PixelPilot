@@ -56,6 +56,17 @@ class Orchestrator:
             timeout_seconds=self.settings.inference_request_timeout_seconds,
         )
 
+    async def _probe_inference_ready(self, inference: InferenceClient) -> bool:
+        try:
+            return await asyncio.wait_for(
+                inference.is_ready(),
+                timeout=float(self.settings.inference_probe_timeout_seconds),
+            )
+        except (TimeoutError, asyncio.TimeoutError):
+            return False
+        except Exception:
+            return False
+
     async def offers(self, *, preferred_only: bool = False) -> list[GpuOffer]:
         async with self._offers_lock:
             return await self._offers_locked(preferred_only=preferred_only)
@@ -308,7 +319,7 @@ class Orchestrator:
                 await self.db.set("inference.url", url)
                 token = await self.db.get("inference.token")
                 inference = self._inference_factory(url, str(token or ""))
-                if await inference.is_ready():
+                if await self._probe_inference_ready(inference):
                     await self.db.set("instance.phase", InstancePhase.READY.value)
                     await self._touch_activity()
                     await self.db.event(
@@ -411,7 +422,9 @@ class Orchestrator:
         if probe_inference:
             try:
                 inference = await self._current_inference()
-                state_data["inference_ready"] = await inference.is_ready()
+                state_data["inference_ready"] = await self._probe_inference_ready(
+                    inference
+                )
             except Exception:
                 state_data["inference_ready"] = False
         return state_data
