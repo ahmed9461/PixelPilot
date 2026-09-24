@@ -51,3 +51,8 @@ def test_reference_limit_validation():
 def test_qwen_image_profile_rejects_small_disk():
     with pytest.raises(ValidationError):
         Settings(_env_file=None, vast_disk_gb=60)
+
+
+def test_qwen_image_profile_rejects_low_host_ram():
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, vast_min_cpu_ram_gb=32)

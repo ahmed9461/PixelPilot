@@ -22,6 +22,7 @@ def build_offer_query(
     datacenter_only: bool = False,
     min_direct_ports: int = 2,
     min_inet_down_mbps: float = 0,
+    min_cpu_ram_gb: int = 0,
 ) -> str:
     # Vast's CLI/SDK query language expresses gpu_ram in GiB-like user units
     # (for example: gpu_ram>=48), even though raw offer payloads expose
@@ -39,6 +40,8 @@ def build_offer_query(
         terms.append("verified=true")
     if datacenter_only:
         terms.append("datacenter=true")
+    if min_cpu_ram_gb > 0:
+        terms.append(f"cpu_ram>={int(min_cpu_ram_gb)}")
     if min_direct_ports > 0:
         terms.append(f"direct_port_count>={int(min_direct_ports)}")
     if min_inet_down_mbps > 0:

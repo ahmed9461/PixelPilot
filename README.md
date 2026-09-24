@@ -32,10 +32,11 @@ The GPU instance loads the Diffusers `QwenImage21Pipeline` directly. vLLM, Qwen3
 
 The BF16 Qwen-Image-2.1 checkpoint is roughly 33 GB before runtime overhead.
 
-- **24 GB VRAM**: supported through model CPU offload + VAE tiling/slicing. Best with Standard resolution; edits with many references can be slower and may need lower memory pressure.
+- **24 GB VRAM**: supported through model CPU offload + VAE tiling/slicing when the host has at least **48 GB system RAM**. Best with Standard resolution; edits with many references can be slower and may need lower memory pressure.
 - **48 GB+ VRAM**: preferred. PixelPilot keeps the pipeline on GPU in `auto` mode for better speed and 2K work.
 - Vast search minimum: **24 GB**.
 - Preferred offer tier: **48 GB+**.
+- Minimum host RAM for the supported offload profile: **48 GB**.
 - Default disk: **100 GB**.
 - Hard rental ceiling: **$0.50/hour**.
 

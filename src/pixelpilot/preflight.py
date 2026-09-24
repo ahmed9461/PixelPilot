@@ -28,6 +28,7 @@ def run_local_preflight(settings: Settings, *, repo_root: Path | None = None) ->
     checks.append(Check("Vast disk", settings.vast_disk_gb >= 70, f"{settings.vast_disk_gb} GB"))
     checks.append(Check("GPU VRAM minimum", settings.vast_min_gpu_ram_gb >= 24, f">= {settings.vast_min_gpu_ram_gb} GB"))
     checks.append(Check("Preferred GPU VRAM", settings.vast_preferred_gpu_ram_gb >= 48, f">= {settings.vast_preferred_gpu_ram_gb} GB"))
+    checks.append(Check("Host RAM for offload", settings.vast_min_cpu_ram_gb >= 48, f">= {settings.vast_min_cpu_ram_gb} GB"))
     return checks
 
 
