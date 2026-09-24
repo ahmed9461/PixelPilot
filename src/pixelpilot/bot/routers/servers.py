@@ -8,7 +8,7 @@ from typing import Any
 from aiogram import Router
 from aiogram.types import CallbackQuery, Message
 
-from pixelpilot.bot.callbacks import safe_callback_answer
+from pixelpilot.bot.callbacks import safe_callback_answer, safe_edit_text
 from pixelpilot.bot.keyboards import destroy_confirm_keyboard, main_menu, offer_confirm_keyboard, offers_keyboard
 from pixelpilot.preflight import run_external_preflight, run_local_preflight
 from pixelpilot.services.orchestrator import Orchestrator
@@ -153,7 +153,8 @@ def _billing_lines(billing: Any, *, final: bool = False) -> list[str]:
 @router.callback_query(lambda q: q.data == "servers:preflight")
 async def preflight(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback, "جاري الفحص...")
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         "🧪 <b>جاري فحص الجاهزية...</b>\n\n"
         "أتحقق من إعدادات المشروع والوصول إلى Git وQwen.",
         reply_markup=main_menu(),
@@ -196,7 +197,7 @@ async def _search_offers(callback: CallbackQuery, *, preferred_only: bool) -> No
         if preferred_only
         else "🔎 أبحث عن أفضل السيرفرات المتاحة..."
     )
-    await callback.message.edit_text(loading)
+    await safe_edit_text(callback.message, loading)
 
     previous_mode = str(await orch().db.get("offers.search_mode", "all") or "all")
     previous = await orch().db.get("offers.last", [])
@@ -540,7 +541,8 @@ def _status_label(state: dict) -> str:
 @router.callback_query(lambda q: q.data == "servers:status")
 async def status(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback, "جاري قراءة الحالة...")
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         "📊 <b>جاري قراءة حالة السيرفر...</b>",
         reply_markup=main_menu(),
     )
