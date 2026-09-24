@@ -3,42 +3,33 @@ set -Eeuo pipefail
 
 WORKSPACE="${WORKSPACE:-/workspace}"
 PIXELPILOT_ROOT="${PIXELPILOT_ROOT:-$WORKSPACE/PixelPilot}"
-VENV_DIR="${VENV_DIR:-$WORKSPACE/pixelpilot-runtime}"
+VENV_DIR="${VENV_DIR:-$WORKSPACE/pixelpilot-image-runtime}"
+RUNTIME_MARKER="$VENV_DIR/.pixelpilot-runtime-version"
+RUNTIME_VERSION="qwen-image-2.1-v1"
 
 INFERENCE_PORT="${INFERENCE_PORT:-8190}"
-VLLM_INTERNAL_PORT="${VLLM_INTERNAL_PORT:-8191}"
-
-MODEL_ID="${MODEL_ID:-Qwen/Qwen3-VL-30B-A3B-Instruct-FP8}"
-MODEL_DTYPE="${MODEL_DTYPE:-auto}"
-MODEL_MAX_LEN="${MODEL_MAX_LEN:-16384}"
-MODEL_GPU_MEMORY_UTILIZATION="${MODEL_GPU_MEMORY_UTILIZATION:-0.82}"
-MODEL_TENSOR_PARALLEL_SIZE="${MODEL_TENSOR_PARALLEL_SIZE:-1}"
-MODEL_LIMIT_IMAGES="${MODEL_LIMIT_IMAGES:-1}"
-MODEL_LIMIT_VIDEOS="${MODEL_LIMIT_VIDEOS:-1}"
-
-WHISPER_MODEL="${WHISPER_MODEL:-turbo}"
-WHISPER_DEVICE="${WHISPER_DEVICE:-auto}"
-WHISPER_CACHE="${WHISPER_CACHE:-$WORKSPACE/whisper-cache}"
-WHISPER_MIN_FREE_VRAM_GB="${WHISPER_MIN_FREE_VRAM_GB:-6}"
+MODEL_ID="${MODEL_ID:-Qwen/Qwen-Image-2.1}"
+MODEL_DTYPE="${MODEL_DTYPE:-bfloat16}"
+IMAGE_MEMORY_MODE="${IMAGE_MEMORY_MODE:-auto}"
+IMAGE_FULL_GPU_MIN_VRAM_GB="${IMAGE_FULL_GPU_MIN_VRAM_GB:-48}"
+IMAGE_VAE_TILING="${IMAGE_VAE_TILING:-true}"
+IMAGE_VAE_SLICING="${IMAGE_VAE_SLICING:-true}"
+IMAGE_MAX_REFERENCE_IMAGES="${IMAGE_MAX_REFERENCE_IMAGES:-10}"
+IMAGE_MAX_UPLOAD_MB="${IMAGE_MAX_UPLOAD_MB:-25}"
 
 HF_HOME="${HF_HOME:-$WORKSPACE/hf-cache}"
 LOG_FILE="${LOG_FILE:-$WORKSPACE/pixelpilot-bootstrap.log}"
-VLLM_LOG="${VLLM_LOG:-$WORKSPACE/pixelpilot-vllm.log}"
-GATEWAY_LOG="${GATEWAY_LOG:-$WORKSPACE/pixelpilot-gateway.log}"
+GATEWAY_LOG="${GATEWAY_LOG:-$WORKSPACE/pixelpilot-image-gateway.log}"
 
-mkdir -p "$WORKSPACE" "$HF_HOME" "$WHISPER_CACHE"
+mkdir -p "$WORKSPACE" "$HF_HOME"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
-VLLM_PID=""
 GATEWAY_PID=""
 
 cleanup() {
   local code=$?
   if [[ -n "$GATEWAY_PID" ]] && kill -0 "$GATEWAY_PID" 2>/dev/null; then
     kill "$GATEWAY_PID" 2>/dev/null || true
-  fi
-  if [[ -n "$VLLM_PID" ]] && kill -0 "$VLLM_PID" 2>/dev/null; then
-    kill "$VLLM_PID" 2>/dev/null || true
   fi
   exit "$code"
 }
@@ -48,13 +39,9 @@ on_error() {
   local exit_code=$?
   local line_no=${BASH_LINENO[0]:-unknown}
   echo "[PixelPilot] ERROR: bootstrap failed at line ${line_no} (exit=${exit_code})" >&2
-  if [[ -f "$VLLM_LOG" ]]; then
-    echo "[PixelPilot] ---- vLLM tail ----" >&2
-    tail -n 80 "$VLLM_LOG" >&2 || true
-  fi
   if [[ -f "$GATEWAY_LOG" ]]; then
     echo "[PixelPilot] ---- gateway tail ----" >&2
-    tail -n 80 "$GATEWAY_LOG" >&2 || true
+    tail -n 120 "$GATEWAY_LOG" >&2 || true
   fi
   exit "$exit_code"
 }
@@ -63,22 +50,21 @@ trap on_error ERR
 echo "[PixelPilot] bootstrap started: $(date -Is)"
 echo "[PixelPilot] root=$PIXELPILOT_ROOT"
 echo "[PixelPilot] model=$MODEL_ID"
-echo "[PixelPilot] public gateway=0.0.0.0:$INFERENCE_PORT"
-echo "[PixelPilot] internal vLLM=127.0.0.1:$VLLM_INTERNAL_PORT"
-echo "[PixelPilot] speech=$WHISPER_MODEL device=$WHISPER_DEVICE"
+echo "[PixelPilot] public image gateway=0.0.0.0:$INFERENCE_PORT"
+echo "[PixelPilot] memory mode=$IMAGE_MEMORY_MODE"
 
 if [[ ! -f "$PIXELPILOT_ROOT/pyproject.toml" ]]; then
   echo "[PixelPilot] ERROR: project files not found at $PIXELPILOT_ROOT" >&2
   exit 20
 fi
 
-# Vast injects environment variables into PID 1. Recover the runtime values
-# when onstart executes in a child shell.
+# Vast injects environment variables into PID 1. Recover them when onstart
+# executes in a child shell.
 if [[ -r /proc/1/environ ]]; then
   while IFS= read -r -d '' entry; do
     key="${entry%%=*}"
     case "$key" in
-      HF_TOKEN|PIXELPILOT_INFERENCE_TOKEN|INFERENCE_PORT|VLLM_INTERNAL_PORT|MODEL_ID|MODEL_DTYPE|MODEL_MAX_LEN|MODEL_GPU_MEMORY_UTILIZATION|MODEL_TENSOR_PARALLEL_SIZE|MODEL_LIMIT_IMAGES|MODEL_LIMIT_VIDEOS|WHISPER_MODEL|WHISPER_DEVICE|WHISPER_CACHE|WHISPER_MIN_FREE_VRAM_GB|HF_HOME|DATA_DIRECTORY|PIXELPILOT_REPO_URL|PIXELPILOT_REPO_REF)
+      HF_TOKEN|PIXELPILOT_INFERENCE_TOKEN|INFERENCE_PORT|MODEL_ID|MODEL_DTYPE|IMAGE_MEMORY_MODE|IMAGE_FULL_GPU_MIN_VRAM_GB|IMAGE_VAE_TILING|IMAGE_VAE_SLICING|IMAGE_MAX_REFERENCE_IMAGES|IMAGE_MAX_UPLOAD_MB|HF_HOME|DATA_DIRECTORY|PIXELPILOT_REPO_URL|PIXELPILOT_REPO_REF)
         if [[ -z "${!key:-}" ]]; then export "$entry"; fi
         ;;
     esac
@@ -106,9 +92,18 @@ fi
 
 echo "[PixelPilot] base python=$PYTHON_BIN ($("$PYTHON_BIN" --version 2>&1))"
 
+if [[ -d "$VENV_DIR" ]]; then
+  current_version="$(cat "$RUNTIME_MARKER" 2>/dev/null || true)"
+  if [[ "$current_version" != "$RUNTIME_VERSION" ]]; then
+    echo "[PixelPilot] rebuilding stale runtime venv"
+    rm -rf "$VENV_DIR"
+  fi
+fi
+
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
   echo "[PixelPilot] creating runtime venv at $VENV_DIR"
-  "$PYTHON_BIN" -m venv "$VENV_DIR"
+  "$PYTHON_BIN" -m venv --system-site-packages "$VENV_DIR"
+  echo "$RUNTIME_VERSION" > "$RUNTIME_MARKER"
 fi
 PYTHON_BIN="$VENV_DIR/bin/python"
 
@@ -117,88 +112,34 @@ if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
   exit 22
 fi
 
-if ! command -v ffmpeg >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
-  echo "[PixelPilot] installing ffmpeg..."
-  apt-get update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ffmpeg
+echo "[PixelPilot] installing Qwen-Image runtime..."
+"$PYTHON_BIN" -m pip install -U pip wheel setuptools
+"$PYTHON_BIN" -m pip install -U   'transformers>=5.17.0'   accelerate   pillow   fastapi   uvicorn   python-multipart   hf_xet
+"$PYTHON_BIN" -m pip install -U   'git+https://github.com/huggingface/diffusers.git'
+
+# Reuse the CUDA-enabled torch from the Vast PyTorch image. If it is absent
+# from the image, install a current PyTorch wheel as a fallback.
+if ! "$PYTHON_BIN" -c 'import torch; assert torch.cuda.is_available()' >/dev/null 2>&1; then
+  echo "[PixelPilot] CUDA PyTorch was not visible in the runtime; installing torch fallback"
+  "$PYTHON_BIN" -m pip install -U 'torch>=2.4.0'
 fi
 
-echo "[PixelPilot] installing inference runtime..."
-"$PYTHON_BIN" -m pip install -U pip wheel setuptools
-"$PYTHON_BIN" -m pip install -U \
-  'vllm>=0.13,<1' \
-  qwen-vl-utils \
-  'openai-whisper>=20250625' \
-  fastapi \
-  uvicorn \
-  python-multipart \
-  httpx \
-  hf_xet
-
-export HF_HOME MODEL_ID WHISPER_CACHE WHISPER_MODEL WHISPER_DEVICE
-export VLLM_INTERNAL_PORT PIXELPILOT_INFERENCE_TOKEN WHISPER_MIN_FREE_VRAM_GB
+export HF_HOME MODEL_ID MODEL_DTYPE IMAGE_MEMORY_MODE
+export IMAGE_FULL_GPU_MIN_VRAM_GB IMAGE_VAE_TILING IMAGE_VAE_SLICING
+export IMAGE_MAX_REFERENCE_IMAGES IMAGE_MAX_UPLOAD_MB PIXELPILOT_INFERENCE_TOKEN
 if [[ -n "${HF_TOKEN:-}" ]]; then export HF_TOKEN; fi
 
-# Only text/image/video reach Qwen3-VL. Audio is transcribed by Whisper first.
-LIMIT_MM="{\"image\":$MODEL_LIMIT_IMAGES,\"video\":$MODEL_LIMIT_VIDEOS}"
-
-# Clear stale processes if the same Vast instance was stopped and started.
-pkill -f "vllm serve.*Qwen" 2>/dev/null || true
 pkill -f "pixelpilot.inference_gateway" 2>/dev/null || true
 sleep 1
 
-echo "[PixelPilot] launching Qwen3-VL through vLLM"
-echo "[PixelPilot] dtype=$MODEL_DTYPE max_model_len=$MODEL_MAX_LEN gpu_util=$MODEL_GPU_MEMORY_UTILIZATION"
-"$VENV_DIR/bin/vllm" serve "$MODEL_ID" \
-  --host 127.0.0.1 \
-  --port "$VLLM_INTERNAL_PORT" \
-  --api-key "$PIXELPILOT_INFERENCE_TOKEN" \
-  --dtype "$MODEL_DTYPE" \
-  --max-model-len "$MODEL_MAX_LEN" \
-  --gpu-memory-utilization "$MODEL_GPU_MEMORY_UTILIZATION" \
-  --tensor-parallel-size "$MODEL_TENSOR_PARALLEL_SIZE" \
-  --max-num-seqs 4 \
-  --limit-mm-per-prompt "$LIMIT_MM" \
-  --media-io-kwargs '{"video":{"num_frames":24,"frame_recovery":true}}' \
-  >"$VLLM_LOG" 2>&1 &
-VLLM_PID=$!
-
-echo "[PixelPilot] waiting for vLLM (pid=$VLLM_PID)..."
-ready=0
-for _ in $(seq 1 900); do
-  if ! kill -0 "$VLLM_PID" 2>/dev/null; then
-    echo "[PixelPilot] ERROR: vLLM exited before becoming ready" >&2
-    tail -n 120 "$VLLM_LOG" >&2 || true
-    exit 30
-  fi
-  if curl -fsS \
-      -H "Authorization: Bearer $PIXELPILOT_INFERENCE_TOKEN" \
-      "http://127.0.0.1:$VLLM_INTERNAL_PORT/health" >/dev/null 2>&1; then
-    ready=1
-    break
-  fi
-  sleep 2
-done
-if [[ "$ready" != "1" ]]; then
-  echo "[PixelPilot] ERROR: vLLM did not become ready in time" >&2
-  exit 31
-fi
-
-echo "[PixelPilot] vLLM ready; starting Whisper + public gateway"
+echo "[PixelPilot] launching Qwen-Image-2.1 gateway"
 export PYTHONPATH="$PIXELPILOT_ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
-"$PYTHON_BIN" -m uvicorn pixelpilot.inference_gateway:app \
-  --app-dir "$PIXELPILOT_ROOT/src" \
-  --host 0.0.0.0 \
-  --port "$INFERENCE_PORT" \
-  --log-level info \
-  >"$GATEWAY_LOG" 2>&1 &
+"$PYTHON_BIN" -m uvicorn pixelpilot.inference_gateway:app   --app-dir "$PIXELPILOT_ROOT/src"   --host 0.0.0.0   --port "$INFERENCE_PORT"   --log-level info   >"$GATEWAY_LOG" 2>&1 &
 GATEWAY_PID=$!
 
-# Treat Qwen3-VL and the gateway as one runtime. If either exits, tear down
-# the other process so Vast/PixelPilot cannot report a half-alive service.
 set +e
-wait -n "$VLLM_PID" "$GATEWAY_PID"
+wait "$GATEWAY_PID"
 child_status=$?
 set -e
-echo "[PixelPilot] runtime process exited (status=$child_status); shutting down peer" >&2
+echo "[PixelPilot] image runtime exited (status=$child_status)" >&2
 exit "$child_status"
