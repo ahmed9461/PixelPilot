@@ -67,6 +67,17 @@ class Orchestrator:
         except Exception:
             return False
 
+    async def _show_instance_bounded(self, instance_id: int) -> Any:
+        try:
+            return await asyncio.wait_for(
+                self.vast.show_instance(instance_id),
+                timeout=float(self.settings.vast_status_timeout_seconds),
+            )
+        except (TimeoutError, asyncio.TimeoutError) as exc:
+            raise OrchestratorError(
+                "انتهت مهلة قراءة حالة السيرفر من Vast؛ حاول مرة أخرى."
+            ) from exc
+
     async def offers(self, *, preferred_only: bool = False) -> list[GpuOffer]:
         async with self._offers_lock:
             return await self._offers_locked(preferred_only=preferred_only)
@@ -270,6 +281,16 @@ class Orchestrator:
                     {"instance_id": result["instance_id"], "error": str(exc)},
                 )
                 raise
+            current_phase = await self.db.get(
+                "instance.phase",
+                InstancePhase.NONE.value,
+            )
+            if current_phase == InstancePhase.STOPPED.value:
+                await self.db.event(
+                    "instance.provision_stopped",
+                    {"instance_id": result["instance_id"], "error": str(exc)},
+                )
+                raise
             await self.db.set("instance.phase", InstancePhase.ERROR.value)
             await self.db.event(
                 "instance.provision_failed",
@@ -300,10 +321,13 @@ class Orchestrator:
             if not current_id or int(current_id) != int(instance_id):
                 raise OrchestratorError("Provisioning was cancelled because this instance is no longer current")
 
-            ref = await self.vast.show_instance(instance_id)
+            ref = await self._show_instance_bounded(instance_id)
             status = ref.status.lower()
             if status in {"running", "frozen", "stopped"}:
                 await sync_billing_status(self.db, status)
+            if status == "stopped":
+                await self.db.set("instance.phase", InstancePhase.STOPPED.value)
+                raise OrchestratorError("تم إيقاف السيرفر أثناء التجهيز")
             if status in {"exited", "error", "failed", "dead"}:
                 raise OrchestratorError(f"Vast instance entered terminal state: {ref.status}")
 
@@ -408,7 +432,7 @@ class Orchestrator:
         if not instance_id:
             return state_data
 
-        ref = await self.vast.show_instance(int(instance_id))
+        ref = await self._show_instance_bounded(int(instance_id))
         if ref.status.lower() in {"running", "frozen", "stopped"}:
             await sync_billing_status(self.db, ref.status)
         state_data.update(
@@ -544,7 +568,7 @@ class Orchestrator:
             )
 
         try:
-            ref = await self.vast.show_instance(int(instance_id))
+            ref = await self._show_instance_bounded(int(instance_id))
         except Exception as exc:
             await self.db.event(
                 "instance.recovery_probe_failed",
