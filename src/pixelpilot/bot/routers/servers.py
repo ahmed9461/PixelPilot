@@ -359,17 +359,24 @@ async def _rent_and_prepare_background(
     except Exception:
         logger.exception("Server rent/provision failed")
         current_id = await orch().db.get("instance.id")
+        pending_label = await orch().db.get("instance.pending_label")
         if current_id:
             text = (
                 "❌ <b>تعذر تجهيز السيرفر</b>\n\n"
                 "تم إنشاء Instance أو استعادته، لكن التجهيز لم يكتمل. "
                 "استخدم «حالة السيرفر» أو احذفه لإيقاف التكلفة."
             )
-        else:
+        elif pending_label:
             text = (
                 "⚠️ <b>تعذر تأكيد الاستئجار</b>\n\n"
                 "لم يصل رقم Instance مؤكد من Vast. احتفظنا بمعرّف "
                 "المحاولة لتفادي فقدان سيرفر قد يكون أُنشئ رغم انقطاع الرد."
+            )
+        else:
+            text = (
+                "❌ <b>لم يبدأ الاستئجار</b>\n\n"
+                "تعذر التحقق من السوق أو بدء الطلب مع Vast. "
+                "لم يتم تسجيل Instance مؤكد؛ أعد تحديث العروض ثم حاول مرة أخرى."
             )
         try:
             await status_message.edit_text(text, reply_markup=main_menu())
@@ -407,8 +414,8 @@ async def rent(callback: CallbackQuery) -> None:
     )
     await safe_callback_answer(callback, "أتحقق من العرض ثم أبدأ التجهيز")
     await callback.message.edit_text(
-        "🚀 <b>بدأ استئجار وتجهيز السيرفر</b>\n\n"
-        "يمكنك الآن استخدام «حالة السيرفر» و«فحص الجاهزية» بدون انتظار انتهاء التجهيز.",
+        "🔎 <b>جاري التحقق من العرض وبدء الاستئجار</b>\n\n"
+        "أتحقق أولًا من نفس Offer ID في السوق الحي، ثم يبدأ التجهيز بالخلفية.",
         reply_markup=main_menu(),
     )
     status_message = await callback.message.answer(
