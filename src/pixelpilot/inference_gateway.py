@@ -30,7 +30,6 @@ MAX_REFERENCE_IMAGES = int(os.environ.get("IMAGE_MAX_REFERENCE_IMAGES", "10"))
 MAX_UPLOAD_BYTES = int(os.environ.get("IMAGE_MAX_UPLOAD_MB", "25")) * 1024 * 1024
 PE_T2I_ID = os.environ.get("PROMPT_ENHANCER_T2I_ID", "Qwen/Qwen-Image-2.1-PE-T2I")
 PE_I2I_ID = os.environ.get("PROMPT_ENHANCER_I2I_ID", "Qwen/Qwen-Image-2.1-PE-I2I")
-PE_MAX_NEW_TOKENS = int(os.environ.get("PROMPT_ENHANCER_MAX_NEW_TOKENS", "1024"))
 PE_FAIL_OPEN = os.environ.get("PROMPT_ENHANCER_FAIL_OPEN", "true").strip().lower() not in {"0", "false", "no"}
 
 
@@ -246,13 +245,11 @@ def _enhance_prompt(prompt: str, reference_images: list[Any]) -> PromptEnhanceme
                 reference_images,
                 torch=torch,
                 model_id=PE_I2I_ID,
-                max_new_tokens=PE_MAX_NEW_TOKENS,
             )
         return enhance_t2i(
             prompt,
             torch=torch,
             model_id=PE_T2I_ID,
-            max_new_tokens=PE_MAX_NEW_TOKENS,
         )
     finally:
         _restore_diffusion_after_enhancer()
@@ -328,6 +325,7 @@ async def _generate_response(
     prompt_enhanced = False
     enhancer_model: str | None = None
     enhancer_ratio: str | None = None
+    enhancer_ratio_follow: str | None = None
     enhancer_fallback = False
 
     async with generation_lock:
@@ -342,6 +340,7 @@ async def _generate_response(
                 prompt_enhanced = True
                 enhancer_model = enhanced.model_id
                 enhancer_ratio = enhanced.ratio
+                enhancer_ratio_follow = enhanced.ratio_follow
                 logger.info(
                     "Official Qwen prompt enhancement completed model=%s ratio=%s",
                     enhancer_model,
@@ -391,6 +390,7 @@ async def _generate_response(
         "prompt_enhanced": prompt_enhanced,
         "enhancer_model": enhancer_model,
         "enhancer_ratio": enhancer_ratio,
+        "enhancer_ratio_follow": enhancer_ratio_follow,
         "enhancer_fallback": enhancer_fallback,
     }
 
