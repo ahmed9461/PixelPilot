@@ -116,11 +116,12 @@ async def _generate(
     except Exception:
         pass
 
-    enhancer_line = (
-        f"\n✨ تحسين Qwen الرسمي: <b>مفعّل</b>"
-        if result.prompt_enhanced
-        else ""
-    )
+    if result.prompt_enhanced:
+        enhancer_line = "\n✨ تحسين Qwen الرسمي: <b>تم</b>"
+    elif result.enhancer_fallback:
+        enhancer_line = "\n⚠️ تعذر تحسين Qwen؛ تم استخدام البرومت الأصلي"
+    else:
+        enhancer_line = ""
     caption = (
         f"✅ تم — {result.width}×{result.height}\n"
         f"🎲 Seed: <code>{result.seed}</code>"
