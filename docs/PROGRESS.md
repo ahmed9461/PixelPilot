@@ -33,3 +33,15 @@ Active plan:
 - fail open to original prompt if enhancement fails
 - surface whether enhancement was used in the image result
 - extend runtime tests and CI before merging
+
+
+## 2026-09-24 — Smarter Vast offer discovery
+
+Active plan:
+- keep Telegram display compact at 8 offers
+- scan a much wider live Vast candidate pool in the background
+- query 48 GB+ offers separately so they cannot be hidden by cheaper 24–25 GB cards
+- merge/dedupe preferred and fallback candidates, then rank 48 GB+ first
+- add a dedicated 48 GB+ only search toggle in Telegram
+- preserve live refresh behavior and cached-offer safety for renting
+- add tests for search breadth, preferred-only mode, ranking and UI callbacks
