@@ -437,10 +437,20 @@ class Orchestrator:
             return state_data
 
         ref = await self._show_instance_bounded(int(instance_id))
-        if ref.status.lower() in {"running", "frozen", "stopped"}:
+        vast_status = ref.status.lower()
+        if vast_status in {"running", "frozen", "stopped"}:
             await sync_billing_status(self.db, ref.status)
+
+        if vast_status == "stopped":
+            phase = InstancePhase.STOPPED.value
+            await self.db.set("instance.phase", phase)
+        elif vast_status in {"exited", "error", "failed", "dead"}:
+            phase = InstancePhase.ERROR.value
+            await self.db.set("instance.phase", phase)
+
         state_data.update(
             {
+                "phase": phase,
                 "vast_status": ref.status,
                 "public_ip": ref.public_ip,
                 "mapped_port": ref.mapped_port,
