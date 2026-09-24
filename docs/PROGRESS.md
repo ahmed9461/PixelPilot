@@ -50,10 +50,15 @@ Completed:
 
 ## 2026-09-24 — Responsive server controls
 
-Active plan:
-- move long rent/provision and start/wait flows out of Telegram callback handlers into background tasks
-- keep the main control keyboard available while provisioning is in progress
-- make server status probes use a short health timeout instead of the long generation timeout
-- prevent duplicate background lifecycle tasks from rapid button clicks
-- keep destroy/stop controls responsive while provisioning
-- add tests for short status probes and lifecycle task deduplication
+Completed:
+- moved long rent/provision and start/wait flows out of Telegram callback handlers into background tasks
+- main server controls remain usable while provisioning or starting
+- readiness probes use a short 5-second timeout instead of the long image-generation timeout
+- Vast status reads are bounded to 8 seconds
+- duplicate lifecycle tasks from rapid button presses are blocked
+- stop/destroy cancel the waiting task only after a real Instance ID exists, preventing untracked paid instances
+- stopped instances no longer get pushed back into a booting/error state by the readiness loop
+- preflight no longer performs an unnecessary marketplace search
+- repeated Telegram edits that produce “message is not modified” are treated as harmless no-ops
+- offers above the final configured hourly ceiling are filtered locally
+- added tests for bounded probes, stopped-state preservation, lifecycle task cancellation, repeated edits and final price filtering
