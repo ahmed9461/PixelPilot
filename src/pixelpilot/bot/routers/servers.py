@@ -200,7 +200,7 @@ async def rent(callback: CallbackQuery) -> None:
         try:
             state = await orch().current_state(probe_inference=False)
             billing = state.get("billing") if isinstance(state, dict) else None
-            lines = ["⏳ <b>جاري تجهيز السيرفر...</b>", "", "قد يستغرق ذلك عدة دقائق."]
+            lines = ["⏳ <b>جاري تجهيز محرك الصور...</b>", "", "يتم تنزيل النموذج وتحميله إلى الذاكرة."]
             lines.extend(_billing_lines(billing))
             await callback.message.edit_text("\n".join(lines))
         except Exception:
@@ -225,7 +225,7 @@ async def rent(callback: CallbackQuery) -> None:
         return
 
     state = await orch().current_state(probe_inference=False)
-    lines = ["✅ <b>السيرفر جاهز</b>", "", "أرسل الآن نصًا أو صورة أو تسجيلًا صوتيًا."]
+    lines = ["✅ <b>السيرفر جاهز</b>", "", "أرسل وصفًا لإنشاء صورة، أو صورة مع تعليمات لتعديلها."]
     lines.extend(_billing_lines(state.get("billing")))
     await callback.message.edit_text("\n".join(lines), reply_markup=main_menu())
 
