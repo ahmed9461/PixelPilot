@@ -377,6 +377,7 @@ class Orchestrator:
         steps: int,
         seed: int | None = None,
         reference_images: tuple[ReferenceImage, ...] = (),
+        enhance_prompt: bool = False,
     ) -> GeneratedImage:
         if self._inference_lock.locked():
             raise OrchestratorError("يوجد طلب إنشاء صورة آخر قيد المعالجة حاليًا")
@@ -410,6 +411,7 @@ class Orchestrator:
                     steps=steps,
                     seed=seed,
                     reference_images=reference_images,
+                    enhance_prompt=enhance_prompt,
                 )
                 await self.db.event(
                     "image.generated",
@@ -422,6 +424,8 @@ class Orchestrator:
                         "steps": steps,
                         "seed": result.seed,
                         "model": result.model,
+                        "prompt_enhanced": result.prompt_enhanced,
+                        "enhancer_model": result.enhancer_model,
                     },
                 )
                 return result
@@ -544,6 +548,10 @@ class Orchestrator:
             "IMAGE_VAE_SLICING": str(self.settings.image_vae_slicing).lower(),
             "IMAGE_MAX_REFERENCE_IMAGES": str(self.settings.image_max_reference_images),
             "IMAGE_MAX_UPLOAD_MB": str(self.settings.image_max_upload_mb),
+            "PROMPT_ENHANCER_T2I_ID": self.settings.prompt_enhancer_t2i_id,
+            "PROMPT_ENHANCER_I2I_ID": self.settings.prompt_enhancer_i2i_id,
+            "PROMPT_ENHANCER_MAX_NEW_TOKENS": str(self.settings.prompt_enhancer_max_new_tokens),
+            "PROMPT_ENHANCER_FAIL_OPEN": str(self.settings.prompt_enhancer_fail_open).lower(),
             "HF_HOME": "/workspace/hf-cache",
             "DATA_DIRECTORY": "/workspace",
         }
