@@ -311,9 +311,9 @@ async def _generate_response(
     reference_images: list[Any],
     true_cfg_scale: float,
     negative_prompt: str | None,
+    enhance_prompt: bool,
 ) -> dict[str, Any]:
-    clean_prompt = prompt.strip()
-    if not clean_prompt:
+    if not prompt.strip():
         raise HTTPException(status_code=422, detail="prompt cannot be empty")
     _validate_dimensions(width, height)
     _validate_steps(steps)
@@ -324,11 +324,40 @@ async def _generate_response(
         )
 
     actual_seed = _normalize_seed(seed)
+    effective_prompt = prompt
+    prompt_enhanced = False
+    enhancer_model: str | None = None
+    enhancer_ratio: str | None = None
+
     async with generation_lock:
+        if enhance_prompt:
+            try:
+                enhanced = await asyncio.to_thread(
+                    _enhance_prompt,
+                    prompt,
+                    reference_images,
+                )
+                effective_prompt = enhanced.prompt
+                prompt_enhanced = True
+                enhancer_model = enhanced.model_id
+                enhancer_ratio = enhanced.ratio
+                logger.info(
+                    "Official Qwen prompt enhancement completed model=%s ratio=%s",
+                    enhancer_model,
+                    enhancer_ratio,
+                )
+            except Exception as exc:
+                logger.exception("Official Qwen prompt enhancement failed")
+                if not PE_FAIL_OPEN:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Prompt enhancement failed: {str(exc)[:1000]}",
+                    ) from exc
+
         try:
             image = await asyncio.to_thread(
                 _run_pipeline,
-                prompt=prompt,
+                prompt=effective_prompt,
                 width=width,
                 height=height,
                 steps=steps,
@@ -345,7 +374,7 @@ async def _generate_response(
             if "out of memory" in detail.lower():
                 detail = (
                     "GPU ran out of memory. Try Standard quality, fewer/lower-resolution "
-                    "reference images, or a GPU with more VRAM."
+                    "reference images, disable prompt enhancement, or use a GPU with more VRAM."
                 )
             raise HTTPException(status_code=500, detail=detail[:1000]) from exc
 
@@ -357,8 +386,10 @@ async def _generate_response(
         "height": height,
         "model": MODEL_ID,
         "reference_count": len(reference_images),
+        "prompt_enhanced": prompt_enhanced,
+        "enhancer_model": enhancer_model,
+        "enhancer_ratio": enhancer_ratio,
     }
-
 
 @app.get("/health")
 async def health(authorization: str | None = Header(default=None)) -> dict[str, Any]:
