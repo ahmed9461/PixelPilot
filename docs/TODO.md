@@ -1,27 +1,16 @@
 # TODO
 
-## Live acceptance — Qwen3-VL + Whisper
+## Deployment
+- update the persistent controller to the merged Qwen-Image code
+- restart `pixelpilot.service`
+- rent a fresh GPU from the Telegram UI
+- validate first real Qwen-Image-2.1 download/load
+- run one text-to-image and one edit smoke test
 
-- Update `/opt/pixelpilot` to merged v0.6.0.
-- Run `scripts/migrate_economy_profile.py` and verify backup created.
-- Confirm marketplace still returns suitable 48GB offers <= $0.50/hour with 100GB disk.
-- Restart/rerent Vast so new bootstrap runs.
-- Confirm READY only after both gateway paths are available.
-- Test normal Arabic conversation and follow-up context.
-- Test a photo with little/no text and ask scene-specific questions.
-- Test a screenshot containing text.
-- Test Telegram Voice in Arabic and a normal audio file.
-- Confirm follow-up to Voice uses transcript context without re-transcribing old audio.
-- Test short and medium MP4 video.
-- Test personality change, then verify immediate style change.
-- Test live `sendMessageDraft` response streaming.
-- Check `diagnose_vast.py` and record actual GPU/Whisper device.
-- Confirm SQLite events contain operational metadata only, not message/transcript/media bodies.
+## Runtime follow-up
+- record real 24 GB generation latency and peak VRAM
+- record real 48 GB generation latency and peak VRAM
+- adjust preferred offer ranking only if measurements show a better cost/performance threshold
+- consider optional seed input UI after the basic deployment is proven
 
-## Optional later improvements
-
-- Expose Whisper device/status in technical diagnostics only.
-- Add a user-selectable higher/lower visual frame budget if real video tests justify it.
-- Consider Qwen3-VL smaller/quantized alternate profile only as an explicit budget mode, never as silent downgrade.
-- Add multiple-image album support.
-
+No persona/chat/audio/video work is planned for the image product.
