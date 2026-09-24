@@ -65,6 +65,7 @@ class Orchestrator:
             datacenter_only=self.settings.vast_datacenter_only,
             min_direct_ports=self.settings.vast_min_direct_ports,
             min_inet_down_mbps=self.settings.vast_min_inet_down_mbps,
+            min_cpu_ram_gb=self.settings.vast_min_cpu_ram_gb,
         )
         rows = await self.vast.search_offers(
             query,
