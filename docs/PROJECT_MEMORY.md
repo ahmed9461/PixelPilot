@@ -39,7 +39,7 @@ Output:
 - Search minimum: 24 GB VRAM.
 - Preferred tier: 48 GB+ VRAM.
 - Default disk: 100 GB. Prompt-enhancer checkpoints are downloaded lazily; monitor free space if both T2I and I2I enhancer caches are used on the same instance.
-- Minimum host RAM: 48 GB for the supported CPU-offload profile.
+- Minimum host RAM: 64 GB for safe Qwen-Image offload plus on-demand 9B prompt enhancement.
 - 24–47 GB VRAM: automatic CPU model offload with VAE tiling/slicing.
 - 48 GB+: automatic full-GPU placement.
 - Default dtype: BF16.
