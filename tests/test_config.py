@@ -15,40 +15,39 @@ def test_runtime_validation_missing():
         settings.validate_runtime()
 
 
-def test_qwen3_vl_whisper_profile_defaults():
+def test_qwen_image_profile_defaults():
     settings = Settings(_env_file=None)
-    assert settings.model_id == "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"
-    assert settings.vast_min_gpu_ram_gb == 48
+    assert settings.model_id == "Qwen/Qwen-Image-2.1"
+    assert settings.vast_min_gpu_ram_gb == 24
+    assert settings.vast_preferred_gpu_ram_gb == 48
     assert settings.vast_disk_gb == 100
     assert settings.vast_max_price_usd_hour == 0.50
-    assert settings.model_max_len == 16384
-    assert settings.model_gpu_memory_utilization == 0.82
-    assert settings.whisper_model == "turbo"
-    assert settings.whisper_device == "auto"
-    assert settings.vllm_internal_port == 8191
+    assert settings.model_dtype == "bfloat16"
+    assert settings.image_memory_mode == "auto"
+    assert settings.image_default_steps == 40
+    assert settings.image_max_reference_images == 10
 
 
-def test_qwen3_vl_profile_rejects_small_gpu():
+def test_qwen_image_profile_rejects_gpu_below_24gb():
     with pytest.raises(ValidationError):
-        Settings(_env_file=None, vast_min_gpu_ram_gb=32)
+        Settings(_env_file=None, vast_min_gpu_ram_gb=16)
 
 
-def test_qwen3_vl_profile_accepts_48gb_gpu():
-    settings = Settings(_env_file=None, vast_min_gpu_ram_gb=48)
-    assert settings.vast_min_gpu_ram_gb == 48
+def test_qwen_image_profile_accepts_24gb_gpu():
+    settings = Settings(_env_file=None, vast_min_gpu_ram_gb=24)
+    assert settings.vast_min_gpu_ram_gb == 24
 
 
-def test_price_cap_must_be_positive():
+def test_memory_mode_validation():
     with pytest.raises(ValidationError):
-        Settings(_env_file=None, vast_max_price_usd_hour=0)
+        Settings(_env_file=None, image_memory_mode="magic")
 
 
-
-def test_whisper_device_validation():
+def test_reference_limit_validation():
     with pytest.raises(ValidationError):
-        Settings(_env_file=None, whisper_device="tpu")
+        Settings(_env_file=None, image_max_reference_images=11)
 
 
-def test_qwen3_vl_profile_rejects_small_disk():
+def test_qwen_image_profile_rejects_small_disk():
     with pytest.raises(ValidationError):
-        Settings(_env_file=None, vast_disk_gb=80)
+        Settings(_env_file=None, vast_disk_gb=60)
