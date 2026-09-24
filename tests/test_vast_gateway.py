@@ -227,3 +227,80 @@ def test_create_instance_keeps_success_contract():
         assert result["new_contract"] == 987
 
     asyncio.run(scenario())
+
+
+
+def test_create_instance_classifies_http_4xx_rejection():
+    import asyncio
+
+    class FakeResponse:
+        status_code = 409
+        text = '{"msg":"offer no longer available"}'
+
+        def json(self):
+            return {"msg": "offer no longer available"}
+
+    class FakeHttpError(Exception):
+        def __init__(self):
+            super().__init__("409 Client Error")
+            self.response = FakeResponse()
+
+    class FakeClient:
+        def create_instance(self, **kwargs):
+            raise FakeHttpError()
+
+    async def scenario():
+        gateway = VastSdkGateway("secret")
+        gateway._client = FakeClient()
+        try:
+            await gateway.create_instance(
+                123,
+                image="vastai/pytorch:test",
+                disk_gb=100,
+            )
+        except VastCreateRejected as exc:
+            assert "HTTP 409" in exc.reason
+            assert "offer no longer available" in exc.reason
+        else:
+            raise AssertionError("expected HTTP rejection classification")
+
+    asyncio.run(scenario())
+
+
+def test_create_instance_keeps_5xx_ambiguous():
+    import asyncio
+    from pixelpilot.services.vast_gateway import VastError
+
+    class FakeResponse:
+        status_code = 503
+        text = "temporary upstream failure"
+
+        def json(self):
+            return {"error": "temporary upstream failure"}
+
+    class FakeHttpError(Exception):
+        def __init__(self):
+            super().__init__("503 Server Error")
+            self.response = FakeResponse()
+
+    class FakeClient:
+        def create_instance(self, **kwargs):
+            raise FakeHttpError()
+
+    async def scenario():
+        gateway = VastSdkGateway("secret")
+        gateway._client = FakeClient()
+        try:
+            await gateway.create_instance(
+                123,
+                image="vastai/pytorch:test",
+                disk_gb=100,
+            )
+        except VastCreateRejected:
+            raise AssertionError("5xx must remain ambiguous")
+        except VastError:
+            pass
+        else:
+            raise AssertionError("expected ambiguous Vast error")
+
+    asyncio.run(scenario())
