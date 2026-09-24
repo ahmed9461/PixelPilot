@@ -10,6 +10,7 @@ from pixelpilot.services.image_settings import (
     get_state,
     reset,
     set_aspect_ratio,
+    set_prompt_mode,
     set_quality,
     set_steps,
 )
@@ -31,7 +32,25 @@ def orch() -> Orchestrator:
     return _orchestrator
 
 
-def _keyboard(aspect: str, quality: str, steps: int) -> InlineKeyboardMarkup:
+def _keyboard(
+    aspect: str,
+    quality: str,
+    steps: int,
+    prompt_mode: str,
+) -> InlineKeyboardMarkup:
+    prompt_row = [
+        InlineKeyboardButton(
+            text=("✓ " if prompt_mode == "original" else "") + "🧾 البرومت الأصلي",
+            callback_data="imagesettings:prompt:original",
+            style="success" if prompt_mode == "original" else None,
+        ),
+        InlineKeyboardButton(
+            text=("✓ " if prompt_mode == "qwen" else "") + "✨ تحسين Qwen",
+            callback_data="imagesettings:prompt:qwen",
+            style="success" if prompt_mode == "qwen" else None,
+        ),
+    ]
+
     ratio_rows: list[list[InlineKeyboardButton]] = []
     ratios = list(ASPECT_RATIOS)
     for start in range(0, len(ratios), 3):
@@ -70,6 +89,7 @@ def _keyboard(aspect: str, quality: str, steps: int) -> InlineKeyboardMarkup:
 
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            prompt_row,
             quality_row,
             *ratio_rows,
             steps_row,
@@ -83,22 +103,45 @@ async def _render(callback: CallbackQuery) -> None:
     state = await get_state(orch().db)
     width, height = state.size
     quality_label = "قياسي" if state.quality == "standard" else "2K"
+    prompt_label = "البرومت الأصلي" if state.prompt_mode == "original" else "تحسين Qwen الرسمي"
     await safe_edit_text(
         callback.message,
         "⚙️ <b>إعدادات الصور</b>\n\n"
+        f"وضع البرومت: <b>{prompt_label}</b>\n"
         f"الجودة: <b>{quality_label}</b>\n"
         f"الأبعاد: <b>{state.aspect_ratio} — {width}×{height}</b>\n"
         f"خطوات التوليد: <b>{state.steps}</b>\n\n"
-        "وضع «قياسي» أخف وأسرع ومناسب لسيرفرات 24GB. "
-        "وضع «2K» يعطي دقة أعلى ويُفضّل له GPU بذاكرة 48GB أو أكثر.\n\n"
-        "لا يوجد برومت مخفي ولا شخصية أو نبرة مفروضة؛ وصفك يُرسل كما كتبته.",
-        reply_markup=_keyboard(state.aspect_ratio, state.quality, state.steps),
+        "🧾 <b>البرومت الأصلي:</b> يرسل وصفك كما كتبته دون إعادة صياغة.\n"
+        "✨ <b>تحسين Qwen:</b> يستخدم نموذج Qwen الرسمي المخصص لـ Qwen-Image-2.1 "
+        "لإعادة صياغة الوصف قبل التوليد أو التعديل. هذا الخيار واضح واختياري وليس طبقة مخفية.\n\n"
+        "وضع «قياسي» أخف وأسرع ومناسب لسيرفرات 24GB، بينما «2K» يفضّل له GPU بذاكرة 48GB أو أكثر.",
+        reply_markup=_keyboard(
+            state.aspect_ratio,
+            state.quality,
+            state.steps,
+            state.prompt_mode,
+        ),
     )
 
 
 @router.callback_query(lambda q: q.data == "imagesettings:open")
 async def open_settings(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback)
+    await _render(callback)
+
+
+@router.callback_query(lambda q: q.data and q.data.startswith("imagesettings:prompt:"))
+async def choose_prompt_mode(callback: CallbackQuery) -> None:
+    value = callback.data.rsplit(":", 1)[1]
+    try:
+        await set_prompt_mode(orch().db, value)
+    except ValueError:
+        await safe_callback_answer(callback, "خيار غير صالح", show_alert=True)
+        return
+    await safe_callback_answer(
+        callback,
+        "سيتم استخدام تحسين Qwen الرسمي" if value == "qwen" else "سيتم استخدام البرومت الأصلي",
+    )
     await _render(callback)
 
 
