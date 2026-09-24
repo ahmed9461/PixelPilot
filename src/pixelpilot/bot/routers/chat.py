@@ -7,7 +7,7 @@ from io import BytesIO
 from aiogram import F, Router
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
-from pixelpilot.bot.callbacks import safe_callback_answer
+from pixelpilot.bot.callbacks import safe_callback_answer, safe_edit_text
 from pixelpilot.bot.keyboards import main_menu
 from pixelpilot.domain import InstancePhase, ReferenceImage
 from pixelpilot.services.image_settings import get_state
@@ -180,7 +180,8 @@ async def _flush_album(media_group_id: str) -> None:
 @router.callback_query(lambda q: q.data == "chat:help")
 async def chat_help(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback)
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         "🎨 <b>طريقة الاستخدام</b>\n\n"
         "• لإنشاء صورة: أرسل وصفك كنص عادي.\n"
         "• لتعديل صورة: أرسل الصورة واكتب تعليمات التعديل في الوصف.\n"
