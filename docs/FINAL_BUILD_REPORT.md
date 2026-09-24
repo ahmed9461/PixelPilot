@@ -1,60 +1,40 @@
-# Final Build Report — v0.6.0
+# Qwen-Image-2.1 Transition Report
 
-PixelPilot is an owner-only personal multimodal Telegram assistant that rents a temporary Vast.ai GPU only when needed.
+Date: 2026-09-24
 
-## Runtime
+## Completed
 
-```text
-Telegram
-  -> Controller
-  -> authenticated inference gateway
-      -> Whisper turbo (Voice/Audio -> transcript)
-      -> private vLLM
-          -> Qwen3-VL-30B-A3B-Instruct-FP8 (text/image/video)
-```
+PixelPilot was converted from a multimodal chat assistant into an owner-only image studio.
 
-## Quality profile
+Implemented:
+- Qwen/Qwen-Image-2.1 runtime
+- text-to-image
+- one-image editing
+- multi-reference editing up to 10 images
+- PNG output
+- Standard and 2K dimension profiles
+- aspect-ratio controls
+- 20/30/40/50 step controls
+- exact user-prompt pass-through
+- 24 GB minimum GPU profile with CPU offload
+- 48 GB+ preferred full-GPU profile
+- VAE tiling/slicing
+- live Vast offer ranking
+- existing lifecycle, billing, recovery and cost guard retained
 
-The Qwen2.5-Omni-7B experiment was retired after live testing showed that its instruction/context following and non-text visual understanding were below the intended personal-assistant quality bar.
+Removed:
+- Qwen3-VL
+- Whisper
+- vLLM
+- audio/video input flows
+- assistant personalities and tone/emotion settings
+- reasoning/language/chat settings
+- conversation history and streamed text responses
 
-v0.6 targets:
-- Qwen3-VL 30B-A3B Instruct FP8
-- Whisper turbo
-- 48GB+ GPU VRAM
-- 100GB disk
-- 16384-token context
-- vLLM GPU utilization 0.82
-- hard Vast ceiling $0.50/hour
+## Validation
 
-## Preserved application features
+GitHub Actions reached successful full test runs after the code transition and cleanup.
 
-- live Vast marketplace refresh and offer comparison
-- per-second billing estimate
-- start/stop/destroy and recovery
-- Cost Guard
-- owner-only access
-- RAM-only chat history
-- editable behavior profiles/prompts
-- Rich Messages and styled Telegram buttons
-- streamed AI response drafts
-- text/image/video/Voice/audio inputs
+## Deployment status
 
-## Inference boundary
-
-Only gateway port 8190 is public. vLLM is localhost-only on 8191. The same per-instance random bearer token protects the gateway.
-
-Voice/Audio is transcribed before Qwen chat construction, so follow-up context uses transcript text instead of repeatedly carrying raw audio.
-
-## Validation status
-
-Automated CI validates controller configuration, migrations, inference payloads, speech transcription requests, settings/profile logic, Vast lifecycle and UI regressions.
-
-A real 48GB Vast GPU remains the required live acceptance step for:
-- cold-start time
-- actual A6000/48GB VRAM headroom
-- Whisper CUDA-vs-CPU auto placement
-- Arabic conversation quality
-- non-text image understanding
-- video understanding
-- Voice transcription latency
-- personality/prompt effect
+The code is prepared on the transition branch. The persistent controller and the merged main branch must be updated together before a fresh GPU rental, because the old controller and new image worker use different APIs.
