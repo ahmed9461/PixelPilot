@@ -8,7 +8,7 @@ from typing import Any, Awaitable, Callable
 
 from pixelpilot.config import Settings
 from pixelpilot.db import Database
-from pixelpilot.domain import GpuOffer, InferenceResult, InstancePhase
+from pixelpilot.domain import GeneratedImage, GpuOffer, InstancePhase, ReferenceImage
 from pixelpilot.services.billing import (
     begin_billing,
     billing_snapshot,
@@ -66,7 +66,20 @@ class Orchestrator:
             min_direct_ports=self.settings.vast_min_direct_ports,
             min_inet_down_mbps=self.settings.vast_min_inet_down_mbps,
         )
-        rows = await self.vast.search_offers(query, self.settings.vast_default_limit)
+        rows = await self.vast.search_offers(
+            query,
+            self.settings.vast_default_limit,
+            storage_gb=float(self.settings.vast_disk_gb),
+        )
+        # Prefer GPUs that can keep the full BF16 pipeline resident while still
+        # keeping cheaper 24 GB offload-capable offers visible as fallbacks.
+        rows.sort(
+            key=lambda row: (
+                row.gpu_ram_gb < self.settings.vast_preferred_gpu_ram_gb,
+                row.price_per_hour,
+                -(row.dlperf or 0.0),
+            )
+        )
         await self.db.set("offers.last", [row.public_dict() for row in rows])
         await self.db.set("offers.last_refreshed_at", datetime.now(UTC).isoformat())
         await self.db.event("offers.search", {"query": query, "count": len(rows)})
@@ -105,6 +118,8 @@ class Orchestrator:
             raise OrchestratorError("Offer is not in the latest search results. Search again before renting.")
         if offer.price_per_hour > self.settings.vast_max_price_usd_hour:
             raise OrchestratorError("Offer price exceeds the configured hard maximum")
+        if offer.gpu_ram_gb < self.settings.vast_min_gpu_ram_gb:
+            raise OrchestratorError("Offer VRAM is below the configured minimum")
 
         inference_token = secrets.token_urlsafe(32)
         unique_label = f"PixelPilot-{secrets.token_hex(6)}"
@@ -237,7 +252,7 @@ class Orchestrator:
                 notice = f"Vast: {ref.status}"
             elif not ref.public_ip or not ref.mapped_port:
                 await self.db.set("instance.phase", InstancePhase.PROVISIONING.value)
-                notice = "السيرفر يعمل، بانتظار منفذ Qwen..."
+                notice = "السيرفر يعمل، بانتظار منفذ إنشاء الصور..."
             else:
                 await self.db.set("instance.phase", InstancePhase.PROVISIONING.value)
                 url = self._inference_url(ref.public_ip, ref.mapped_port)
@@ -256,9 +271,9 @@ class Orchestrator:
                         },
                     )
                     if progress:
-                        await progress("✅ المساعد جاهز للنص والصورة والفيديو والصوت.")
+                        await progress("✅ محرك الصور جاهز.")
                     return
-                notice = "السيرفر يعمل؛ جاري تجهيز نماذج الفهم والصوت..."
+                notice = "السيرفر يعمل؛ جاري تحميل محرك إنشاء الصور..."
 
             if progress and notice != last_notice:
                 await progress(notice)
@@ -266,7 +281,7 @@ class Orchestrator:
             await asyncio.sleep(self.settings.provision_poll_seconds)
 
         raise OrchestratorError(
-            f"Qwen inference endpoint did not become ready within {self.settings.inference_ready_timeout_seconds}s"
+            f"Image inference endpoint did not become ready within {self.settings.inference_ready_timeout_seconds}s"
         )
 
     async def stop_current(self) -> bool:
@@ -315,8 +330,6 @@ class Orchestrator:
                 ("inference.token", None),
                 ("instance.last_activity_at", None),
                 ("inference.active", False),
-                ("worker.url", None),
-                ("worker.token", None),
                 ("generation.active", False),
             ):
                 await self.db.set(key, value)
@@ -326,19 +339,19 @@ class Orchestrator:
         instance_id = await self.db.get("instance.id")
         phase = await self.db.get("instance.phase", InstancePhase.NONE.value)
         offer = await self.db.get("instance.offer")
-        state: dict[str, Any] = {
+        state_data: dict[str, Any] = {
             "instance_id": instance_id,
             "phase": phase,
             "offer": offer,
             "model_id": self.settings.model_id,
         }
         if not instance_id:
-            return state
+            return state_data
 
         ref = await self.vast.show_instance(int(instance_id))
         if ref.status.lower() in {"running", "frozen", "stopped"}:
             await sync_billing_status(self.db, ref.status)
-        state.update(
+        state_data.update(
             {
                 "vast_status": ref.status,
                 "public_ip": ref.public_ip,
@@ -349,91 +362,90 @@ class Orchestrator:
         if probe_inference:
             try:
                 inference = await self._current_inference()
-                state["inference_ready"] = await inference.is_ready()
+                state_data["inference_ready"] = await inference.is_ready()
             except Exception:
-                state["inference_ready"] = False
-        return state
+                state_data["inference_ready"] = False
+        return state_data
 
-    async def chat(self, messages: list[dict[str, Any]]) -> InferenceResult:
+    async def generate_image(
+        self,
+        prompt: str,
+        *,
+        width: int,
+        height: int,
+        steps: int,
+        seed: int | None = None,
+        reference_images: tuple[ReferenceImage, ...] = (),
+    ) -> GeneratedImage:
         if self._inference_lock.locked():
-            raise OrchestratorError("يوجد طلب آخر قيد المعالجة حاليًا")
+            raise OrchestratorError("يوجد طلب إنشاء صورة آخر قيد المعالجة حاليًا")
+
+        if not prompt.strip():
+            raise OrchestratorError("اكتب وصف الصورة أو تعليمات التعديل")
+        if len(reference_images) > self.settings.image_max_reference_images:
+            raise OrchestratorError(
+                f"الحد الأقصى للصور المرجعية هو {self.settings.image_max_reference_images}"
+            )
 
         async with self._inference_lock:
             phase = await self.db.get("instance.phase", InstancePhase.NONE.value)
             instance_id = await self.db.get("instance.id")
             if phase != InstancePhase.READY.value or not instance_id:
-                raise OrchestratorError("السيرفر غير جاهز للمحادثة")
+                raise OrchestratorError("السيرفر غير جاهز لإنشاء الصور")
 
-            await self.db.set("inference.active", True)
+            await self.db.set_many(
+                {
+                    "inference.active": True,
+                    "generation.active": True,
+                }
+            )
             await self._touch_activity()
             try:
                 inference = await self._current_inference()
-                result = await inference.chat(
-                    messages,
-                    max_tokens=self.settings.model_max_output_tokens,
+                result = await inference.generate(
+                    prompt,
+                    width=width,
+                    height=height,
+                    steps=steps,
+                    seed=seed,
+                    reference_images=reference_images,
                 )
                 await self.db.event(
-                    "chat.completed",
+                    "image.generated",
                     {
                         "instance_id": int(instance_id),
-                        "message_count": len(messages),
-                        "response_chars": len(result.text),
+                        "prompt_chars": len(prompt),
+                        "reference_count": len(reference_images),
+                        "width": result.width,
+                        "height": result.height,
+                        "steps": steps,
+                        "seed": result.seed,
                         "model": result.model,
                     },
                 )
                 return result
             except Exception as exc:
                 await self.db.event(
-                    "chat.failed",
-                    {"instance_id": int(instance_id), "error": str(exc)},
-                )
-                raise
-            finally:
-                await self.db.set("inference.active", False)
-                await self._touch_activity()
-
-    async def transcribe_audio(self, data: bytes, *, mime_type: str) -> str:
-        """Transcribe one audio input through the Whisper sidecar."""
-        if self._inference_lock.locked():
-            raise OrchestratorError("يوجد طلب آخر قيد المعالجة حاليًا")
-
-        async with self._inference_lock:
-            phase = await self.db.get("instance.phase", InstancePhase.NONE.value)
-            instance_id = await self.db.get("instance.id")
-            if phase != InstancePhase.READY.value or not instance_id:
-                raise OrchestratorError("السيرفر غير جاهز للمحادثة")
-
-            await self.db.set("inference.active", True)
-            await self._touch_activity()
-            try:
-                inference = await self._current_inference()
-                transcript = await inference.transcribe_audio(
-                    data,
-                    mime_type=mime_type,
-                    filename="telegram-audio",
-                )
-                await self.db.event(
-                    "speech.transcribed",
+                    "image.failed",
                     {
                         "instance_id": int(instance_id),
-                        "audio_bytes": len(data),
-                        "transcript_chars": len(transcript),
+                        "prompt_chars": len(prompt),
+                        "reference_count": len(reference_images),
+                        "error": str(exc),
                     },
-                )
-                return transcript
-            except Exception as exc:
-                await self.db.event(
-                    "speech.transcription_failed",
-                    {"instance_id": int(instance_id), "error": str(exc)},
                 )
                 raise
             finally:
-                await self.db.set("inference.active", False)
+                await self.db.set_many(
+                    {
+                        "inference.active": False,
+                        "generation.active": False,
+                    }
+                )
                 await self._touch_activity()
 
     async def recover_current(self) -> None:
-        await self.db.set("inference.active", False)
-        await self.db.set("generation.active", False)
+        await self.db.set_many({"inference.active": False, "generation.active": False})
 
         instance_id = await self.db.get("instance.id")
         if not instance_id:
@@ -523,17 +535,14 @@ class Orchestrator:
             "HF_TOKEN": self.settings.hf_token,
             "PIXELPILOT_INFERENCE_TOKEN": inference_token,
             "INFERENCE_PORT": str(self.settings.inference_port),
-            "VLLM_INTERNAL_PORT": str(self.settings.vllm_internal_port),
             "MODEL_ID": self.settings.model_id,
             "MODEL_DTYPE": self.settings.model_dtype,
-            "MODEL_MAX_LEN": str(self.settings.model_max_len),
-            "MODEL_GPU_MEMORY_UTILIZATION": str(self.settings.model_gpu_memory_utilization),
-            "MODEL_TENSOR_PARALLEL_SIZE": str(self.settings.model_tensor_parallel_size),
-            "MODEL_LIMIT_IMAGES": str(self.settings.model_limit_images),
-            "MODEL_LIMIT_VIDEOS": str(self.settings.model_limit_videos),
-            "WHISPER_MODEL": self.settings.whisper_model,
-            "WHISPER_DEVICE": self.settings.whisper_device,
-            "WHISPER_CACHE": "/workspace/whisper-cache",
+            "IMAGE_MEMORY_MODE": self.settings.image_memory_mode,
+            "IMAGE_FULL_GPU_MIN_VRAM_GB": str(self.settings.image_full_gpu_min_vram_gb),
+            "IMAGE_VAE_TILING": str(self.settings.image_vae_tiling).lower(),
+            "IMAGE_VAE_SLICING": str(self.settings.image_vae_slicing).lower(),
+            "IMAGE_MAX_REFERENCE_IMAGES": str(self.settings.image_max_reference_images),
+            "IMAGE_MAX_UPLOAD_MB": str(self.settings.image_max_upload_mb),
             "HF_HOME": "/workspace/hf-cache",
             "DATA_DIRECTORY": "/workspace",
         }

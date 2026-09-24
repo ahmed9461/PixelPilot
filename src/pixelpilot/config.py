@@ -21,7 +21,10 @@ class Settings(BaseSettings):
     vast_template_hash: str | None = None
     vast_docker_image: str = "vastai/pytorch:@vastai-automatic-tag"
     vast_disk_gb: int = 100
-    vast_min_gpu_ram_gb: int = 48
+    # Qwen-Image-2.1 can run on 24 GB with CPU offload. 48 GB+ is preferred
+    # because the BF16 checkpoint is roughly 33 GB before runtime overhead.
+    vast_min_gpu_ram_gb: int = 24
+    vast_preferred_gpu_ram_gb: int = 48
     vast_min_reliability: float = 0.98
     vast_max_price_usd_hour: float = 0.50
     vast_default_limit: int = 8
@@ -36,39 +39,28 @@ class Settings(BaseSettings):
     pixelpilot_repo_url: str = ""
     pixelpilot_repo_ref: str = "main"
 
-    # Optional Hugging Face read token. The Qwen3-VL FP8 checkpoint is public,
-    # but authenticated Hub access can improve download reliability/rate limits.
+    # Optional Hugging Face read token. Qwen-Image-2.1 is public, but an
+    # authenticated token can improve Hub download reliability/rate limits.
     hf_token: str = ""
 
-    # Vision-language model served by vLLM. Qwen3-VL handles text, images and
-    # video; speech is transcribed by Whisper and then passed into Qwen3-VL.
-    model_id: str = "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"
-    model_dtype: str = "auto"
-    model_max_len: int = 16384
-    model_max_output_tokens: int = 2048
-    model_gpu_memory_utilization: float = 0.82
-    model_tensor_parallel_size: int = 1
-    model_limit_images: int = 1
-    model_limit_videos: int = 1
+    # Qwen-Image-2.1 runtime.
+    model_id: str = "Qwen/Qwen-Image-2.1"
+    model_dtype: str = "bfloat16"
+    image_memory_mode: str = "auto"  # auto | gpu | offload
+    image_full_gpu_min_vram_gb: int = 48
+    image_vae_tiling: bool = True
+    image_vae_slicing: bool = True
+    image_default_steps: int = 40
+    image_max_reference_images: int = 10
+    image_max_upload_mb: int = 25
 
-    # Speech recognition sidecar on the same temporary GPU instance.
-    whisper_model: str = "turbo"
-    whisper_device: str = "auto"
-
-    # Public mapped gateway endpoint. vLLM itself is bound only to localhost
-    # on a second internal port; the gateway adds Whisper transcription.
+    # Public authenticated image inference endpoint.
     inference_port: int = 8190
-    vllm_internal_port: int = 8191
     inference_use_https: bool = False
     inference_verify_tls: bool = False
-    inference_request_timeout_seconds: int = 600
-    inference_ready_timeout_seconds: int = 1800
+    inference_request_timeout_seconds: int = 1800
+    inference_ready_timeout_seconds: int = 2400
     provision_poll_seconds: float = 5.0
-
-    # Telegram chat session. History exists only in controller memory and is
-    # never written to SQLite; /new clears it immediately.
-    chat_history_messages: int = 10
-    chat_max_media_mb: int = 20
 
     # Cost guard. Auto-destroy is disabled unless explicitly configured.
     cost_guard_warn_minutes: int = 30
@@ -82,11 +74,11 @@ class Settings(BaseSettings):
             raise ValueError("OWNER_TELEGRAM_ID must be >= 0")
         return value
 
-    @field_validator("vast_min_reliability", "model_gpu_memory_utilization")
+    @field_validator("vast_min_reliability")
     @classmethod
     def fraction_range(cls, value: float) -> float:
         if not 0 < value <= 1:
-            raise ValueError("value must be > 0 and <= 1")
+            raise ValueError("VAST_MIN_RELIABILITY must be > 0 and <= 1")
         return value
 
     @field_validator("vast_max_price_usd_hour")
@@ -99,17 +91,14 @@ class Settings(BaseSettings):
     @field_validator(
         "vast_default_limit",
         "vast_min_gpu_ram_gb",
-        "model_max_len",
-        "model_max_output_tokens",
-        "model_tensor_parallel_size",
-        "model_limit_images",
-        "model_limit_videos",
+        "vast_preferred_gpu_ram_gb",
+        "image_full_gpu_min_vram_gb",
+        "image_default_steps",
+        "image_max_reference_images",
+        "image_max_upload_mb",
         "inference_port",
-        "vllm_internal_port",
         "inference_request_timeout_seconds",
         "inference_ready_timeout_seconds",
-        "chat_history_messages",
-        "chat_max_media_mb",
     )
     @classmethod
     def positive_ints(cls, value: int) -> int:
@@ -119,25 +108,54 @@ class Settings(BaseSettings):
 
     @field_validator("vast_disk_gb")
     @classmethod
-    def disk_large_enough_for_qwen3_vl(cls, value: int) -> int:
-        if value < 90:
-            raise ValueError("VAST_DISK_GB must be >= 90 for Qwen3-VL 30B FP8 + Whisper")
+    def disk_large_enough_for_qwen_image(cls, value: int) -> int:
+        if value < 70:
+            raise ValueError("VAST_DISK_GB must be >= 70 for Qwen-Image-2.1 and runtime caches")
         return value
 
     @field_validator("vast_min_gpu_ram_gb")
     @classmethod
-    def vram_large_enough_for_qwen3_vl(cls, value: int) -> int:
-        if value < 48:
-            raise ValueError("VAST_MIN_GPU_RAM_GB must be >= 48 for the supported Qwen3-VL 30B FP8 profile")
+    def vram_large_enough_for_qwen_image(cls, value: int) -> int:
+        if value < 24:
+            raise ValueError("VAST_MIN_GPU_RAM_GB must be >= 24 for the supported Qwen-Image-2.1 profile")
         return value
 
-    @field_validator("whisper_device")
+    @field_validator("vast_preferred_gpu_ram_gb")
     @classmethod
-    def whisper_device_supported(cls, value: str) -> str:
+    def preferred_vram_not_too_small(cls, value: int) -> int:
+        if value < 24:
+            raise ValueError("VAST_PREFERRED_GPU_RAM_GB must be >= 24")
+        return value
+
+    @field_validator("image_memory_mode")
+    @classmethod
+    def memory_mode_supported(cls, value: str) -> str:
         normalized = value.strip().lower()
-        if normalized not in {"auto", "cuda", "cpu"}:
-            raise ValueError("WHISPER_DEVICE must be auto, cuda, or cpu")
+        if normalized not in {"auto", "gpu", "offload"}:
+            raise ValueError("IMAGE_MEMORY_MODE must be auto, gpu, or offload")
         return normalized
+
+    @field_validator("model_dtype")
+    @classmethod
+    def dtype_supported(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"bfloat16", "float16"}:
+            raise ValueError("MODEL_DTYPE must be bfloat16 or float16")
+        return normalized
+
+    @field_validator("image_default_steps")
+    @classmethod
+    def steps_range(cls, value: int) -> int:
+        if not 1 <= value <= 80:
+            raise ValueError("IMAGE_DEFAULT_STEPS must be between 1 and 80")
+        return value
+
+    @field_validator("image_max_reference_images")
+    @classmethod
+    def reference_limit(cls, value: int) -> int:
+        if not 1 <= value <= 10:
+            raise ValueError("IMAGE_MAX_REFERENCE_IMAGES must be between 1 and 10")
+        return value
 
     def validate_runtime(self) -> None:
         missing: list[str] = []

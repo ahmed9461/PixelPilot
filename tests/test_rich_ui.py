@@ -1,40 +1,25 @@
-from pixelpilot.bot.rich_ui import home_card, response_card, settings_card
+from pixelpilot.bot.rich_ui import home_card, settings_card
 
 
-def test_home_rich_message_is_rtl_and_structured():
+def test_home_rich_message_is_rtl_and_image_focused():
     card = home_card()
     assert card.is_rtl is True
-    assert "<h2>🤖 PixelPilot</h2>" in (card.html or "")
-    assert "<details>" in (card.html or "")
+    assert "<h2>🎨 PixelPilot</h2>" in (card.html or "")
+    assert "توليد صورة" in (card.html or "")
+    assert "صوت" not in (card.html or "")
 
 
-def test_settings_rich_message_uses_table():
+def test_settings_rich_message_contains_image_controls():
     card = settings_card(
         {
-            "persona": "⚪ محايد",
-            "tone": "🙂 متوازن",
-            "reasoning": "✨ تلقائي",
-            "format": "✨ تلقائي",
-            "language": "🌐 تلقائي",
-            "creativity": 30,
-            "diversity": 80,
-            "length": 100,
-            "repetition": 0,
-            "custom": "متوقف",
+            "quality": "قياسي",
+            "aspect_ratio": "1:1",
+            "steps": 40,
         }
     )
+    html = card.html or ""
     assert card.is_rtl is True
-    assert "<table bordered striped compact>" in (card.html or "")
-    assert "30%" in (card.html or "")
-    assert "البرومت المخصص" in (card.html or "")
-    assert "متوقف" in (card.html or "")
-
-
-
-def test_response_card_detects_rtl_and_preserves_markdown():
-    arabic = response_card("## عنوان\n\nمرحبا بك")
-    assert arabic.markdown == "## عنوان\n\nمرحبا بك"
-    assert arabic.is_rtl is True
-
-    english = response_card("## Hello\n\nHow are you?")
-    assert english.is_rtl is False
+    assert "إعدادات الصور" in html
+    assert "1:1" in html
+    assert "40" in html
+    assert "الشخصية" not in html

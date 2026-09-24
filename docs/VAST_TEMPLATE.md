@@ -1,9 +1,16 @@
-# Vast runtime profile
+# Vast.ai Template Notes
 
-The normal path uses `VAST_DOCKER_IMAGE=vastai/pytorch:@vastai-automatic-tag` plus `scripts/bootstrap_vast.sh`.
+Use a CUDA-enabled Vast PyTorch image and expose one direct TCP port for the PixelPilot image gateway.
 
-Default economy search policy: one GPU, >= 48 GB VRAM, >= 80 GB disk, verified host, >= 100 Mbps download and one direct mapped port. The default hard price cap is `$0.80/hour`.
+Recommended controller defaults:
+- image: `vastai/pytorch:@vastai-automatic-tag`
+- disk: 100 GB
+- minimum VRAM: 24 GB
+- preferred VRAM: 48 GB+
+- direct ports: at least 1
+- download bandwidth: at least 100 Mbps
+- reliability: at least 0.98
 
-The bootstrap installs vLLM and starts `Qwen/Qwen2.5-Omni-7B` on `INFERENCE_PORT` with a per-instance API key. The default context is 8192 tokens to preserve headroom on 48GB-class GPUs.
+The controller passes runtime variables and an on-start command. The on-start flow clones PixelPilot and launches `scripts/bootstrap_vast.sh`.
 
-A custom `VAST_TEMPLATE_HASH` remains supported if it provides the same runtime contract/environment expected by the controller.
+Do not preconfigure vLLM or Whisper in the template. Qwen-Image-2.1 is loaded directly through Diffusers.

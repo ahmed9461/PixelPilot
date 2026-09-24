@@ -179,6 +179,12 @@ async def offer_details(callback: CallbackQuery) -> None:
         f"السعر: <b>${offer.price_per_hour:.3f}/ساعة</b>",
         f"الموثوقية: <b>{'?' if offer.reliability is None else f'{offer.reliability * 100:.1f}%'} </b>",
     ]
+    profile = (
+        "🚀 مفضّل — مناسب لوضع GPU الكامل و2K"
+        if offer.gpu_ram_gb >= orch().settings.vast_preferred_gpu_ram_gb
+        else "💡 اقتصادي — يعمل بوضع توفير الذاكرة، ويفضّل معه القياسي"
+    )
+    lines.append(f"ملف التشغيل: <b>{profile}</b>")
     if offer.inet_down_mbps:
         lines.append(f"سرعة التنزيل: <b>{offer.inet_down_mbps:.0f} Mbps</b>")
     if offer.location:
@@ -200,7 +206,7 @@ async def rent(callback: CallbackQuery) -> None:
         try:
             state = await orch().current_state(probe_inference=False)
             billing = state.get("billing") if isinstance(state, dict) else None
-            lines = ["⏳ <b>جاري تجهيز السيرفر...</b>", "", "قد يستغرق ذلك عدة دقائق."]
+            lines = ["⏳ <b>جاري تجهيز محرك الصور...</b>", "", "يتم تنزيل النموذج وتحميله إلى الذاكرة."]
             lines.extend(_billing_lines(billing))
             await callback.message.edit_text("\n".join(lines))
         except Exception:
@@ -225,7 +231,7 @@ async def rent(callback: CallbackQuery) -> None:
         return
 
     state = await orch().current_state(probe_inference=False)
-    lines = ["✅ <b>السيرفر جاهز</b>", "", "أرسل الآن نصًا أو صورة أو تسجيلًا صوتيًا."]
+    lines = ["✅ <b>السيرفر جاهز</b>", "", "أرسل وصفًا لإنشاء صورة، أو صورة مع تعليمات لتعديلها."]
     lines.extend(_billing_lines(state.get("billing")))
     await callback.message.edit_text("\n".join(lines), reply_markup=main_menu())
 

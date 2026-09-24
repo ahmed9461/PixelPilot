@@ -102,7 +102,7 @@ async def main() -> None:
 
     print("\n===== PROGRESS =====")
     if healthy:
-        print("READY — the assistant endpoint is responding.")
+        print("READY — the image endpoint is responding.")
     elif ref is None:
         print("UNKNOWN — instance details could not be read.")
     elif ref.status.lower() not in {"running", "ready"}:
@@ -110,7 +110,7 @@ async def main() -> None:
     elif not ref.public_ip or not ref.mapped_port:
         print("STARTING — the instance is running, waiting for the public service port.")
     else:
-        print("PROVISIONING — the instance is running and mapped; the assistant runtime is still starting or loading.")
+        print("PROVISIONING — the instance is running and mapped; the image runtime is still starting or loading.")
 
     print("\n===== VAST INSTANCE LOGS =====")
     try:
