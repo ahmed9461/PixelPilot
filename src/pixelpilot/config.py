@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     vast_min_reliability: float = 0.98
     vast_max_price_usd_hour: float = 0.50
     vast_default_limit: int = 8
+    vast_search_pool_limit: int = 64
     vast_verified_only: bool = True
     vast_datacenter_only: bool = False
     vast_min_direct_ports: int = 1
@@ -95,6 +96,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "vast_default_limit",
+        "vast_search_pool_limit",
         "vast_min_gpu_ram_gb",
         "vast_preferred_gpu_ram_gb",
         "vast_min_cpu_ram_gb",
