@@ -1,146 +1,33 @@
 # Decisions
 
-## 2026-09-20 — Persona is the primary voice
+## 2026-09-24 — Qwen-Image-2.1 pivot
 
-Selecting a new persona must produce an immediately observable change. The persona selection therefore resets tone, reasoning and formatting to their neutral defaults, disables the optional custom-prompt layer, and clears RAM chat history. Language selection is preserved because it is orthogonal to personality.
+PixelPilot is now an image studio rather than a multimodal chat assistant.
 
-Re-selecting the already active persona performs the same cleanup if stale modifiers are still active. This prevents a custom prompt, deep reasoning mode or old tone from masking the chosen persona.
+### Model
+Use `Qwen/Qwen-Image-2.1` through the official Diffusers pipeline family.
 
-## 2026-09-20 — Custom prompt has explicit activation
+### Prompt handling
+Pass the user's prompt unchanged after only checking that it contains non-whitespace text. Do not apply assistant personality, emotion, tone, language, reasoning, system prompt, chat context or prompt enhancement.
 
-Custom prompt text and custom prompt activation are separate states. Editing a non-empty custom prompt enables it; clearing it disables it. Persona selection disables it without deleting the stored text. The Telegram UI must show whether the layer is currently active.
+### GPU policy
+- minimum searchable VRAM: 24 GB
+- preferred VRAM: 48 GB+
+- 24–47 GB uses model CPU offload in automatic mode
+- 48 GB+ uses full-GPU placement in automatic mode
+- VAE tiling/slicing enabled by default
+- BF16 is the default dtype
+- rental cap remains $0.50/hour
+- disk remains 100 GB
 
-## 2026-09-20 — Lower creativity for daily assistant use
+### Quality profiles
+Standard mode uses approximately 1K-class dimensions to reduce VRAM pressure and latency. 2K mode uses Qwen-Image-2.1 model-card aspect-ratio dimensions. Default steps remain 40.
 
-Although Qwen3-VL publishes a 0.7 temperature profile, live personal-assistant use showed excessive philosophical/imaginary phrasing. PixelPilot therefore defaults untouched installs to 30% creativity (`temperature=0.3`) while keeping `top_p=0.8`, `top_k=20` and `repetition_penalty=1.0`. Owner-edited generation values remain untouched.
+### Editing
+Support a single reference image and Telegram albums up to 10 references.
 
+### Output
+Use PNG rather than JPEG so image quality and alpha/transparency are preserved.
 
-## 2026-09-19 — Qwen3-VL 30B FP8 + Whisper replaces Qwen2.5-Omni
-
-Live testing established that Qwen2.5-Omni-7B does not meet the intended personal-assistant quality bar for context following, nuanced instruction following and non-text visual understanding. Stop spending engineering effort trying to prompt around that model ceiling.
-
-Use `Qwen/Qwen3-VL-30B-A3B-Instruct-FP8` for text, images and video. Use OpenAI Whisper `turbo` for speech transcription, then send the transcript through Qwen3-VL so Voice/Audio shares the same reasoning, personality and conversation path.
-
-Keep the 48GB Vast policy and $0.50/hour hard ceiling. The FP8 checkpoint is intended to make the 30B-A3B model practical on that class; Ampere uses vLLM's weight-only FP8/Marlin path rather than native FP8 compute.
-
-## 2026-09-19 — Public inference gateway, private vLLM
-
-Port 8190 is an authenticated PixelPilot gateway. vLLM binds only to `127.0.0.1:8191`. The gateway proxies OpenAI-compatible chat/models/health requests and owns Whisper transcription.
-
-Whisper auto-selects CUDA only if enough free VRAM remains after vLLM starts; otherwise it falls back to CPU. vLLM reserves 0.82 of GPU memory to leave speech headroom.
-
-## 2026-09-19 — Speech becomes transcript before chat history
-
-Telegram Voice/Audio is transcribed before constructing the Qwen conversation turn. Store only the transcript in RAM history. Never keep/re-send audio base64 on future turns. If a caption exists, append it as user text after the transcript without inventing instructions.
-
-## 2026-09-19 — Qwen3-VL video budget
-
-Use 16K model context. vLLM samples 24 frames per video globally with frame recovery. A fresh video turn clears old RAM history before construction so previous conversation cannot crowd out visual tokens.
-
-
-## 2026-09-18 — Repair prompt migrations and preserve manual edits
-
-Prompt schema migrations must not rely only on very old starter prompt values. Schema v4 explicitly recognizes the v0.5.1/v0.5.2 persona defaults so installations that were incorrectly marked v3 are upgraded on the next controller restart. Every manual prompt edit writes an `assistant.prompt.edited.*` marker; reset clears that marker. Automatic upgrades must preserve marked owner edits.
-
-## 2026-09-18 — Video context budgeting
-
-PixelPilot runs Qwen2.5-Omni with an 8192-token model context, so raw video must not be allowed to consume an unbounded visual token budget. Video payloads use an explicit 24-frame cap, a fresh video turn does not prepend old chat history, and new Vast servers export a conservative `VIDEO_MAX_PIXELS` budget equivalent to roughly 4096 visual tokens. This keeps room for the active profile, user text and model output without increasing the GPU requirement.
-
-
-## 2026-09-18 — Persona changes are immediately observable
-
-Personality, tone, reasoning, formatting and language profiles are behavior changes, not cosmetic labels. Selecting one clears the current RAM-only chat history before the next user message so examples produced under the old profile cannot anchor the new response style. Editing/resetting a behavior prompt does the same.
-
-Built-in personas must expose a recognizable everyday voice signature while still adapting safely to technical, factual and sensitive tasks. Avoid profiles whose instructions only activate in a narrow domain and therefore look identical during normal conversation.
-
-## 2026-09-18 — Qwen repetition guard
-
-Send `repetition_penalty` on both streamed and non-streamed vLLM chat requests. The owner-facing `🔁 منع التكرار` control maps 0–100% to 1.0–1.2, with 50% = 1.1. This baseline follows the current Qwen2.5-Omni thinker sampling example in vLLM-Omni and addresses the observed long Arabic story loop / repeated Chinese phrase degeneration.
-
-
-## 2026-09-18 — Native Rich Messages and streamed AI drafts
-
-PixelPilot is visual-first and should use Telegram's modern native UI where it improves the experience. Use Rich Messages for visual dashboards and completed assistant output, and use styled inline buttons for primary, success and destructive actions. Keep a plain-message fallback so a formatting/parser failure never hides an answer or blocks navigation.
-
-AI responses must be streamed from the vLLM OpenAI-compatible SSE endpoint and mirrored into Telegram with `sendMessageDraft`. The same non-zero draft id is reused for animated updates, updates are throttled rather than sent for every token, and the final answer is sent as a persistent message after generation completes. Draft streaming is private-chat only; unsupported contexts fall back to the classic processing indicator.
-
-Require aiogram 3.31+ for Bot API 10.x Rich Message, button-style and message-draft support.
-
-
-## 2026-09-17 — Assistant Settings uses deterministic back-navigation
-
-Every settings screen must know where it was opened from. In particular, opening a prompt from a personality/tone/reasoning/format/language group must return to that same group, while opening it from the central Prompt Hub must return to the Prompt Hub. Edit, reset and cancel flows preserve the same origin instead of using one generic Back destination.
-
-Already-selected controls are no-ops rather than attempts to submit identical Telegram message markup. Harmless `message is not modified` responses are handled safely so repeated taps do not look like broken buttons.
-
-## 2026-09-17 — Settings state uses batched SQLite access
-
-Assistant Settings must not issue one SQLite connection/query per individual field. State screens load profile state through batched KV reads and bulk resets use batched writes. This keeps callback acknowledgement and screen updates responsive on the controller server.
-
-## 2026-09-17 — Built-in prompts are modular behavior contracts
-
-Starter prompts must be strong enough to materially change behavior without becoming huge token-heavy monoliths. Each non-neutral profile should define its scope, desired behavior, accuracy/adaptation rules and failure modes to avoid. Personality, tone, reasoning, formatting and language are intentionally separate layers so they compose cleanly.
-
-Prompt defaults are versioned. When a new prompt schema ships, exact untouched legacy defaults may be migrated to the new built-in version, but any owner-edited prompt must be preserved verbatim.
-
-## 2026-09-17 — Owner-controlled prompt profiles supersede the blanket no-prompt rule
-
-The earlier “No internal prompt” decision is superseded by the owner's request for editable assistant personalities and behavior controls. The neutral/default profile still injects no prompt. When the owner explicitly selects a personality, tone, reasoning, formatting, language profile or custom prompt, PixelPilot may compose those visible/editable pieces into one `system` message for the request.
-
-Every injected prompt fragment must be visible, editable, replaceable and resettable from Telegram. PixelPilot must never add a second hidden System/Developer Prompt or silently rewrite the user's actual message. Prompt selections and edited templates are stored in SQLite so changing behavior never requires SSH or `.env` edits.
-
-## 2026-09-17 — Video is a first-class multimodal input
-
-Support Telegram videos, video notes and video documents. Pass video bytes to the OpenAI-compatible endpoint as a `video_url` data URL and allow one video per prompt by default. Keep the same media-size guard used for images/audio. The Vast runtime includes video in `--limit-mm-per-prompt` while keeping the previously proven dependency-install path.
-
-## 2026-09-17 — Runtime generation controls live in Telegram
-
-Expose user-facing percentage controls for creativity, diversity and response length. The neutral defaults must preserve the already-tested v0.4.3 behavior: creativity 0% maps to `temperature=0`, diversity 100% maps to `top_p=1.0`, and response length 100% keeps the full configured output-token allowance. The owner can deliberately change any of these from Telegram. These are request-time controls stored in SQLite, not `.env` mutations.
-
-## 2026-09-17 — Deterministic Qwen text decoding
-
-PixelPilot sends `temperature=0` on chat-completion requests by default. vLLM defaults to `temperature=1.0`, which samples randomly; the live Arabic test produced intermittent multilingual/gibberish output under that default. Qwen2.5-Omni's official Transformers examples use `model.generate()` without enabling sampling, so greedy decoding is the closer behavioral match.
-
-This is a generation/sampling control. The owner may later increase creativity explicitly through Assistant Settings.
-
-## 2026-09-17 — $0.50/hour hard rental ceiling
-
-PixelPilot must not rent any offer whose total hourly rental price exceeds `$0.50/hour`. The ceiling is enforced both in marketplace search and again immediately before instance creation so a stale cached offer cannot bypass it.
-
-## 2026-09-17 — Live marketplace refresh feedback
-
-Every press of the refresh/search button must perform a new marketplace request. PixelPilot compares the fresh result set with the previous cached result set and tells the user whether nothing changed, offers appeared/disappeared, or prices/order changed. Do not fake rotation or shuffle unchanged offers just to make refresh look different.
-
-## 2026-09-17 — Per-second rental meter
-
-Track the active rental meter in SQLite from successful contract creation through stop/destroy. The meter uses the contracted hourly price and accumulated active seconds, pauses when the user stops the instance, resumes on start, and stores a final snapshot on destroy. Telegram status and destroy confirmation show the current elapsed active time and estimated rental cost. Storage and bandwidth remain separate provider charges and are not included in this meter.
-
-## 2026-09-17 — Keep Telegram UI user-facing
-
-Normal Telegram screens must contain only information the user needs to operate PixelPilot. Do not expose model names, vLLM/inference architecture, deployment internals, or implementation notes in welcome/help/status/provisioning screens. Keep technical details in `README`, `docs`, logs, diagnostics and developer-facing files instead.
-
-Assistant behavior controls such as personality, tone, reasoning depth, formatting, language, context and generation percentages are intentionally user-facing and belong in the settings UI.
-
-Hardware details that are necessary to choose a rented server — GPU name, VRAM, price, reliability, network speed and location — may remain in the offer screen.
-
-## 2026-09-17 — Qwen2.5-Omni-7B as the economical personal default
-
-Use `Qwen/Qwen2.5-Omni-7B` as the default model because the earlier Qwen3-Omni 30B profile forced PixelPilot into 80–96GB GPUs costing about $1/hour in the first live search. The 7B model still understands text, images, audio and video but allows a 48GB GPU policy and a much lower default Vast price cap.
-
-Keep the 7B profile in BF16 with an 8192-token context by default. Do not silently downgrade to the 3B model: 3B may be added later as an explicit ultra-budget option if the user accepts the quality trade-off.
-
-## 2026-09-17 — No internal prompt (historical, superseded)
-
-Originally PixelPilot was required to never add a System Prompt, language instruction, persona or prompt enhancer. This decision was later superseded by the owner-controlled prompt-profile decision above. Its core privacy principle remains: no hidden prompt or silent rewrite outside what the owner can see/edit in Telegram.
-
-## 2026-09-17 — Direct vLLM serving
-
-Remove ComfyUI and the custom FastAPI image Worker. A rented Vast instance serves the configured Qwen Omni model through vLLM's OpenAI-compatible API directly.
-
-## 2026-09-17 — RAM-only chat context
-
-Keep conversation messages/media only in Controller RAM. Do not persist user messages, images, audio or video to SQLite. `/new` and the context-clear button clear context; Controller restart also clears it. Persist only context settings (enabled/disabled and message depth), not conversation content.
-
-## 2026-09-17 — Keep Vast lifecycle
-
-Preserve search, review, rent, start, stop, destroy, recovery, preflight and Cost Guard from the previous implementation.
+### Removed architecture
+Remove vLLM, Whisper, Qwen3-VL, audio/video understanding, assistant profiles, chat history and text-response streaming from active code.
