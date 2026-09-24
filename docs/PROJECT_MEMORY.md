@@ -39,7 +39,8 @@ Output:
 - Search minimum: 24 GB VRAM.
 - Preferred tier: 48 GB+ VRAM.
 - Default disk: 100 GB.
-- 24–47 GB: automatic CPU model offload with VAE tiling/slicing.
+- Minimum host RAM: 48 GB for the supported CPU-offload profile.
+- 24–47 GB VRAM: automatic CPU model offload with VAE tiling/slicing.
 - 48 GB+: automatic full-GPU placement.
 - Default dtype: BF16.
 - Default steps: 40.
