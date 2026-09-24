@@ -3,7 +3,15 @@ import asyncio
 from pixelpilot.config import Settings
 from pixelpilot.db import Database
 from pixelpilot.domain import GeneratedImage, GpuOffer, InstanceRef, ReferenceImage
-from pixelpilot.services.orchestrator import Orchestrator, OrchestratorError, _extract_instance_id
+from pixelpilot.services.vast_gateway import VastCreateRejected
+from pixelpilot.services.orchestrator import (
+    OfferChangedError,
+    OfferUnavailableError,
+    Orchestrator,
+    OrchestratorError,
+    RentRejectedError,
+    _extract_instance_id,
+)
 
 
 def test_extract_instance_id_direct():
@@ -426,5 +434,147 @@ def test_current_state_reconciles_terminal_phase(tmp_path):
         state = await orch.current_state(probe_inference=False)
         assert state["phase"] == "error"
         assert await db.get("instance.phase") == "error"
+
+    asyncio.run(scenario())
+
+
+
+def test_rent_revalidates_exact_offer_and_rejects_stale_id(tmp_path):
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            telegram_bot_token="t",
+            owner_telegram_id=1,
+            vast_api_key="v",
+            pixelpilot_repo_url="https://example.invalid/PixelPilot.git",
+            database_path=tmp_path / "db.sqlite3",
+        )
+        db = Database(settings.database_path)
+        await db.init()
+
+        class StaleOfferVast(FakeVast):
+            def __init__(self):
+                super().__init__()
+                self.live = True
+
+            async def search_offers(self, query, limit, **kwargs):
+                self.search_calls.append((query, limit, kwargs))
+                if self.live:
+                    preferred = GpuOffer(
+                        78, "RTX A6000", 48, 0.40, 0.99, 40
+                    )
+                    if "gpu_ram>=48" in query:
+                        return [preferred]
+                    return [preferred]
+                return []
+
+        vast = StaleOfferVast()
+        orch = Orchestrator(
+            settings,
+            db,
+            vast,
+            inference_factory=lambda url, token: FakeInference(),
+        )
+        await orch.offers()
+        vast.live = False
+
+        try:
+            await orch.rent(78)
+        except OfferUnavailableError as exc:
+            assert "78" in str(exc)
+        else:
+            raise AssertionError("expected stale offer rejection")
+
+        assert vast.create_kwargs is None
+        assert await db.get("instance.id") is None
+
+    asyncio.run(scenario())
+
+
+def test_rent_requires_reconfirmation_when_price_changes(tmp_path):
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            telegram_bot_token="t",
+            owner_telegram_id=1,
+            vast_api_key="v",
+            pixelpilot_repo_url="https://example.invalid/PixelPilot.git",
+            database_path=tmp_path / "db.sqlite3",
+        )
+        db = Database(settings.database_path)
+        await db.init()
+
+        class ChangedOfferVast(FakeVast):
+            def __init__(self):
+                super().__init__()
+                self.price = 0.40
+
+            async def search_offers(self, query, limit, **kwargs):
+                self.search_calls.append((query, limit, kwargs))
+                offer = GpuOffer(
+                    78, "RTX A6000", 48, self.price, 0.99, 40
+                )
+                return [offer]
+
+        vast = ChangedOfferVast()
+        orch = Orchestrator(
+            settings,
+            db,
+            vast,
+            inference_factory=lambda url, token: FakeInference(),
+        )
+        await orch.offers()
+        vast.price = 0.45
+
+        try:
+            await orch.rent(78)
+        except OfferChangedError as exc:
+            assert "78" in str(exc)
+        else:
+            raise AssertionError("expected changed offer rejection")
+
+        assert vast.create_kwargs is None
+
+    asyncio.run(scenario())
+
+
+def test_explicit_vast_rejection_clears_pending_rent_state(tmp_path):
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            telegram_bot_token="t",
+            owner_telegram_id=1,
+            vast_api_key="v",
+            pixelpilot_repo_url="https://example.invalid/PixelPilot.git",
+            database_path=tmp_path / "db.sqlite3",
+        )
+        db = Database(settings.database_path)
+        await db.init()
+
+        class RejectingVast(FakeVast):
+            async def create_instance(self, offer_id, **kwargs):
+                self.create_kwargs = kwargs
+                raise VastCreateRejected("offer unavailable")
+
+        vast = RejectingVast()
+        orch = Orchestrator(
+            settings,
+            db,
+            vast,
+            inference_factory=lambda url, token: FakeInference(),
+        )
+        await orch.offers()
+
+        try:
+            await orch.rent(78)
+        except RentRejectedError as exc:
+            assert "offer unavailable" in str(exc)
+        else:
+            raise AssertionError("expected explicit rental rejection")
+
+        assert await db.get("instance.phase") == "none"
+        assert await db.get("instance.pending_label") is None
+        assert await db.get("instance.offer") is None
+        assert await db.get("inference.token") is None
 
     asyncio.run(scenario())

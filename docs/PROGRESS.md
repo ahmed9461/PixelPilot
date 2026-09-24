@@ -62,3 +62,17 @@ Completed:
 - repeated Telegram edits that produce “message is not modified” are treated as harmless no-ops
 - offers above the final configured hourly ceiling are filtered locally
 - added tests for bounded probes, stopped-state preservation, lifecycle task cancellation, repeated edits and final price filtering
+
+
+## 2026-09-24 — Vast offer rent validation and error clarity
+
+Completed:
+- revalidate the exact selected Offer ID against the live marketplace immediately before renting
+- require a refreshed list and explicit reconfirmation if the exact offer disappears or its visible price/GPU/VRAM changes
+- keep `cancel_unavail=true` so scheduling failure returns an error instead of silently leaving a stopped instance with storage billing
+- classify explicit Vast `success=false` and HTTP 4xx creation failures as safe rental rejections
+- keep HTTP 5xx/network failures ambiguous and preserve unique-label reconciliation
+- surface specific safe rental errors in Telegram instead of the misleading “server no longer exists” message
+- show Offer ID on the details screen so visually identical listings can be distinguished
+- keep refresh controls available directly from stale/rejected-rental messages
+- added tests for stale IDs, changed price, explicit rejection, HTTP 4xx vs 5xx handling, and pending-state cleanup

@@ -11,7 +11,12 @@ from aiogram.types import CallbackQuery, Message
 from pixelpilot.bot.callbacks import safe_callback_answer, safe_edit_text
 from pixelpilot.bot.keyboards import destroy_confirm_keyboard, main_menu, offer_confirm_keyboard, offers_keyboard
 from pixelpilot.preflight import run_external_preflight, run_local_preflight
-from pixelpilot.services.orchestrator import Orchestrator
+from pixelpilot.services.orchestrator import (
+    OfferChangedError,
+    OfferUnavailableError,
+    Orchestrator,
+    RentRejectedError,
+)
 
 router = Router(name="servers")
 logger = logging.getLogger(__name__)
@@ -280,6 +285,7 @@ async def offer_details(callback: CallbackQuery) -> None:
 
     lines = [
         "🖥 <b>تفاصيل العرض</b>",
+        f"Offer ID: <code>{offer.offer_id}</code>",
         f"GPU: <b>{escape(offer.gpu_name)}</b>",
         f"VRAM: <b>{offer.gpu_ram_gb:.0f} GB</b>",
         f"السعر: <b>${offer.price_per_hour:.3f}/ساعة</b>",
@@ -315,6 +321,8 @@ async def offer_details(callback: CallbackQuery) -> None:
 async def _rent_and_prepare_background(
     offer_id: int,
     status_message: Message,
+    *,
+    preferred_only: bool,
 ) -> None:
     async def progress(_text: str) -> None:
         try:
@@ -334,15 +342,41 @@ async def _rent_and_prepare_background(
         await orch().rent_and_prepare(offer_id, progress=progress)
     except asyncio.CancelledError:
         raise
+    except (OfferUnavailableError, OfferChangedError, RentRejectedError) as exc:
+        logger.info("Vast rental did not start for offer %s: %s", offer_id, exc)
+        try:
+            await status_message.edit_text(
+                "❌ <b>لم يبدأ الاستئجار</b>\n\n"
+                f"{escape(str(exc))}",
+                reply_markup=offers_keyboard(
+                    [],
+                    preferred_only=preferred_only,
+                ),
+            )
+        except Exception:
+            pass
+        return
     except Exception:
         logger.exception("Server rent/provision failed")
         current_id = await orch().db.get("instance.id")
-        if not current_id:
-            text = "ℹ️ انتهت مهمة التجهيز لأن السيرفر لم يعد موجودًا."
-        else:
+        pending_label = await orch().db.get("instance.pending_label")
+        if current_id:
             text = (
                 "❌ <b>تعذر تجهيز السيرفر</b>\n\n"
-                "يمكنك فحص الحالة أو حذف السيرفر لإيقاف التكلفة."
+                "تم إنشاء Instance أو استعادته، لكن التجهيز لم يكتمل. "
+                "استخدم «حالة السيرفر» أو احذفه لإيقاف التكلفة."
+            )
+        elif pending_label:
+            text = (
+                "⚠️ <b>تعذر تأكيد الاستئجار</b>\n\n"
+                "لم يصل رقم Instance مؤكد من Vast. احتفظنا بمعرّف "
+                "المحاولة لتفادي فقدان سيرفر قد يكون أُنشئ رغم انقطاع الرد."
+            )
+        else:
+            text = (
+                "❌ <b>لم يبدأ الاستئجار</b>\n\n"
+                "تعذر التحقق من السوق أو بدء الطلب مع Vast. "
+                "لم يتم تسجيل Instance مؤكد؛ أعد تحديث العروض ثم حاول مرة أخرى."
             )
         try:
             await status_message.edit_text(text, reply_markup=main_menu())
@@ -374,17 +408,25 @@ async def rent(callback: CallbackQuery) -> None:
         return
 
     offer_id = int(callback.data.rsplit(":", 1)[1])
-    await safe_callback_answer(callback, "بدأ التجهيز بالخلفية")
+    preferred_only = (
+        str(await orch().db.get("offers.search_mode", "all") or "all")
+        == "preferred"
+    )
+    await safe_callback_answer(callback, "أتحقق من العرض ثم أبدأ التجهيز")
     await callback.message.edit_text(
-        "🚀 <b>بدأ استئجار وتجهيز السيرفر</b>\n\n"
-        "يمكنك الآن استخدام «حالة السيرفر» و«فحص الجاهزية» بدون انتظار انتهاء التجهيز.",
+        "🔎 <b>جاري التحقق من العرض وبدء الاستئجار</b>\n\n"
+        "أتحقق أولًا من نفس Offer ID في السوق الحي، ثم يبدأ التجهيز بالخلفية.",
         reply_markup=main_menu(),
     )
     status_message = await callback.message.answer(
         "⏳ <b>جاري بدء التجهيز...</b>"
     )
     _track_lifecycle(
-        _rent_and_prepare_background(offer_id, status_message),
+        _rent_and_prepare_background(
+            offer_id,
+            status_message,
+            preferred_only=preferred_only,
+        ),
         name="pixelpilot-rent-and-prepare",
     )
 

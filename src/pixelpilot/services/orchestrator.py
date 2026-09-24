@@ -19,13 +19,25 @@ from pixelpilot.services.billing import (
     sync_billing_status,
 )
 from pixelpilot.services.inference_client import InferenceClient
-from pixelpilot.services.vast_gateway import VastSdkGateway, build_offer_query
+from pixelpilot.services.vast_gateway import VastCreateRejected, VastSdkGateway, build_offer_query
 
 
 ProgressCallback = Callable[[str], Awaitable[None]]
 
 
 class OrchestratorError(RuntimeError):
+    pass
+
+
+class OfferUnavailableError(OrchestratorError):
+    pass
+
+
+class OfferChangedError(OrchestratorError):
+    pass
+
+
+class RentRejectedError(OrchestratorError):
     pass
 
 
@@ -83,20 +95,9 @@ class Orchestrator:
             return await self._offers_locked(preferred_only=preferred_only)
 
     async def _offers_locked(self, *, preferred_only: bool) -> list[GpuOffer]:
-        def query_for(min_vram_gb: int) -> str:
-            return build_offer_query(
-                min_vram_gb,
-                self.settings.vast_min_reliability,
-                self.settings.vast_max_price_usd_hour,
-                disk_gb=self.settings.vast_disk_gb,
-                verified_only=self.settings.vast_verified_only,
-                datacenter_only=self.settings.vast_datacenter_only,
-                min_direct_ports=self.settings.vast_min_direct_ports,
-                min_inet_down_mbps=self.settings.vast_min_inet_down_mbps,
-                min_cpu_ram_gb=self.settings.vast_min_cpu_ram_gb,
-            )
-
-        preferred_query = query_for(self.settings.vast_preferred_gpu_ram_gb)
+        preferred_query = self._offer_query_for(
+            self.settings.vast_preferred_gpu_ram_gb
+        )
         preferred_rows = await self.vast.search_offers(
             preferred_query,
             self.settings.vast_search_pool_limit,
@@ -110,7 +111,9 @@ class Orchestrator:
             and self.settings.vast_min_gpu_ram_gb
             < self.settings.vast_preferred_gpu_ram_gb
         ):
-            fallback_query = query_for(self.settings.vast_min_gpu_ram_gb)
+            fallback_query = self._offer_query_for(
+                self.settings.vast_min_gpu_ram_gb
+            )
             fallback_rows = await self.vast.search_offers(
                 fallback_query,
                 self.settings.vast_search_pool_limit,
@@ -167,6 +170,44 @@ class Orchestrator:
                 return GpuOffer(**row)
         return None
 
+
+    def _offer_query_for(self, min_vram_gb: int) -> str:
+        return build_offer_query(
+            min_vram_gb,
+            self.settings.vast_min_reliability,
+            self.settings.vast_max_price_usd_hour,
+            disk_gb=self.settings.vast_disk_gb,
+            verified_only=self.settings.vast_verified_only,
+            datacenter_only=self.settings.vast_datacenter_only,
+            min_direct_ports=self.settings.vast_min_direct_ports,
+            min_inet_down_mbps=self.settings.vast_min_inet_down_mbps,
+            min_cpu_ram_gb=self.settings.vast_min_cpu_ram_gb,
+        )
+
+    async def live_offer(self, snapshot: GpuOffer) -> GpuOffer | None:
+        min_vram = (
+            self.settings.vast_preferred_gpu_ram_gb
+            if snapshot.gpu_ram_gb >= self.settings.vast_preferred_gpu_ram_gb
+            else self.settings.vast_min_gpu_ram_gb
+        )
+        rows = await self.vast.search_offers(
+            self._offer_query_for(min_vram),
+            self.settings.vast_search_pool_limit,
+            storage_gb=float(self.settings.vast_disk_gb),
+        )
+        return next(
+            (row for row in rows if row.offer_id == snapshot.offer_id),
+            None,
+        )
+
+    @staticmethod
+    def _offer_snapshot_changed(old: GpuOffer, new: GpuOffer) -> bool:
+        return (
+            old.gpu_name != new.gpu_name
+            or round(old.gpu_ram_gb) != round(new.gpu_ram_gb)
+            or round(old.price_per_hour, 3) != round(new.price_per_hour, 3)
+        )
+
     async def rent(self, offer_id: int) -> dict[str, Any]:
         async with self._rent_lock:
             return await self._rent_locked(offer_id)
@@ -190,11 +231,44 @@ class Orchestrator:
 
         offer = await self.cached_offer(offer_id)
         if offer is None:
-            raise OrchestratorError("Offer is not in the latest search results. Search again before renting.")
+            raise OfferUnavailableError(
+                "هذا العرض لم يعد موجودًا في آخر قائمة. حدّث العروض وأعد الاختيار."
+            )
         if offer.price_per_hour > self.settings.vast_max_price_usd_hour:
-            raise OrchestratorError("Offer price exceeds the configured hard maximum")
+            raise OfferChangedError(
+                "سعر العرض تجاوز السقف المحدد. حدّث العروض وأعد التأكيد."
+            )
         if offer.gpu_ram_gb < self.settings.vast_min_gpu_ram_gb:
-            raise OrchestratorError("Offer VRAM is below the configured minimum")
+            raise OfferChangedError(
+                "مواصفات العرض لم تعد تطابق الحد الأدنى. حدّث العروض."
+            )
+
+        live_offer = await self.live_offer(offer)
+        if live_offer is None:
+            await self.db.event(
+                "offer.stale_before_rent",
+                {"offer_id": offer_id},
+            )
+            raise OfferUnavailableError(
+                f"العرض رقم {offer_id} اختفى من السوق قبل الاستئجار. "
+                "قد ترى جهازًا مشابهًا لكنه عرض مختلف. حدّث القائمة وأعد الاختيار."
+            )
+        if self._offer_snapshot_changed(offer, live_offer):
+            await self.db.event(
+                "offer.changed_before_rent",
+                {
+                    "offer_id": offer_id,
+                    "old_price": offer.price_per_hour,
+                    "new_price": live_offer.price_per_hour,
+                    "old_gpu": offer.gpu_name,
+                    "new_gpu": live_offer.gpu_name,
+                },
+            )
+            raise OfferChangedError(
+                f"العرض رقم {offer_id} تغيّر منذ فتح التفاصيل. "
+                "حدّث القائمة وراجِع السعر والمواصفات مرة أخرى."
+            )
+        offer = live_offer
 
         inference_token = secrets.token_urlsafe(32)
         unique_label = f"PixelPilot-{secrets.token_hex(6)}"
@@ -240,16 +314,40 @@ class Orchestrator:
                 )
 
         if not instance_id:
-            await self.db.set("instance.phase", InstancePhase.ERROR.value)
             await self.db.event(
                 "instance.rent_failed",
-                {"offer_id": offer_id, "label": unique_label, "error": str(create_error or result)},
+                {
+                    "offer_id": offer_id,
+                    "label": unique_label,
+                    "error": str(create_error or result),
+                },
             )
+            if isinstance(create_error, VastCreateRejected):
+                await self.db.set_many(
+                    {
+                        "instance.phase": InstancePhase.NONE.value,
+                        "instance.pending_label": None,
+                        "instance.offer": None,
+                        "inference.token": None,
+                        "inference.url": None,
+                    }
+                )
+                raise RentRejectedError(
+                    f"Vast رفض استئجار العرض رقم {offer_id}: "
+                    f"{create_error.reason}"
+                ) from create_error
+
+            await self.db.set("instance.phase", InstancePhase.ERROR.value)
             if create_error:
                 raise OrchestratorError(
-                    f"Vast create_instance failed and no matching instance was found: {create_error}"
+                    "تعذر تأكيد إنشاء السيرفر من Vast. "
+                    "تم الاحتفاظ بمعرّف التتبع حتى لا نفقد أي Instance "
+                    "قد يكون أُنشئ رغم انقطاع الرد."
                 ) from create_error
-            raise OrchestratorError(f"Could not determine instance id from Vast response: {result}")
+            raise OrchestratorError(
+                "Vast لم يُرجع رقم Instance صالحًا. "
+                "تم حفظ تفاصيل المحاولة للمراجعة."
+            )
 
         await self.db.set("instance.id", instance_id)
         await self.db.set("instance.label", unique_label)
