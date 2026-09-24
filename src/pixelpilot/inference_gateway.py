@@ -270,7 +270,7 @@ async def _generate_response(
         try:
             image = await asyncio.to_thread(
                 _run_pipeline,
-                prompt=clean_prompt,
+                prompt=prompt,
                 width=width,
                 height=height,
                 steps=steps,
