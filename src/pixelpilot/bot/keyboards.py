@@ -24,7 +24,11 @@ def main_menu() -> InlineKeyboardMarkup:
     )
 
 
-def offers_keyboard(offers: list[GpuOffer]) -> InlineKeyboardMarkup:
+def offers_keyboard(
+    offers: list[GpuOffer],
+    *,
+    preferred_only: bool = False,
+) -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(
@@ -35,12 +39,39 @@ def offers_keyboard(offers: list[GpuOffer]) -> InlineKeyboardMarkup:
         ]
         for offer in offers
     ]
-    rows.append([InlineKeyboardButton(text="🔄 تحديث العروض", callback_data="servers:search", style="primary")])
+    refresh_callback = "servers:search48" if preferred_only else "servers:search"
+    rows.append([
+        InlineKeyboardButton(
+            text="🔄 تحديث العروض",
+            callback_data=refresh_callback,
+            style="primary",
+        )
+    ])
+    if preferred_only:
+        rows.append([
+            InlineKeyboardButton(
+                text="🌐 عرض كل العروض",
+                callback_data="servers:search",
+            )
+        ])
+    else:
+        rows.append([
+            InlineKeyboardButton(
+                text="🔥 48GB+ فقط",
+                callback_data="servers:search48",
+                style="success",
+            )
+        ])
     rows.append([InlineKeyboardButton(text="⬅️ الرئيسية", callback_data="home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def offer_confirm_keyboard(offer_id: int) -> InlineKeyboardMarkup:
+def offer_confirm_keyboard(
+    offer_id: int,
+    *,
+    preferred_only: bool = False,
+) -> InlineKeyboardMarkup:
+    back_callback = "servers:search48" if preferred_only else "servers:search"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -50,7 +81,7 @@ def offer_confirm_keyboard(offer_id: int) -> InlineKeyboardMarkup:
                     style="success",
                 )
             ],
-            [InlineKeyboardButton(text="⬅️ رجوع للعروض", callback_data="servers:search")],
+            [InlineKeyboardButton(text="⬅️ رجوع للعروض", callback_data=back_callback)],
         ]
     )
 
