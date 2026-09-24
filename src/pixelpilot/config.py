@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     # because the BF16 checkpoint is roughly 33 GB before runtime overhead.
     vast_min_gpu_ram_gb: int = 24
     vast_preferred_gpu_ram_gb: int = 48
+    # CPU offload keeps large model components in host memory on 24 GB GPUs.
+    vast_min_cpu_ram_gb: int = 48
     vast_min_reliability: float = 0.98
     vast_max_price_usd_hour: float = 0.50
     vast_default_limit: int = 8
@@ -92,6 +94,7 @@ class Settings(BaseSettings):
         "vast_default_limit",
         "vast_min_gpu_ram_gb",
         "vast_preferred_gpu_ram_gb",
+        "vast_min_cpu_ram_gb",
         "image_full_gpu_min_vram_gb",
         "image_default_steps",
         "image_max_reference_images",
@@ -125,6 +128,13 @@ class Settings(BaseSettings):
     def preferred_vram_not_too_small(cls, value: int) -> int:
         if value < 24:
             raise ValueError("VAST_PREFERRED_GPU_RAM_GB must be >= 24")
+        return value
+
+    @field_validator("vast_min_cpu_ram_gb")
+    @classmethod
+    def host_ram_large_enough_for_offload(cls, value: int) -> int:
+        if value < 48:
+            raise ValueError("VAST_MIN_CPU_RAM_GB must be >= 48 for the supported offload profile")
         return value
 
     @field_validator("image_memory_mode")
