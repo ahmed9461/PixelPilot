@@ -69,3 +69,7 @@ class GeneratedImage:
     height: int
     model: str
     reference_count: int = 0
+    prompt_enhanced: bool = False
+    enhancer_model: str | None = None
+    enhancer_ratio: str | None = None
+    enhancer_fallback: bool = False

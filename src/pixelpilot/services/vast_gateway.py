@@ -12,6 +12,14 @@ class VastError(RuntimeError):
     pass
 
 
+class VastCreateRejected(VastError):
+    """Vast explicitly rejected an instance creation request."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(f"Vast rejected instance creation: {reason}")
+
+
 def build_offer_query(
     min_gpu_ram_gb: int,
     min_reliability: float,
@@ -86,6 +94,58 @@ def normalize_offer(raw: dict[str, Any]) -> GpuOffer:
         verified=verified,
         raw=raw,
     )
+
+
+def _safe_error_text(value: Any, *, limit: int = 300) -> str:
+    if value is None:
+        return "Vast rejected the request"
+    text = " ".join(str(value).split())
+    if not text:
+        return "Vast rejected the request"
+    return text[:limit]
+
+
+def _http_rejection_reason(exc: Exception) -> str | None:
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    try:
+        status_code = int(status)
+    except (TypeError, ValueError):
+        return None
+    # A gateway timeout or rate limiter is not proof that the request did not
+    # reach Vast. Keep the label until reconciliation can establish the result.
+    if not 400 <= status_code < 500 or status_code in {408, 429}:
+        return None
+
+    payload: Any = None
+    try:
+        payload = response.json()
+    except Exception:
+        payload = None
+
+    if isinstance(payload, dict):
+        for key in ("msg", "message", "error", "detail", "reason"):
+            if payload.get(key):
+                return f"HTTP {status_code}: {_safe_error_text(payload.get(key))}"
+    body = getattr(response, "text", None)
+    if body:
+        return f"HTTP {status_code}: {_safe_error_text(body)}"
+    return f"HTTP {status_code}"
+
+
+def _create_rejection_reason(mapped: dict[str, Any]) -> str | None:
+    success = mapped.get("success")
+    if success is False:
+        for key in ("msg", "message", "error", "detail", "reason"):
+            if mapped.get(key):
+                return _safe_error_text(mapped.get(key))
+        return "Vast reported success=false"
+
+    if not any(mapped.get(key) for key in ("new_contract", "instance_id", "contract_id")):
+        for key in ("error", "errors"):
+            if mapped.get(key):
+                return _safe_error_text(mapped.get(key))
+    return None
 
 
 def _coerce_mapping(value: Any) -> dict[str, Any]:
@@ -237,6 +297,15 @@ class VastSdkGateway:
         offers.sort(key=lambda x: (x.price_per_hour, -(x.dlperf or 0)))
         return offers[:display_limit]
 
+    async def lookup_offer(self, offer_id: int, *, storage_gb: float) -> GpuOffer | None:
+        """Query the actual ask ID, independent of the ranked discovery window."""
+        if offer_id <= 0:
+            return None
+        rows = await self.search_offers(
+            f"id={int(offer_id)} rentable=true", 1, storage_gb=storage_gb
+        )
+        return next((row for row in rows if row.offer_id == offer_id), None)
+
     async def create_instance(self, offer_id: int, *, image: str | None, disk_gb: int, template_hash: str | None = None, env: str | None = None, onstart_cmd: str | None = None, label: str = "PixelPilot", cancel_unavail: bool = True) -> dict[str, Any]:
         client = self._get_client()
         kwargs: dict[str, Any] = {"id": offer_id, "disk": disk_gb, "label": label, "ssh": True, "direct": True, "cancel_unavail": cancel_unavail}
@@ -251,9 +320,22 @@ class VastSdkGateway:
         try:
             result = await asyncio.to_thread(client.create_instance, **kwargs)
         except Exception as exc:
+            rejection = _http_rejection_reason(exc)
+            if rejection:
+                raise VastCreateRejected(rejection) from exc
             raise VastError(f"Vast create_instance failed: {exc}") from exc
         mapped = _coerce_mapping(result)
-        return mapped if mapped else {"result": result}
+        if mapped:
+            rejection = _create_rejection_reason(mapped)
+            if rejection:
+                raise VastCreateRejected(rejection)
+            return mapped
+
+        if isinstance(result, str):
+            lowered = result.lower()
+            if any(marker in lowered for marker in ("error", "unavailable", "not available", "failed")):
+                raise VastCreateRejected(_safe_error_text(result))
+        return {"result": result}
 
     async def show_instance(self, instance_id: int) -> InstanceRef:
         client = self._get_client()

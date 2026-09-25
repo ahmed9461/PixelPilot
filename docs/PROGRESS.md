@@ -22,3 +22,53 @@ Completed on branch `qwen-image-2.1-transition`:
 
 Deployment note:
 The repository branch is ready for integration, but the persistent controller must be updated together with `main`. Merging a new GPU runtime while leaving an old controller process running would create a protocol mismatch on the next rental.
+
+
+## 2026-09-24 — Official Qwen Prompt Enhancer
+
+Active plan:
+- add Original / Official Qwen prompt mode to Telegram settings
+- integrate T2I and I2I official Qwen 9B PE checkpoints
+- keep enhancer on-demand so 24 GB GPU support remains possible
+- fail open to original prompt if enhancement fails
+- surface whether enhancement was used in the image result
+- extend runtime tests and CI before merging
+
+
+## 2026-09-24 — Smarter Vast offer discovery
+
+Completed:
+- Telegram still displays a compact maximum of 8 offers
+- live discovery scans up to 64 candidates per query, while the Vast gateway requests an even wider backend slice for local ranking
+- normal search queries 48 GB+ separately from the 24 GB+ fallback pool
+- preferred and fallback candidates are deduplicated before ranking
+- 48 GB+ offers rank ahead of lower-VRAM fallback cards
+- added a dedicated “48GB+ only” search mode and mode-preserving refresh/back buttons
+- overlapping marketplace requests are serialized
+- added tests for search breadth, preferred-only mode, configuration and UI callbacks
+
+
+## 2026-09-24 — Responsive server controls
+
+Completed:
+- moved long rent/provision and start/wait flows out of Telegram callback handlers into background tasks
+- main server controls remain usable while provisioning or starting
+- readiness probes use a short 5-second timeout instead of the long image-generation timeout
+- Vast status reads are bounded to 8 seconds
+- duplicate lifecycle tasks from rapid button presses are blocked
+- stop/destroy cancel the waiting task only after a real Instance ID exists, preventing untracked paid instances
+- stopped instances no longer get pushed back into a booting/error state by the readiness loop
+- preflight no longer performs an unnecessary marketplace search
+- repeated Telegram edits that produce “message is not modified” are treated as harmless no-ops
+- offers above the final configured hourly ceiling are filtered locally
+- added tests for bounded probes, stopped-state preservation, lifecycle task cancellation, repeated edits and final price filtering
+
+## 2026-09-25 — Selective recovery of Vast and Qwen improvements
+
+- Compared `main` with backup branch and PRs #18–21. The rental regression was exact-ID validation through a price-ranked truncated search pool: a still-valid selected ask fell outside the result limit and appeared unavailable.
+- Restored the optional official Qwen T2I/I2I enhancer, expanded live offer discovery and responsive Telegram controls. Added exact-ID lookup without a ranked limit and policy/price/specification revalidation before creation.
+- Kept the hard $0.50/hour cap and `cancel_unavail=true`; 24 GB CPU-offload search requires 48 GB host RAM, while full-GPU search has no unconditional host-RAM filter.
+- Reserved lifecycle tasks before Telegram awaits, waited for in-flight Vast start mutations before manual stop/destroy, retried transient status timeouts, and blocked duplicate rent while an ambiguous create label remains. Status/startup can recover a matching Instance ID and its billing estimate.
+- Optional enhancer weights prefetch after image readiness. Original is the default; uncached or failed enhancement falls back to the original prompt. Removed the fail-closed toggle.
+- Added regression tests for exact ID, stale/change/policy, explicit rejection, 5xx/timeout/408/429 ambiguity, duplicate rent, rapid taps, start/stop ordering, provisioning retry, recovery and both prompt modes.
+- Local full test suite: 104 passed. GPU rental and image runtime still require a live Vast smoke test; no paid instance was created during this work.

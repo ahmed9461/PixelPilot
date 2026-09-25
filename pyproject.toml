@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pixelpilot"
-version = "1.0.0"
+version = "1.1.0"
 description = "Owner-only Telegram image studio using Qwen-Image-2.1 on temporary Vast.ai GPUs"
 requires-python = ">=3.11"
 dependencies = [
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "fastapi>=0.115", "python-multipart>=0.0.9"]
 
 [project.scripts]
 pixelpilot = "pixelpilot.main:run"

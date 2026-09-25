@@ -37,6 +37,7 @@ Every endpoint requires the random bearer token generated when the instance is r
 VAE tiling and slicing remain enabled by default.
 
 Vast discovery accepts 24 GB+ GPUs but ranks 48 GB+ offers ahead of lower-memory fallback offers.
+The 48 GB+ discovery query has no host-RAM floor; the 24 GB CPU-offload fallback requires 48 GB host RAM. A selected ask is revalidated by exact ID outside the ranked search window before `create_instance`. Ambiguous create outcomes retain a unique label in SQLite for recovery and block duplicate rent.
 
 ## Prompt path
 
@@ -48,7 +49,8 @@ Telegram text/caption
   -> QwenImage21Pipeline
 ```
 
-There is no chat history, persona layer, tone layer or prompt rewrite between the Telegram request and the image pipeline.
+There is no chat history, persona layer or tone layer. Prompt rewriting occurs only when the owner explicitly selects the official Qwen Prompt Enhancer; Original mode sends the prompt unchanged.
+PE weights prefetch in the background after image readiness. Uncached or failed enhancement uses the original prompt; PE inference temporarily yields GPU memory and restores diffusion placement before image generation.
 
 ## Reference images
 

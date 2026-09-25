@@ -12,7 +12,7 @@ PixelPilot is an owner-only Telegram image studio that rents a temporary Vast.ai
 - Vast lifecycle: live offer search, rent, provision, stop, start, destroy, cost meter, recovery and preflight.
 - Owner-only Telegram access.
 
-PixelPilot does **not** inject a hidden system/developer prompt, personality, emotion, tone, chat history or prompt rewriting. The user's prompt is sent to Qwen-Image as supplied.
+PixelPilot does **not** inject a hidden system/developer prompt, personality, emotion, tone or chat history. The owner chooses between **Original Prompt** (sent unchanged) and the official **Qwen Prompt Enhancer** for Qwen-Image-2.1.
 
 ## Runtime
 
@@ -32,15 +32,17 @@ The GPU instance loads the Diffusers `QwenImage21Pipeline` directly. vLLM, Qwen3
 
 The BF16 Qwen-Image-2.1 checkpoint is roughly 33 GB before runtime overhead.
 
-- **24 GB VRAM**: supported through model CPU offload + VAE tiling/slicing when the host has at least **48 GB system RAM**. Best with Standard resolution; edits with many references can be slower and may need lower memory pressure.
+- **24 GB VRAM**: supported through model CPU offload + VAE tiling/slicing with a **48 GB host RAM** search floor. Best with Standard resolution; larger edits or enhancement may require more RAM.
 - **48 GB+ VRAM**: preferred. PixelPilot keeps the pipeline on GPU in `auto` mode for better speed and 2K work.
 - Vast search minimum: **24 GB**.
 - Preferred offer tier: **48 GB+**.
-- Minimum host RAM for the supported offload profile: **48 GB**.
+- Host RAM filter: **48 GB for CPU-offload offers only**; full-GPU offers are not filtered by host RAM.
 - Default disk: **100 GB**.
 - Hard rental ceiling: **$0.50/hour**.
 
-The offer list keeps 24 GB fallback machines available while ranking suitable 48 GB+ machines first.
+Offer discovery scans a wider live pool than the 8 rows shown in Telegram. Normal search performs a dedicated 48 GB+ marketplace query plus a 24 GB+ fallback query, deduplicates them, then ranks 48 GB+ offers first. The offer list also exposes a `48GB+ only` mode.
+
+Before renting, PixelPilot queries the selected Offer ID directly, checks its current price/GPU/VRAM, and asks for fresh confirmation on changes. A rejected ask can be retried with a new offer. A timeout or server error keeps a unique pending label and blocks another rental until Vast instance reconciliation resolves the outcome. `cancel_unavail=true` avoids a stopped storage-billed contract when immediate placement fails.
 
 ## Image presets
 
@@ -101,6 +103,7 @@ The bootstrap:
 - Send one image with a caption to edit it.
 - Send an album of up to 10 images with an instruction in the album caption to use multiple references.
 - Open **⚙️ إعدادات الصور** to choose quality, aspect ratio and steps.
+- Choose **Original** (default) or **Qwen Enhance** there. Optional T2I and I2I enhancer weights download in the background after the image worker becomes ready. Until a checkpoint is cached, or if enhancement fails, the original prompt is used and the result indicates the fallback.
 
 There is no conversation memory because the product is an image studio rather than a chat assistant.
 

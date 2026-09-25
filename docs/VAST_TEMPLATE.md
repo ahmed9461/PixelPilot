@@ -7,7 +7,7 @@ Recommended controller defaults:
 - disk: 100 GB
 - minimum VRAM: 24 GB
 - preferred VRAM: 48 GB+
-- minimum host RAM: 48 GB
+- minimum host RAM: 48 GB on CPU-offload fallback offers; no host-RAM filter on full-GPU offers
 - direct ports: at least 1
 - download bandwidth: at least 100 Mbps
 - reliability: at least 0.98

@@ -19,10 +19,10 @@ Output:
 ## Non-negotiable behavior
 
 1. No assistant personality, emotion, tone, role or chat-style profile is part of image generation.
-2. Do not translate, improve, prepend, append or rewrite the user's prompt.
-3. Validate that a prompt is non-empty, but send the original prompt string to the model.
+2. Raw mode remains available and must send the user's prompt unchanged.
+3. Official Qwen Prompt Enhancer is an explicit owner-controlled mode, never a hidden layer. When enabled, use only Qwen/Qwen-Image-2.1-PE-T2I for text-to-image or Qwen/Qwen-Image-2.1-PE-I2I for editing, together with the system_prompt.txt shipped by that model.
 4. Do not maintain conversational context or chat history. Each image request is independent.
-5. User-facing controls are generation controls: aspect ratio, resolution quality and inference steps.
+5. User-facing controls are generation controls: aspect ratio, resolution quality, inference steps, and prompt mode (Original or Official Qwen Enhance).
 6. Support up to 10 user-supplied reference images.
 7. Preserve PNG output so alpha/transparency is not destroyed.
 8. Keep generated/reference image bytes ephemeral; do not persist them in SQLite.
@@ -38,8 +38,8 @@ Output:
 
 - Search minimum: 24 GB VRAM.
 - Preferred tier: 48 GB+ VRAM.
-- Default disk: 100 GB.
-- Minimum host RAM: 48 GB for the supported CPU-offload profile.
+- Default disk: 100 GB. Optional enhancer weights prefetch in the background after image readiness; monitor free space if both caches are used.
+- Minimum host RAM filter: 48 GB for CPU-offload offers; no unconditional host-RAM floor on full-GPU offers. More RAM may help Qwen Enhance.
 - 24–47 GB VRAM: automatic CPU model offload with VAE tiling/slicing.
 - 48 GB+: automatic full-GPU placement.
 - Default dtype: BF16.
@@ -77,13 +77,15 @@ Telegram owner
         -> QwenImage21Pipeline
            -> CUDA GPU
            -> optional CPU offload when VRAM < 48 GB
+        -> on-demand official Qwen 9B prompt enhancer
+           -> loaded only for rewrite, then released before diffusion
 ```
 
 ## Persistence
 
 SQLite stores:
 - lifecycle state
-- cached Vast offers and refresh metadata
+- latest Vast offer snapshot and refresh metadata (never used as the live rent check)
 - billing/cost-guard state
 - image UI settings
 - operational metadata events
@@ -107,3 +109,36 @@ SQLite does not store:
 - custom chat prompts
 - chat context/history
 - response streaming
+
+
+## Official prompt enhancer
+
+- Mode is stored in SQLite and defaults to `original`.
+- `original`: prompt reaches Qwen-Image unchanged.
+- `qwen`: use the official Qwen prompt enhancer before generation.
+- T2I enhancer: `Qwen/Qwen-Image-2.1-PE-T2I`.
+- I2I enhancer: `Qwen/Qwen-Image-2.1-PE-I2I`.
+- Checkpoints download in the background after image readiness. Until the selected T2I/I2I model is cached, the original prompt is used. The enhancer loads on demand for one rewrite and then releases CUDA before generation.
+- Enhancer failures always fall back to the original prompt.
+- Do not persist original or rewritten prompt bodies to SQLite.
+
+
+## Vast offer discovery
+
+- Telegram should display only the best 8 offers, but discovery must scan a wider live candidate pool.
+- Normal search performs a dedicated 48 GB+ query plus a 24 GB+ fallback query, deduplicates results, then ranks 48 GB+ first.
+- A separate owner-controlled “48 GB+ only” search mode is available from the offer list.
+- Search refreshes must remain live; do not rotate cached results to simulate market changes.
+- Rental checks query the exact selected Offer ID, independently of the ranked discovery limit; changed price/GPU/VRAM requires renewed confirmation.
+- Explicit 4xx rejection can clear pending state; network, 408/429 and 5xx outcomes retain the unique label and block another rent until reconciliation.
+- Rapid refresh clicks should not launch overlapping marketplace searches.
+
+
+## Telegram server-control responsiveness
+
+- Long Vast lifecycle waits must never occupy a Telegram callback handler.
+- Rent/provision and start/wait operations run as named background tasks.
+- Server status uses a short probe timeout and must return quickly even while the image endpoint is still booting.
+- Rapid repeated lifecycle button clicks must not create duplicate provisioning/start tasks.
+- The owner must retain access to status/stop/destroy controls while provisioning is active.
+- Reserve the lifecycle task before any callback await; wait for in-flight Vast start mutations before stop/destroy. Retry transient status timeouts through the overall readiness deadline.

@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     vast_min_reliability: float = 0.98
     vast_max_price_usd_hour: float = 0.50
     vast_default_limit: int = 8
+    vast_search_pool_limit: int = 64
     vast_verified_only: bool = True
     vast_datacenter_only: bool = False
     vast_min_direct_ports: int = 1
@@ -55,12 +56,16 @@ class Settings(BaseSettings):
     image_default_steps: int = 40
     image_max_reference_images: int = 10
     image_max_upload_mb: int = 25
+    prompt_enhancer_t2i_id: str = "Qwen/Qwen-Image-2.1-PE-T2I"
+    prompt_enhancer_i2i_id: str = "Qwen/Qwen-Image-2.1-PE-I2I"
 
     # Public authenticated image inference endpoint.
     inference_port: int = 8190
     inference_use_https: bool = False
     inference_verify_tls: bool = False
-    inference_request_timeout_seconds: int = 1800
+    inference_request_timeout_seconds: int = 3600
+    inference_probe_timeout_seconds: float = 5.0
+    vast_status_timeout_seconds: float = 8.0
     inference_ready_timeout_seconds: int = 2400
     provision_poll_seconds: float = 5.0
 
@@ -86,12 +91,13 @@ class Settings(BaseSettings):
     @field_validator("vast_max_price_usd_hour")
     @classmethod
     def positive_price_cap(cls, value: float) -> float:
-        if value <= 0:
-            raise ValueError("VAST_MAX_PRICE_USD_HOUR must be > 0")
+        if not 0 < value <= 0.50:
+            raise ValueError("VAST_MAX_PRICE_USD_HOUR must be > 0 and <= $0.50")
         return value
 
     @field_validator(
         "vast_default_limit",
+        "vast_search_pool_limit",
         "vast_min_gpu_ram_gb",
         "vast_preferred_gpu_ram_gb",
         "vast_min_cpu_ram_gb",
@@ -107,6 +113,17 @@ class Settings(BaseSettings):
     def positive_ints(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("value must be > 0")
+        return value
+
+    @field_validator(
+        "inference_probe_timeout_seconds",
+        "vast_status_timeout_seconds",
+        "provision_poll_seconds",
+    )
+    @classmethod
+    def positive_timeouts(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("timeout values must be > 0")
         return value
 
     @field_validator("vast_disk_gb")
@@ -134,7 +151,7 @@ class Settings(BaseSettings):
     @classmethod
     def host_ram_large_enough_for_offload(cls, value: int) -> int:
         if value < 48:
-            raise ValueError("VAST_MIN_CPU_RAM_GB must be >= 48 for the supported offload profile")
+            raise ValueError("VAST_MIN_CPU_RAM_GB must be >= 48 for the 24 GB offload profile")
         return value
 
     @field_validator("image_memory_mode")
@@ -184,6 +201,8 @@ class Settings(BaseSettings):
             missing.append("PIXELPILOT_REPO_URL or VAST_TEMPLATE_HASH")
         if not self.model_id:
             missing.append("MODEL_ID")
+        if not self.vast_cancel_unavailable:
+            missing.append("VAST_CANCEL_UNAVAILABLE=true (required for safe on-demand rent)")
         if missing:
             raise RuntimeError("Cannot rent until configured: " + ", ".join(missing))
 

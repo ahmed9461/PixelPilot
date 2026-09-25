@@ -22,7 +22,7 @@ class InferenceClient:
         model_id: str,
         *,
         verify_tls: bool = False,
-        timeout_seconds: float = 1800.0,
+        timeout_seconds: float = 3600.0,
     ):
         self.base_url = base_url.rstrip("/")
         self.token = token
@@ -92,6 +92,7 @@ class InferenceClient:
         reference_images: tuple[ReferenceImage, ...] = (),
         true_cfg_scale: float = 1.0,
         negative_prompt: str | None = None,
+        enhance_prompt: bool = False,
     ) -> GeneratedImage:
         if not prompt.strip():
             raise InferenceError("Prompt cannot be empty")
@@ -102,6 +103,7 @@ class InferenceClient:
             "height": str(int(height)),
             "num_inference_steps": str(int(steps)),
             "true_cfg_scale": str(float(true_cfg_scale)),
+            "enhance_prompt": "true" if enhance_prompt else "false",
         }
         if seed is not None:
             common["seed"] = str(int(seed))
@@ -129,6 +131,7 @@ class InferenceClient:
                 "height": int(height),
                 "num_inference_steps": int(steps),
                 "true_cfg_scale": float(true_cfg_scale),
+                "enhance_prompt": bool(enhance_prompt),
             }
             if seed is not None:
                 payload["seed"] = int(seed)
@@ -159,4 +162,16 @@ class InferenceClient:
             height=int(data.get("height") or height),
             model=str(data.get("model") or self.model_id),
             reference_count=int(data.get("reference_count") or len(reference_images)),
+            prompt_enhanced=bool(data.get("prompt_enhanced", False)),
+            enhancer_model=(
+                str(data.get("enhancer_model"))
+                if data.get("enhancer_model")
+                else None
+            ),
+            enhancer_ratio=(
+                str(data.get("enhancer_ratio"))
+                if data.get("enhancer_ratio")
+                else None
+            ),
+            enhancer_fallback=bool(data.get("enhancer_fallback", False)),
         )
