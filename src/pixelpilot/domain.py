@@ -4,6 +4,8 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any
 
+from pixelpilot.pricing import GB_PER_TB, bandwidth_rate, nonnegative_number
+
 
 class InstancePhase(StrEnum):
     NONE = "none"
@@ -31,13 +33,25 @@ class GpuOffer:
     verified: bool | None = None
     machine_id: int | None = None
     raw: dict[str, Any] | None = None
+    download_usd_per_gb: float | None = None
+    upload_usd_per_gb: float | None = None
+
+    def __post_init__(self) -> None:
+        # Normalize live raw rates once and preserve them in public snapshots.
+        # Old snapshots have unknown rates until refreshed; zero remains zero.
+        for field, direction in (("download_usd_per_gb", "down"), ("upload_usd_per_gb", "up")):
+            value = getattr(self, field)
+            rate = (bandwidth_rate(self.raw, direction)
+                    if value is None and self.raw is not None else nonnegative_number(value))
+            object.__setattr__(self, field, rate)
 
     @property
     def display_name(self) -> str:
         rel = "?" if self.reliability is None else f"{self.reliability * 100:.1f}%"
+        down = "?" if self.download_usd_per_gb is None else f"${self.download_usd_per_gb * GB_PER_TB:.6g}"
         return (
             f"{self.gpu_name} • {self.gpu_ram_gb:.0f}GB • "
-            + f"$ {self.price_per_hour:.3f}/h • R {rel}"
+            + f"$ {self.price_per_hour:.3f}/h • ↓ {down}/TB • R {rel}"
         )
 
     def public_dict(self) -> dict[str, Any]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from math import isfinite
 from pathlib import Path
 
 from pydantic import field_validator
@@ -37,6 +38,13 @@ class Settings(BaseSettings):
     vast_min_inet_down_mbps: float = 100.0
     vast_cancel_unavailable: bool = True
     vast_auto_destroy_on_provision_failure: bool = False
+    # Comparison assumptions, not measurements or a promised final invoice.
+    # The billed period includes setup time; dph_total already includes disk.
+    vast_estimated_download_gb: float = 70.0
+    vast_cost_comparison_hours: float = 1.0
+    # Optional owner-defined inbound rate ceiling; 1 TB = 1000 GB.
+    # None leaves the marketplace unrestricted; 0 accepts free download only.
+    vast_max_download_usd_per_tb: float | None = None
 
     # Runtime bundle source copied/cloned into ephemeral GPU instances.
     pixelpilot_repo_url: str = ""
@@ -73,6 +81,20 @@ class Settings(BaseSettings):
     cost_guard_warn_minutes: int = 30
     cost_guard_auto_destroy_minutes: int = 0
     cost_guard_poll_seconds: int = 60
+
+    @field_validator("vast_estimated_download_gb", "vast_max_download_usd_per_tb")
+    @classmethod
+    def nonnegative_cost_inputs(cls, value: float | None) -> float | None:
+        if value is not None and (not isfinite(value) or value < 0):
+            raise ValueError("download size and rate ceiling must be finite and >= 0")
+        return value
+
+    @field_validator("vast_cost_comparison_hours")
+    @classmethod
+    def positive_comparison_period(cls, value: float) -> float:
+        if not isfinite(value) or value <= 0:
+            raise ValueError("VAST_COST_COMPARISON_HOURS must be finite and > 0")
+        return value
 
     @field_validator("owner_telegram_id")
     @classmethod
