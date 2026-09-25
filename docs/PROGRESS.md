@@ -83,7 +83,15 @@ Completed:
 
 ## 2026-09-26 — Exact-ID filter parity follow-up
 
-- Found that Vast SDK 1.6.0 seeds `rented=false` for structured searches, but not for string discovery searches. This makes a shown offer disappear during exact-ID validation even without a market change.
+- Found that Vast SDK 1.6.0 seeds `rented=false` for structured searches, but not for string discovery searches. This was a real request mismatch, but the live comparison below proved it was not the remaining cause of the empty lookup.
 - Exact lookup now uses a numeric ID and explicitly matches the discovery defaults with `no_default=true`. Added an SDK serialization regression test proving the request contains no extra `rented` filter. Local targeted tests: 47 passed.
 - Full local suite after this follow-up: 106 passed. Live Vast search/rent after deploying this change is still pending; no paid instance was created during this fix.
 - First matching CI run exposed a timing-dependent status-probe test assertion (it assumed only one total call even when the first had completed). The test now checks the safety property: no overlapping Vast status calls during timeout recovery.
+
+## 2026-09-26 — Live Vast Offer ID proof and machine-scoped revalidation
+
+- Captured the actual SDK request bodies and raw `/bundles/` responses without logging credentials. Discovery returned Offer ID `49299788` with `rented=false` and `machine_id=116779` using `allocated_storage=100`; the immediate structured lookup of the same numeric `id` and the same storage returned `offers: []`.
+- The empty result reproduced for multiple currently displayed IDs and for integer, string, float and `in` forms of the `id` filter. Querying `machine_id=116779` returned the original `49299788` row, proving the offer had not disappeared and that neither storage nor the removed default `rented` constraint caused this failure.
+- Discovery now persists `machine_id`. Revalidation queries that machine with the same explicit SDK baseline and `no_default=true`, then accepts only the exact selected Offer ID from the response. A same-machine decoy cannot be rented.
+- Added SDK-serialization, same-machine exact-match, non-substitution and snapshot-persistence coverage. A read-only live pass re-found `49299788` with the same price/GPU/VRAM through the repaired path.
+- Local CI-equivalent checks passed: `compileall` succeeded and the full suite reported 107 passed.

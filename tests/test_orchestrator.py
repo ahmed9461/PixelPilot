@@ -31,18 +31,22 @@ class FakeVast:
         self.started = []
         self.create_kwargs = None
         self.search_calls = []
+        self.lookup_calls = []
 
     async def search_offers(self, query, limit, **kwargs):
         self.search_calls.append((query, limit, kwargs))
-        preferred = GpuOffer(78, "RTX A6000", 48, 0.40, 0.99, 40)
+        preferred = GpuOffer(
+            78, "RTX A6000", 48, 0.40, 0.99, 40, machine_id=78000
+        )
         if "gpu_ram>=48" in query:
             return [preferred]
         return [
-            GpuOffer(77, "RTX 4090", 24, 0.25, 0.99, 60),
+            GpuOffer(77, "RTX 4090", 24, 0.25, 0.99, 60, machine_id=77000),
             preferred,
         ]
 
-    async def lookup_offer(self, offer_id, *, storage_gb):
+    async def lookup_offer(self, offer_id, *, machine_id=None, storage_gb):
+        self.lookup_calls.append((offer_id, machine_id, storage_gb))
         rows = await self.search_offers(f"id={offer_id} rentable=true", 1, storage_gb=storage_gb)
         return next((row for row in rows if row.offer_id == offer_id), None)
 
@@ -112,6 +116,7 @@ def test_orchestrator_full_fake_lifecycle(tmp_path):
         assert "gpu_ram>=24" in vast.search_calls[1][0]
         assert vast.search_calls[0][1] == settings.vast_search_pool_limit
         await orch.rent_and_prepare(78)
+        assert vast.lookup_calls == [(78, 78000, 100.0)]
         assert await db.get("instance.phase") == "ready"
         env = vast.create_kwargs["env"]
         assert "MODEL_ID=Qwen/Qwen-Image-2.1" in env
@@ -624,7 +629,7 @@ def test_rent_exact_id_survives_ranked_market_churn(tmp_path):
         await db.init()
 
         class ChurnVast(FakeVast):
-            async def lookup_offer(self, offer_id, *, storage_gb):
+            async def lookup_offer(self, offer_id, *, machine_id=None, storage_gb):
                 # Search result has fallen outside the top 64, but the exact ID is live.
                 assert offer_id == 78
                 return GpuOffer(78, "RTX A6000", 48, 0.40, 0.99, 40)
@@ -779,7 +784,7 @@ def test_rent_rejects_changed_gpu_vram_price_or_policy(tmp_path, changed):
         await db.init()
 
         class ChangedVast(FakeVast):
-            async def lookup_offer(self, offer_id, *, storage_gb):
+            async def lookup_offer(self, offer_id, *, machine_id=None, storage_gb):
                 return changed
 
         vast = ChangedVast()

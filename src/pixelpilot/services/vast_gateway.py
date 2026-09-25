@@ -81,6 +81,12 @@ def normalize_offer(raw: dict[str, Any]) -> GpuOffer:
         verified = bool(verified_raw)
     elif raw.get("verification") is not None:
         verified = str(raw.get("verification")).lower() in {"verified", "true", "1"}
+    machine_id: int | None = None
+    try:
+        if raw.get("machine_id") is not None:
+            machine_id = int(raw["machine_id"])
+    except (TypeError, ValueError):
+        pass
     return GpuOffer(
         offer_id=int(raw.get("id") or raw.get("ask_id") or 0),
         gpu_name=str(raw.get("gpu_name") or raw.get("gpu_display_name") or "Unknown GPU"),
@@ -92,6 +98,7 @@ def normalize_offer(raw: dict[str, Any]) -> GpuOffer:
         inet_down_mbps=_num(raw, "inet_down", default=0.0) or None,
         disk_space_gb=_num(raw, "disk_space", default=0.0) or None,
         verified=verified,
+        machine_id=machine_id,
         raw=raw,
     )
 
@@ -299,22 +306,34 @@ class VastSdkGateway:
         offers.sort(key=lambda x: (x.price_per_hour, -(x.dlperf or 0)))
         return offers[:display_limit]
 
-    async def lookup_offer(self, offer_id: int, *, storage_gb: float) -> GpuOffer | None:
-        """Query the actual ask ID, independent of the ranked discovery window."""
-        if offer_id <= 0:
+    async def lookup_offer(
+        self,
+        offer_id: int,
+        *,
+        machine_id: int | None,
+        storage_gb: float,
+    ) -> GpuOffer | None:
+        """Re-read one discovered ask without trusting Vast's broken ID filter.
+
+        The marketplace returns an offer ``id`` in each row, but its live
+        ``/bundles/`` search currently returns no rows when that same value is
+        sent back as an ``id`` filter. Restrict the read to the machine captured
+        in the discovery snapshot, then require the exact original offer ID in
+        the response. A different ask on the same host is never substituted.
+        """
+        if offer_id <= 0 or not machine_id or machine_id <= 0:
             return None
-        # String discovery queries get verified/external/rentable defaults in
-        # Vast's SDK. Structured queries also get rented=false unless defaults
-        # are disabled. Keep the exact-ID lookup aligned with discovery while
-        # sending the ID as an integer; post-lookup checks enforce our policy.
+        # Structured SDK searches add rented=false unless defaults are disabled.
+        # Keep the validation baseline aligned with discovery and let the
+        # orchestrator re-check all price/hardware policy fields on the row.
         rows = await self.search_offers(
             {
-                "id": {"eq": int(offer_id)},
+                "machine_id": {"eq": int(machine_id)},
                 "rentable": {"eq": True},
                 "verified": {"eq": True},
                 "external": {"eq": False},
             },
-            1,
+            200,
             storage_gb=storage_gb,
             no_default=True,
         )

@@ -204,7 +204,9 @@ class Orchestrator:
 
     async def live_offer(self, snapshot: GpuOffer) -> GpuOffer | None:
         return await self.vast.lookup_offer(
-            snapshot.offer_id, storage_gb=float(self.settings.vast_disk_gb)
+            snapshot.offer_id,
+            machine_id=snapshot.machine_id,
+            storage_gb=float(self.settings.vast_disk_gb),
         )
 
     @staticmethod

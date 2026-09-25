@@ -18,3 +18,9 @@
 - Reintroduced live wide-pool discovery, responsive controls and explicit Original/Qwen Enhance settings.
 - Fixed selected Offer ID verification, duplicate-rent and start/stop races, ambiguous create recovery and transient status retry.
 - Moved optional enhancer downloads behind image readiness, with Original fallback while uncached or on failure.
+
+## 2026-09-26 — Live Vast offer revalidation
+
+- Proved with live raw responses that Vast's `/bundles/` `id` filter returned no row for a simultaneously discoverable Offer ID.
+- Persisted the discovery `machine_id` and revalidated within that machine while still requiring the exact original Offer ID.
+- Preserved the `$0.50/hour` ceiling, `cancel_unavail=true`, duplicate-rent prevention and ambiguous-create recovery.

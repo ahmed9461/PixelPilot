@@ -51,6 +51,18 @@ def test_normalize_offer():
     assert offer.verified is True
 
 
+def test_normalize_offer_keeps_machine_id_for_safe_revalidation():
+    offer = normalize_offer({
+        "id": 77,
+        "machine_id": "1234",
+        "gpu_name": "RTX A6000",
+        "gpu_ram": 49140,
+        "dph_total": 0.42,
+    })
+    assert offer.machine_id == 1234
+    assert offer.public_dict()["machine_id"] == 1234
+
+
 def test_extract_mapped_port_from_vast_raw():
     raw = {"public_ipaddr": "203.0.113.10", "ports": {"8190/tcp": [{"HostIp": "0.0.0.0", "HostPort": "34567"}]}}
     assert extract_mapped_port(raw, 8190) == 34567
@@ -106,7 +118,7 @@ def test_search_offers_runs_live_request_each_time_and_requests_price_order():
     asyncio.run(scenario())
 
 
-def test_lookup_offer_queries_exact_id_without_ranked_pool():
+def test_lookup_offer_queries_snapshot_machine_without_ranked_pool():
     import asyncio
 
     class FakeClient:
@@ -116,26 +128,31 @@ def test_lookup_offer_queries_exact_id_without_ranked_pool():
         def search_offers(self, **kwargs):
             self.calls.append(kwargs)
             assert kwargs["query"] == {
-                "id": {"eq": 321},
+                "machine_id": {"eq": 444},
                 "rentable": {"eq": True},
                 "verified": {"eq": True},
                 "external": {"eq": False},
             }
             assert kwargs["no_default"] is True
-            return [{"id": 321, "gpu_name": "A6000", "gpu_ram": 48000,
-                     "dph_total": 0.43}]
+            return [
+                {"id": 320, "machine_id": 444, "gpu_name": "A6000",
+                 "gpu_ram": 48000, "dph_total": 0.42},
+                {"id": 321, "machine_id": 444, "gpu_name": "A6000",
+                 "gpu_ram": 48000, "dph_total": 0.43},
+            ]
 
     async def scenario():
         gateway = VastSdkGateway("secret")
         gateway._client = FakeClient()
-        offer = await gateway.lookup_offer(321, storage_gb=100)
+        offer = await gateway.lookup_offer(321, machine_id=444, storage_gb=100)
         assert offer.offer_id == 321
         assert gateway._client.calls[0]["storage"] == 100.0
+        assert gateway._client.calls[0]["limit"] == 200
 
     asyncio.run(scenario())
 
 
-def test_lookup_offer_sdk_request_has_no_extra_rented_filter(monkeypatch):
+def test_lookup_offer_sdk_request_uses_machine_and_has_no_extra_rented_filter(monkeypatch):
     import asyncio
     from vastai import VastAI
 
@@ -147,7 +164,8 @@ def test_lookup_offer_sdk_request_has_no_extra_rented_filter(monkeypatch):
 
         def json(self):
             return {"offers": [{
-                "id": 321, "gpu_name": "A6000", "gpu_ram": 48000,
+                "id": 321, "machine_id": 444,
+                "gpu_name": "A6000", "gpu_ram": 48000,
                 "dph_total": 0.43,
             }]}
 
@@ -162,12 +180,13 @@ def test_lookup_offer_sdk_request_has_no_extra_rented_filter(monkeypatch):
         monkeypatch.setattr(sdk.client, "post", post)
         gateway = VastSdkGateway("fake")
         gateway._client = sdk
-        offer = await gateway.lookup_offer(321, storage_gb=100)
+        offer = await gateway.lookup_offer(321, machine_id=444, storage_gb=100)
         assert offer is not None and offer.offer_id == 321
 
     asyncio.run(scenario())
     assert len(sent) == 1
-    assert sent[0]["id"] == {"eq": 321}
+    assert sent[0]["machine_id"] == {"eq": 444}
+    assert "id" not in sent[0]
     assert sent[0]["rentable"] == {"eq": True}
     assert sent[0]["verified"] == {"eq": True}
     assert sent[0]["external"] == {"eq": False}
@@ -185,7 +204,7 @@ def test_lookup_offer_does_not_substitute_another_id():
     async def scenario():
         gateway = VastSdkGateway("secret")
         gateway._client = FakeClient()
-        assert await gateway.lookup_offer(321, storage_gb=100) is None
+        assert await gateway.lookup_offer(321, machine_id=444, storage_gb=100) is None
 
     asyncio.run(scenario())
 

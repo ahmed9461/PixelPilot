@@ -29,6 +29,7 @@ class GpuOffer:
     inet_down_mbps: float | None = None
     disk_space_gb: float | None = None
     verified: bool | None = None
+    machine_id: int | None = None
     raw: dict[str, Any] | None = None
 
     @property

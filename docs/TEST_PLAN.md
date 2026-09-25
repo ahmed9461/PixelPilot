@@ -12,7 +12,7 @@ Every push and pull request runs:
 - Qwen-Image defaults and validation
 - 24 GB minimum / 48 GB preferred GPU policy
 - Vast query and lifecycle
-- exact Offer ID lookup, changed price/GPU/VRAM, hard cap, rejection and ambiguous create reconciliation
+- machine-scoped exact Offer ID lookup with SDK request parity and no same-host substitution, changed price/GPU/VRAM, hard cap, rejection and ambiguous create reconciliation
 - duplicate rent and rapid callback handling, start/stop ordering, retry of transient status timeouts
 - image generation API payloads
 - exact prompt preservation

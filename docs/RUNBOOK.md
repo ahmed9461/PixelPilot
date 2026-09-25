@@ -112,8 +112,9 @@ Rent outcome is uncertain after a timeout, 408/429 or 5xx:
 
 An offer disappears before rent:
 - This is before `create_instance`; it does not create a paid instance. Refresh and compare the actual Offer IDs shown on the cards, since identical GPU/price labels may be different asks.
-- If the same ID appears again and still fails, run a read-only exact-ID Vast search with the configured API key to distinguish a marketplace change from a lookup mismatch. Do not bypass exact-ID validation or rent a different ask automatically.
-- On Vast SDK 1.6.0, structured queries add `rented=false` by default even though string discovery does not. Exact-ID lookup therefore supplies the same baseline filters explicitly with `no_default=true`.
+- If the same ID appears again and still fails, compare a read-only discovery response with a machine-scoped revalidation using the snapshot's `machine_id`. Vast's `/bundles/` `id` filter was observed returning an empty list for a simultaneously discoverable Offer ID; do not treat that filter alone as proof that the ask vanished.
+- Revalidation must use `verified=true`, `external=false`, `rentable=true` with `no_default=true`, the same `allocated_storage`, and must select only the original Offer ID from the machine-scoped raw response. Never rent a different row automatically.
+- Snapshots created before the machine-scoped fix do not contain `machine_id`; refresh the Telegram offer list after upgrading instead of weakening validation.
 
 ## Lifecycle
 

@@ -130,8 +130,8 @@ SQLite does not store:
 - A separate owner-controlled “48 GB+ only” search mode is available from the offer list.
 - Search refreshes must remain live; do not rotate cached results to simulate market changes.
 - Offer cards show the actual Offer ID so equal GPU, price and reliability labels remain distinguishable.
-- Rental checks query the exact selected Offer ID, independently of the ranked discovery limit; changed price/GPU/VRAM requires renewed confirmation.
-- Exact-ID structured SDK searches explicitly use the discovery baseline (`verified=true`, `external=false`, `rentable=true`) with `no_default=true`; otherwise the SDK adds a `rented=false` constraint that discovery did not use.
+- Discovery snapshots retain both the Offer ID and its `machine_id`. Vast's live `/bundles/` search does not currently match the returned Offer ID when it is sent back through the `id` filter, so rental validation narrows by the snapshot's `machine_id` and then requires the exact original Offer ID in the raw rows. A different ask from the same host is never substituted.
+- Revalidation uses the discovery baseline (`verified=true`, `external=false`, `rentable=true`) with `no_default=true`, so the SDK does not silently add `rented=false`; changed price/GPU/VRAM still requires renewed confirmation.
 - Explicit 4xx rejection can clear pending state; network, 408/429 and 5xx outcomes retain the unique label and block another rent until reconciliation.
 - Rapid refresh clicks should not launch overlapping marketplace searches.
 

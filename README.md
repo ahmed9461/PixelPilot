@@ -42,7 +42,7 @@ The BF16 Qwen-Image-2.1 checkpoint is roughly 33 GB before runtime overhead.
 
 Offer discovery scans a wider live pool than the 8 rows shown in Telegram. Normal search performs a dedicated 48 GB+ marketplace query plus a 24 GB+ fallback query, deduplicates them, then ranks 48 GB+ offers first. The offer list also exposes a `48GB+ only` mode.
 
-Before renting, PixelPilot queries the selected Offer ID directly, checks its current price/GPU/VRAM, and asks for fresh confirmation on changes. A rejected ask can be retried with a new offer. A timeout or server error keeps a unique pending label and blocks another rental until Vast instance reconciliation resolves the outcome. `cancel_unavail=true` avoids a stopped storage-billed contract when immediate placement fails.
+Before renting, PixelPilot re-reads the selected offer through the machine recorded in its live discovery snapshot and accepts only the exact original Offer ID from that response. This works around Vast's `/bundles/` `id` filter returning empty results for IDs that are simultaneously visible in discovery without ever substituting a different ask. PixelPilot checks current price/GPU/VRAM and asks for fresh confirmation on changes. A rejected ask can be retried with a new offer. A timeout or server error keeps a unique pending label and blocks another rental until Vast instance reconciliation resolves the outcome. `cancel_unavail=true` avoids a stopped storage-billed contract when immediate placement fails.
 
 ## Image presets
 

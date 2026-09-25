@@ -68,11 +68,17 @@ The Transformers path follows Qwen's published `prompt_rewrite/run_transformers.
 
 ## 2026-09-26 — Live offer identification
 
-- Keep the exact-ID check before rent; pass the ID as an integer in the SDK's structured search query, matching Vast's numeric offer filter. A missing ID must still stop before creation.
+- Keep the exact-ID check before rent. The initial choice to pass the ID as an integer was later superseded by the live API evidence below because Vast's `/bundles/` `id` filter returned no match for IDs present in discovery.
 - Show the Offer ID on every Telegram offer card. Cards with identical model, price and reliability can represent different asks; the refresh counter compares IDs, not just visible specifications.
 - The September 26 live screenshot shows one selected ID absent at validation, but does not by itself prove whether Vast removed it or the old string-typed query failed to match. Recheck with a read-only live query after deployment if the symptom persists.
 
 ## 2026-09-26 — Match SDK search defaults on validation
 
 - The installed Vast SDK treats string and structured searches differently: its structured path adds `rented=false` while its string path does not. An exact-ID lookup must not add that extra filter compared with discovery or it can reject offers that were just shown.
-- Send a structured numeric `id` with explicit `verified=true`, `external=false`, `rentable=true` and `no_default=true`; keep all local price/GPU/VRAM/policy checks before create and `cancel_unavail=true` at create.
+- Use explicit `verified=true`, `external=false`, `rentable=true` and `no_default=true`; keep all local price/GPU/VRAM/policy checks before create and `cancel_unavail=true` at create. The numeric `id` lookup portion of this decision is superseded below.
+
+## 2026-09-26 — Revalidate through the discovery machine
+
+- Live evidence is authoritative: `/bundles/` returned `49299788` during discovery and immediately returned an empty list for `id=49299788`, regardless of numeric/string representation and with identical 100 GB allocated storage. The same endpoint returned `49299788` when constrained by its discovery `machine_id`.
+- Persist `machine_id` with each displayed snapshot. Revalidation uses that numeric machine ID only to bound the raw result set, then requires the exact original Offer ID. No other offer on the machine may pass.
+- Continue explicit baseline filters with `no_default=true`, the hard `$0.50/hour` local check, policy/specification revalidation, `cancel_unavail=true`, duplicate-rent exclusion and ambiguous-create reconciliation.

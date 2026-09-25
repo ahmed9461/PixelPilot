@@ -29,4 +29,9 @@ No persona/chat/audio/video work is planned for the image product.
 ## Exact-ID SDK filter parity (2026-09-26)
 1. Completed: confirmed structured queries add `rented=false` by default while discovery's string query does not.
 2. Completed: use the discovery baseline during exact-ID verification without the extra `rented=false`; retain the numeric ID and all post-lookup policy checks.
-3. Completed locally: tested the serialized SDK request and ran the full suite (106 passed). Publish on the repair branch and verify CI. If Vast still returns no ID, collect a read-only live query from the controller before further changes.
+3. Superseded: the live request comparison showed that removing `rented=false` was necessary request parity but did not fix Vast's empty `id` filter result.
+
+## Machine-scoped exact Offer ID recovery (2026-09-26)
+1. Completed: captured discovery and validation request bodies and raw responses for the same live Offer ID `49299788` with the same 100 GB allocation.
+2. Completed: persist the discovery `machine_id`, query that host during validation, and locally require the unchanged original Offer ID; never substitute another ask.
+3. In progress: local full suite passed (107 tests); push the independent repair branch, confirm matching CI, deploy the controller, complete one Telegram rental/readiness smoke test, then destroy only that test Instance.
