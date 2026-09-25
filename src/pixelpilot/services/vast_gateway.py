@@ -264,6 +264,7 @@ class VastSdkGateway:
         limit: int = 8,
         *,
         storage_gb: float = 5.0,
+        no_default: bool = False,
     ) -> list[GpuOffer]:
         """Run a fresh marketplace request and return the cheapest matches.
 
@@ -283,6 +284,7 @@ class VastSdkGateway:
                 order="dph_total",
                 limit=backend_limit,
                 storage=float(storage_gb),
+                no_default=no_default,
             )
         except Exception as exc:
             raise VastError(f"Vast search failed: {exc}") from exc
@@ -301,10 +303,20 @@ class VastSdkGateway:
         """Query the actual ask ID, independent of the ranked discovery window."""
         if offer_id <= 0:
             return None
+        # String discovery queries get verified/external/rentable defaults in
+        # Vast's SDK. Structured queries also get rented=false unless defaults
+        # are disabled. Keep the exact-ID lookup aligned with discovery while
+        # sending the ID as an integer; post-lookup checks enforce our policy.
         rows = await self.search_offers(
-            {"id": {"eq": int(offer_id)}, "rentable": {"eq": True}},
+            {
+                "id": {"eq": int(offer_id)},
+                "rentable": {"eq": True},
+                "verified": {"eq": True},
+                "external": {"eq": False},
+            },
             1,
             storage_gb=storage_gb,
+            no_default=True,
         )
         return next((row for row in rows if row.offer_id == offer_id), None)
 

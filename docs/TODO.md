@@ -24,4 +24,9 @@ No persona/chat/audio/video work is planned for the image product.
 ## Live rental follow-up (2026-09-26)
 1. Completed: reviewed live symptom and confirmed the SDK string parser preserves the numeric-looking ID as text.
 2. Completed: send an integer ID filter through the Vast SDK and show Offer IDs on cards; retain exact-ID validation and no automatic substitute.
-3. Completed locally: added regression tests and ran the full suite (105 passed). Check CI on the pushed HEAD, then a read-only live SDK search if Vast still returns no exact match.
+3. Completed: added regression tests, ran the full suite (105 passed), and confirmed CI on pushed commit `c1c2750`. Live rental initially still failed on all displayed asks; the filter-parity follow-up below addresses a further SDK mismatch.
+
+## Exact-ID SDK filter parity (2026-09-26)
+1. Completed: confirmed structured queries add `rented=false` by default while discovery's string query does not.
+2. Completed: use the discovery baseline during exact-ID verification without the extra `rented=false`; retain the numeric ID and all post-lookup policy checks.
+3. Completed locally: tested the serialized SDK request and ran the full suite (106 passed). Publish on the repair branch and verify CI. If Vast still returns no ID, collect a read-only live query from the controller before further changes.

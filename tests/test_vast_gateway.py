@@ -116,8 +116,12 @@ def test_lookup_offer_queries_exact_id_without_ranked_pool():
         def search_offers(self, **kwargs):
             self.calls.append(kwargs)
             assert kwargs["query"] == {
-                "id": {"eq": 321}, "rentable": {"eq": True}
+                "id": {"eq": 321},
+                "rentable": {"eq": True},
+                "verified": {"eq": True},
+                "external": {"eq": False},
             }
+            assert kwargs["no_default"] is True
             return [{"id": 321, "gpu_name": "A6000", "gpu_ram": 48000,
                      "dph_total": 0.43}]
 
@@ -129,6 +133,45 @@ def test_lookup_offer_queries_exact_id_without_ranked_pool():
         assert gateway._client.calls[0]["storage"] == 100.0
 
     asyncio.run(scenario())
+
+
+def test_lookup_offer_sdk_request_has_no_extra_rented_filter(monkeypatch):
+    import asyncio
+    from vastai import VastAI
+
+    sent = []
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"offers": [{
+                "id": 321, "gpu_name": "A6000", "gpu_ram": 48000,
+                "dph_total": 0.43,
+            }]}
+
+    async def scenario():
+        sdk = VastAI(api_key="fake", raw=True, quiet=True)
+
+        def post(path, json_data):
+            assert path == "/bundles/"
+            sent.append(json_data)
+            return Response()
+
+        monkeypatch.setattr(sdk.client, "post", post)
+        gateway = VastSdkGateway("fake")
+        gateway._client = sdk
+        offer = await gateway.lookup_offer(321, storage_gb=100)
+        assert offer is not None and offer.offer_id == 321
+
+    asyncio.run(scenario())
+    assert len(sent) == 1
+    assert sent[0]["id"] == {"eq": 321}
+    assert sent[0]["rentable"] == {"eq": True}
+    assert sent[0]["verified"] == {"eq": True}
+    assert sent[0]["external"] == {"eq": False}
+    assert "rented" not in sent[0]
 
 
 def test_lookup_offer_does_not_substitute_another_id():

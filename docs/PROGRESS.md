@@ -79,3 +79,10 @@ Completed:
 - Updated exact-ID search to send a numeric ID in a structured Vast SDK query. The SDK's string parser preserves `id=...` as text, whereas Vast documents the offer filter as a numeric ID. This is a plausible mismatch; the screenshot alone cannot establish that it caused the failed lookup.
 - Added Offer IDs to Telegram offer cards and regression tests for numeric exact-ID query and visibly distinct same-spec asks. A read-only live exact-ID query and real rental are still needed to confirm the Vast-side result.
 - Local full test suite after this follow-up: 105 passed; no paid Vast instance was created in development.
+- The pushed commit `c1c2750` passed its matching GitHub Actions CI. A subsequent live report said every displayed offer failed exact-ID lookup, motivating the SDK default-filter parity check below.
+
+## 2026-09-26 — Exact-ID filter parity follow-up
+
+- Found that Vast SDK 1.6.0 seeds `rented=false` for structured searches, but not for string discovery searches. This makes a shown offer disappear during exact-ID validation even without a market change.
+- Exact lookup now uses a numeric ID and explicitly matches the discovery defaults with `no_default=true`. Added an SDK serialization regression test proving the request contains no extra `rented` filter. Local targeted tests: 47 passed.
+- Full local suite after this follow-up: 106 passed. Live Vast search/rent after deploying this change is still pending; no paid instance was created during this fix.

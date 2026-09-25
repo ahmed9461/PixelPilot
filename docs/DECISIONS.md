@@ -71,3 +71,8 @@ The Transformers path follows Qwen's published `prompt_rewrite/run_transformers.
 - Keep the exact-ID check before rent; pass the ID as an integer in the SDK's structured search query, matching Vast's numeric offer filter. A missing ID must still stop before creation.
 - Show the Offer ID on every Telegram offer card. Cards with identical model, price and reliability can represent different asks; the refresh counter compares IDs, not just visible specifications.
 - The September 26 live screenshot shows one selected ID absent at validation, but does not by itself prove whether Vast removed it or the old string-typed query failed to match. Recheck with a read-only live query after deployment if the symptom persists.
+
+## 2026-09-26 — Match SDK search defaults on validation
+
+- The installed Vast SDK treats string and structured searches differently: its structured path adds `rented=false` while its string path does not. An exact-ID lookup must not add that extra filter compared with discovery or it can reject offers that were just shown.
+- Send a structured numeric `id` with explicit `verified=true`, `external=false`, `rentable=true` and `no_default=true`; keep all local price/GPU/VRAM/policy checks before create and `cancel_unavail=true` at create.

@@ -131,6 +131,7 @@ SQLite does not store:
 - Search refreshes must remain live; do not rotate cached results to simulate market changes.
 - Offer cards show the actual Offer ID so equal GPU, price and reliability labels remain distinguishable.
 - Rental checks query the exact selected Offer ID, independently of the ranked discovery limit; changed price/GPU/VRAM requires renewed confirmation.
+- Exact-ID structured SDK searches explicitly use the discovery baseline (`verified=true`, `external=false`, `rentable=true`) with `no_default=true`; otherwise the SDK adds a `rented=false` constraint that discovery did not use.
 - Explicit 4xx rejection can clear pending state; network, 408/429 and 5xx outcomes retain the unique label and block another rent until reconciliation.
 - Rapid refresh clicks should not launch overlapping marketplace searches.
 

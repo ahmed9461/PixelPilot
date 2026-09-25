@@ -113,6 +113,7 @@ Rent outcome is uncertain after a timeout, 408/429 or 5xx:
 An offer disappears before rent:
 - This is before `create_instance`; it does not create a paid instance. Refresh and compare the actual Offer IDs shown on the cards, since identical GPU/price labels may be different asks.
 - If the same ID appears again and still fails, run a read-only exact-ID Vast search with the configured API key to distinguish a marketplace change from a lookup mismatch. Do not bypass exact-ID validation or rent a different ask automatically.
+- On Vast SDK 1.6.0, structured queries add `rented=false` by default even though string discovery does not. Exact-ID lookup therefore supplies the same baseline filters explicitly with `no_default=true`.
 
 ## Lifecycle
 
