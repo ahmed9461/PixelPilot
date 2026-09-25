@@ -86,3 +86,4 @@ Completed:
 - Found that Vast SDK 1.6.0 seeds `rented=false` for structured searches, but not for string discovery searches. This makes a shown offer disappear during exact-ID validation even without a market change.
 - Exact lookup now uses a numeric ID and explicitly matches the discovery defaults with `no_default=true`. Added an SDK serialization regression test proving the request contains no extra `rented` filter. Local targeted tests: 47 passed.
 - Full local suite after this follow-up: 106 passed. Live Vast search/rent after deploying this change is still pending; no paid instance was created during this fix.
+- First matching CI run exposed a timing-dependent status-probe test assertion (it assumed only one total call even when the first had completed). The test now checks the safety property: no overlapping Vast status calls during timeout recovery.

@@ -727,19 +727,31 @@ def test_single_status_timeout_is_retried_during_provisioning(tmp_path):
             def __init__(self):
                 super().__init__()
                 self.probes = 0
+                self.inflight = 0
+                self.max_inflight = 0
 
             async def show_instance(self, instance_id):
                 self.probes += 1
-                if self.probes == 1:
-                    await asyncio.sleep(0.1)
-                return InstanceRef(instance_id=instance_id, status="running",
-                                   public_ip="203.0.113.5", mapped_port=45678)
+                self.inflight += 1
+                self.max_inflight = max(self.max_inflight, self.inflight)
+                try:
+                    if self.probes == 1:
+                        await asyncio.sleep(0.1)
+                    return InstanceRef(instance_id=instance_id, status="running",
+                                       public_ip="203.0.113.5", mapped_port=45678)
+                finally:
+                    self.inflight -= 1
 
         vast = SlowOnceVast()
         orch = Orchestrator(settings, db, vast,
                             inference_factory=lambda url, token: FakeInference())
-        await orch.wait_until_ready(55)
-        assert vast.probes == 1  # the timed-out read completes without a duplicate SDK call
+        notices = []
+        async def record(notice):
+            notices.append(notice)
+
+        await orch.wait_until_ready(55, progress=record)
+        assert vast.max_inflight == 1  # a retry never overlaps the previous SDK call
+        assert any("مهلة" in notice for notice in notices)
         assert await db.get("instance.phase") == "ready"
 
     asyncio.run(scenario())
