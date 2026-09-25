@@ -9,6 +9,7 @@ from typing import Any, Awaitable, Callable
 from pixelpilot.config import Settings
 from pixelpilot.db import Database
 from pixelpilot.domain import GeneratedImage, GpuOffer, InstancePhase, ReferenceImage
+from pixelpilot.pricing import GB_PER_TB, download_rate_allowed, offer_cost_rank
 from pixelpilot.services.billing import (
     begin_billing,
     billing_snapshot,
@@ -141,12 +142,14 @@ class Orchestrator:
             row
             for row in deduped.values()
             if 0 < row.price_per_hour <= self.settings.vast_max_price_usd_hour
+            and download_rate_allowed(row, self.settings.vast_max_download_usd_per_tb)
         ]
         candidates.sort(
-            key=lambda row: (
-                row.gpu_ram_gb < self.settings.vast_preferred_gpu_ram_gb,
-                row.price_per_hour,
-                -(row.dlperf or 0.0),
+            key=lambda row: offer_cost_rank(
+                row,
+                download_gb=self.settings.vast_estimated_download_gb,
+                billed_hours=self.settings.vast_cost_comparison_hours,
+                preferred_vram_gb=self.settings.vast_preferred_gpu_ram_gb,
             )
         )
         rows = candidates[: self.settings.vast_default_limit]
@@ -172,6 +175,8 @@ class Orchestrator:
                 "fallback_query": fallback_query,
                 "candidate_count": len(candidates),
                 "display_count": len(rows),
+                "estimated_download_gb": self.settings.vast_estimated_download_gb,
+                "comparison_hours": self.settings.vast_cost_comparison_hours,
             },
         )
         return rows
@@ -185,7 +190,7 @@ class Orchestrator:
 
 
     def _offer_query_for(self, min_vram_gb: int) -> str:
-        return build_offer_query(
+        query = build_offer_query(
             min_vram_gb,
             self.settings.vast_min_reliability,
             self.settings.vast_max_price_usd_hour,
@@ -201,6 +206,10 @@ class Orchestrator:
                 else 0
             ),
         )
+        cap = self.settings.vast_max_download_usd_per_tb
+        if cap is not None:
+            query += f" inet_down_cost<={cap / GB_PER_TB:.12g}"
+        return query
 
     async def live_offer(self, snapshot: GpuOffer) -> GpuOffer | None:
         return await self.vast.lookup_offer(
@@ -215,6 +224,8 @@ class Orchestrator:
             old.gpu_name != new.gpu_name
             or abs(old.gpu_ram_gb - new.gpu_ram_gb) > 1e-6
             or abs(old.price_per_hour - new.price_per_hour) > 1e-9
+            or old.download_usd_per_gb != new.download_usd_per_gb
+            or old.upload_usd_per_gb != new.upload_usd_per_gb
         )
 
     async def rent(self, offer_id: int) -> dict[str, Any]:
@@ -275,11 +286,15 @@ class Orchestrator:
                     "new_price": live_offer.price_per_hour,
                     "old_gpu": offer.gpu_name,
                     "new_gpu": live_offer.gpu_name,
+                    "old_download_usd_per_gb": offer.download_usd_per_gb,
+                    "new_download_usd_per_gb": live_offer.download_usd_per_gb,
+                    "old_upload_usd_per_gb": offer.upload_usd_per_gb,
+                    "new_upload_usd_per_gb": live_offer.upload_usd_per_gb,
                 },
             )
             raise OfferChangedError(
                 f"العرض رقم {offer_id} تغيّر منذ فتح التفاصيل. "
-                "حدّث القائمة وراجِع السعر والمواصفات مرة أخرى."
+                "حدّث القائمة وراجِع سعر الساعة ورسوم البيانات والمواصفات مرة أخرى."
             )
         if (
             live_offer.price_per_hour <= 0
@@ -287,6 +302,10 @@ class Orchestrator:
             or live_offer.gpu_ram_gb < self.settings.vast_min_gpu_ram_gb
         ):
             raise OfferChangedError("تغير السعر أو VRAM خارج سياسة الاستئجار. حدّث العرض وأعد التأكيد.")
+        if not download_rate_allowed(live_offer, self.settings.vast_max_download_usd_per_tb):
+            raise OfferChangedError(
+                "سعر Download مجهول أو يتجاوز سقف التنزيل المحدد. حدّث العروض وأعد التأكيد."
+            )
         raw = live_offer.raw or {}
         needs_offload = (live_offer.gpu_ram_gb < self.settings.image_full_gpu_min_vram_gb
                          or self.settings.image_memory_mode == "offload")
