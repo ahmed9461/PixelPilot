@@ -34,4 +34,4 @@ No persona/chat/audio/video work is planned for the image product.
 ## Machine-scoped exact Offer ID recovery (2026-09-26)
 1. Completed: captured discovery and validation request bodies and raw responses for the same live Offer ID `49299788` with the same 100 GB allocation.
 2. Completed: persist the discovery `machine_id`, query that host during validation, and locally require the unchanged original Offer ID; never substitute another ask.
-3. In progress: local full suite passed (107 tests); push the independent repair branch, confirm matching CI, deploy the controller, complete one Telegram rental/readiness smoke test, then destroy only that test Instance.
+3. In progress: local full suite passed (108 tests, including the live-discovered health regression); push the updated independent repair branch, confirm matching CI, finish readiness on the existing test Instance, then destroy only that Instance.

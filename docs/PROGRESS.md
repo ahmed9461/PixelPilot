@@ -94,4 +94,5 @@ Completed:
 - The empty result reproduced for multiple currently displayed IDs and for integer, string, float and `in` forms of the `id` filter. Querying `machine_id=116779` returned the original `49299788` row, proving the offer had not disappeared and that neither storage nor the removed default `rented` constraint caused this failure.
 - Discovery now persists `machine_id`. Revalidation queries that machine with the same explicit SDK baseline and `no_default=true`, then accepts only the exact selected Offer ID from the response. A same-machine decoy cannot be rented.
 - Added SDK-serialization, same-machine exact-match, non-substitution and snapshot-persistence coverage. A read-only live pass re-found `49299788` with the same price/GPU/VRAM through the repaired path.
-- Local CI-equivalent checks passed: `compileall` succeeded and the full suite reported 107 passed.
+- The first live worker reached the gateway, where health exposed one stale `PE_FAIL_OPEN` reference left after fail-closed configuration was removed. Health now reports the fixed fail-open policy directly, with a regression test.
+- Local CI-equivalent checks passed after both repairs: `compileall` succeeded and the full suite reported 108 passed.

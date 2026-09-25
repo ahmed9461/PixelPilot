@@ -426,7 +426,9 @@ async def health(authorization: str | None = Header(default=None)) -> dict[str, 
             "mode": "on_demand",
             "t2i_model": PE_T2I_ID,
             "i2i_model": PE_I2I_ID,
-            "fail_open": PE_FAIL_OPEN,
+            # Enhancement has no fail-closed mode: uncached or failed rewrites
+            # always fall back to the original prompt.
+            "fail_open": True,
         },
     }
 

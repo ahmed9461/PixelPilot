@@ -23,4 +23,5 @@
 
 - Proved with live raw responses that Vast's `/bundles/` `id` filter returned no row for a simultaneously discoverable Offer ID.
 - Persisted the discovery `machine_id` and revalidated within that machine while still requiring the exact original Offer ID.
+- Removed a stale health-response reference to the retired enhancer fail-closed toggle; health now reports the fixed fail-open policy without a runtime `NameError`.
 - Preserved the `$0.50/hour` ceiling, `cancel_unavail=true`, duplicate-rent prevention and ambiguous-create recovery.

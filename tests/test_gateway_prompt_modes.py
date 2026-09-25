@@ -11,6 +11,16 @@ class FakeImage:
         buffer.write(b"PNG")
 
 
+def test_health_reports_fixed_fail_open_policy(monkeypatch):
+    monkeypatch.setattr(gateway, "TOKEN", "test-token")
+    monkeypatch.setattr(gateway.state, "pipe", object())
+
+    result = asyncio.run(gateway.health("Bearer test-token"))
+
+    assert result["status"] == "ok"
+    assert result["prompt_enhancer"]["fail_open"] is True
+
+
 def test_original_preserves_prompt_and_enhancer_failure_falls_back(monkeypatch):
     prompts = []
 
