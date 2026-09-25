@@ -55,19 +55,35 @@ class RuntimeState:
 state = RuntimeState()
 generation_lock = asyncio.Lock()
 enhancer_ready: set[str] = set()
+enhancer_downloads: dict[str, asyncio.Task[None]] = {}
 
 
-async def _prefetch_enhancers() -> None:
-    # Keep Original mode ready while optional 9B weights are downloaded.
-    for model_id in (PE_T2I_ID, PE_I2I_ID):
-        try:
-            from huggingface_hub import snapshot_download
-            await asyncio.to_thread(snapshot_download, model_id)
-        except Exception:
-            logger.exception("Could not prefetch optional prompt enhancer %s", model_id)
-        else:
-            enhancer_ready.add(model_id)
-            logger.info("Prompt enhancer cached: %s", model_id)
+async def _download_enhancer(model_id: str) -> None:
+    # Called only after an explicit enhanced image request, never on startup.
+    # Downloading weights does not load the model onto the GPU.
+    try:
+        from huggingface_hub import snapshot_download
+        await asyncio.to_thread(snapshot_download, model_id)
+    except Exception:
+        logger.exception("Could not download requested prompt enhancer %s", model_id)
+    else:
+        enhancer_ready.add(model_id)
+        logger.info("Prompt enhancer cached: %s", model_id)
+
+
+def _ensure_enhancer_download(model_id: str) -> None:
+    if model_id in enhancer_ready or model_id in enhancer_downloads:
+        return
+    task = asyncio.create_task(_download_enhancer(model_id), name="qwen-requested-enhancer-download")
+    enhancer_downloads[model_id] = task
+
+    def release(done: asyncio.Task[None]) -> None:
+        if enhancer_downloads.get(model_id) is done:
+            enhancer_downloads.pop(model_id, None)
+        if not done.cancelled():
+            done.exception()
+
+    task.add_done_callback(release)
 
 
 def _check_auth(authorization: str | None) -> None:
@@ -169,18 +185,21 @@ async def lifespan(_app: FastAPI):
     if not TOKEN:
         raise RuntimeError("PIXELPILOT_INFERENCE_TOKEN is required")
     await asyncio.to_thread(_load_pipeline)
-    prefetch_task = asyncio.create_task(_prefetch_enhancers(), name="qwen-enhancer-prefetch")
+    # Original readiness must not trigger either optional checkpoint download.
     try:
         yield
     finally:
-        prefetch_task.cancel()
-        await asyncio.gather(prefetch_task, return_exceptions=True)
-    state.pipe = None
-    if state.torch is not None:
-        try:
-            state.torch.cuda.empty_cache()
-        except Exception:
-            pass
+        tasks = tuple(enhancer_downloads.values())
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        enhancer_downloads.clear()
+        state.pipe = None
+        if state.torch is not None:
+            try:
+                state.torch.cuda.empty_cache()
+            except Exception:
+                pass
 
 
 app = FastAPI(title="PixelPilot Qwen-Image Gateway", lifespan=lifespan)
@@ -351,7 +370,8 @@ async def _generate_response(
             try:
                 needed_model = PE_I2I_ID if reference_images else PE_T2I_ID
                 if needed_model not in enhancer_ready:
-                    raise RuntimeError("Optional Qwen enhancer is still downloading")
+                    _ensure_enhancer_download(needed_model)
+                    raise RuntimeError("Requested Qwen enhancer is downloading; this image uses Original")
                 enhanced = await asyncio.to_thread(
                     _enhance_prompt,
                     prompt,
@@ -424,6 +444,9 @@ async def health(authorization: str | None = Header(default=None)) -> dict[str, 
         "max_reference_images": MAX_REFERENCE_IMAGES,
         "prompt_enhancer": {
             "mode": "on_demand",
+            "download_policy": "on_first_enhanced_request",
+            "downloading": sorted(enhancer_downloads),
+            "cached": sorted(enhancer_ready),
             "t2i_model": PE_T2I_ID,
             "i2i_model": PE_I2I_ID,
             # Enhancement has no fail-closed mode: uncached or failed rewrites
