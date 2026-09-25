@@ -1,37 +1,35 @@
 # TODO
 
-## Deployment
-- completed: update the persistent controller to `codex/vast-offer-machine-lookup`
-- completed: identify and restart `pixelpilot.service`
-- completed through the production orchestration path: rent one displayed GPU, reach READY, then destroy only the test Instance; a literal Telegram Desktop click remains pending where computer-control tooling is available
-- completed: validate a real Qwen-Image-2.1 download/load and authenticated health readiness
-- run one text-to-image and one edit smoke test
-- completed: verify one real exact-ID rental; ambiguous-create recovery remains covered by tests and should only be exercised live if an actual ambiguous response occurs, never by deliberately creating an extra paid Instance
+## Current continuation
+
+Active plan: `docs/DOWNLOAD_COST_PLAN.md`.
+Branch: `fix/vast-download-cost-awareness`, based on the completed Codex branch `codex/vast-offer-machine-lookup`.
+
+Completed:
+- preserve the proven machine-scoped exact Offer ID recovery and lifecycle safety guards
+- account for precise Download/Upload quotes; rank known offers using cold-download plus running-time estimates
+- apply an optional download-rate ceiling in discovery and again before create; require confirmation on transfer-price changes
+- disclose estimates/unknown rates before rent and distinguish the running-time counter from the invoice total
+- stop unconditional enhancer prefetch; download only the explicitly requested enhancer
+- compile check and full CI: 150 tests passed on implementation commit `04e4362676d21a2e4ae735456be7c2943cfdc2bf`, run `36202559680`
+
+## Deployment — pending for the download-cost branch
+
+- Verify the current state of `/opt/pixelpilot` and `pixelpilot.service`; preserve `.env`, SQLite and uncommitted work.
+- Deploy this branch using `docs/RUNBOOK.md`, keeping the worker's `PIXELPILOT_REPO_REF` on the same published branch as the controller. Do not blindly reset to `main`.
+- Confirm CI for the exact chosen deployment HEAD, restart the existing service and perform read-only preflight/offer checks.
+- Refresh old offer cards so snapshots contain `machine_id` and transfer quotes; inspect real Download/Upload rates and the configured comparison assumptions in Telegram.
+- Run one text-to-image and one edit smoke test when an authorized server/desktop session is available and the download-inclusive cost has been reviewed. No extra paid rental is needed merely to repeat the already-proven exact-ID fix.
+- During any authorized trial, record the trial's Instance ID and delete only that Instance afterward, then verify provider and local state. Never touch a pre-existing unrelated Instance.
+
+Historical completion, not a claim about this continuation: the Codex branch was deployed, rented Offer `45242185`, reached Qwen READY on Instance `52659808`, then destroyed that test Instance. Its $0.10310 local counter was an hourly-component estimate, not the $1.73 invoice shown later. A literal Telegram Desktop click and image-generation/edit validation were not established by that historical record. See `docs/PROGRESS.md`.
 
 ## Runtime follow-up
-- record real 24 GB generation latency and peak VRAM
-- record real 48 GB generation latency and peak VRAM
-- adjust preferred offer ranking only if measurements show a better cost/performance threshold
-- consider optional seed input UI after the basic deployment is proven
+
+- Measure actual 24 GB and 48 GB generation latency, peak VRAM and cold-download volume before changing hardware thresholds or the 70 GB comparison assumption.
+- Keep the comparison period explicit; setup time counts as billed time and long sessions can change which quote is cheaper.
+- Consider an owner-selected Download ceiling if desired; unset allows known/unknown quotes with disclosure, while a configured ceiling excludes unknown rates. Zero means genuinely free download only.
+- Reconcile a real ambiguous create only if one occurs; do not deliberately create another paid Instance to exercise that path.
+- Optional seed-input UI remains a later enhancement.
 
 No persona/chat/audio/video work is planned for the image product.
-
-## Plan — safe Vast improvements (2026-09-25)
-1. Completed: restore selected image-studio enhancer/discovery/controls and fix exact-ID lookup and host-RAM filter.
-2. Completed: guard duplicate rent and lifecycle races; reconcile ambiguous creates and retry transient status timeouts.
-3. Completed local tests and documentation. Confirm CI on the pushed commit before merge; a real Vast rental remains a deployment smoke test.
-
-## Live rental follow-up (2026-09-26)
-1. Completed: reviewed live symptom and confirmed the SDK string parser preserves the numeric-looking ID as text.
-2. Completed: send an integer ID filter through the Vast SDK and show Offer IDs on cards; retain exact-ID validation and no automatic substitute.
-3. Completed: added regression tests, ran the full suite (105 passed), and confirmed CI on pushed commit `c1c2750`. Live rental initially still failed on all displayed asks; the filter-parity follow-up below addresses a further SDK mismatch.
-
-## Exact-ID SDK filter parity (2026-09-26)
-1. Completed: confirmed structured queries add `rented=false` by default while discovery's string query does not.
-2. Completed: use the discovery baseline during exact-ID verification without the extra `rented=false`; retain the numeric ID and all post-lookup policy checks.
-3. Superseded: the live request comparison showed that removing `rented=false` was necessary request parity but did not fix Vast's empty `id` filter result.
-
-## Machine-scoped exact Offer ID recovery (2026-09-26)
-1. Completed: captured discovery and validation request bodies and raw responses for the same live Offer ID `49299788` with the same 100 GB allocation.
-2. Completed: persist the discovery `machine_id`, query that host during validation, and locally require the unchanged original Offer ID; never substitute another ask.
-3. Completed: local full suite passed (108 tests), matching CI passed, the deployed controller rented Offer ID `45242185` and reached READY on Instance `52659808`, and that test Instance alone was destroyed with billing inactive afterward.

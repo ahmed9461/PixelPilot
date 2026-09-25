@@ -1,122 +1,103 @@
 # Runbook
 
-## Controller update
+## Current deployment target
 
-Run the update from the directory that already contains the persistent PixelPilot controller clone. Do not assume a fixed path or service name.
+This continuation lives on `fix/vast-download-cost-awareness`, based on the completed rental repair in `codex/vast-offer-machine-lookup`. The owner identified the persistent controller as `/opt/pixelpilot` and its service as `pixelpilot.service`; verify these locally before changing anything.
+
+Repository work and CI are complete. This continuation did **not** deploy the VPS or access Telegram Desktop. A prior Codex deployment/rental is historical evidence, not confirmation that this new branch is already running.
+
+## Safe controller update
+
+Use an authorized SSH session, such as the owner's configured `New-VPS` access. Inspect the working tree and current service without dumping `.env` or credentials. Preserve SQLite, `.env` and any uncommitted work. Do not use `git reset --hard origin/main`: `main` may still predate the fixes.
 
 ```bash
-cd /path/to/your/PixelPilot
-git fetch origin main
-git reset --hard origin/main
+cd /opt/pixelpilot
+git status --short
+git branch --show-current
+git rev-parse HEAD
+git fetch origin fix/vast-download-cost-awareness
 ```
 
-Then use the Python environment that the controller already runs with. If the project has a local virtual environment:
+Stop and reconcile any local modifications rather than discarding them. For a clean clone, use the appropriate branch path:
+
+```bash
+# First checkout only, if this local branch does not already exist:
+git switch --track origin/fix/vast-download-cost-awareness
+# For an existing local branch instead:
+# git switch fix/vast-download-cost-awareness
+# git pull --ff-only origin fix/vast-download-cost-awareness
+
+git rev-parse HEAD
+git rev-parse origin/fix/vast-download-cost-awareness
+```
+
+Confirm both SHAs agree and GitHub Actions succeeded for that exact SHA, not an older green run. The implementation/test commit `04e4362676d21a2e4ae735456be7c2943cfdc2bf` passed all 150 tests in run `36202559680`; later documentation commits also need their matching CI checked.
+
+Using the existing controller environment, edit only the intended nonsecret `.env` settings. Do not replace the whole file with `.env.example` on an existing installation:
+
+```dotenv
+PIXELPILOT_REPO_REF=fix/vast-download-cost-awareness
+VAST_ESTIMATED_DOWNLOAD_GB=70
+VAST_COST_COMPARISON_HOURS=1
+```
+
+The worker bootstrap currently uses `git clone --branch`: use the matching published branch or tag, not an arbitrary commit SHA as `PIXELPILOT_REPO_REF`. When integrating into another branch later, update controller and worker ref together. Existing workers do not become upgraded merely because this environment variable changes.
+
+The optional rate ceiling is absent by default. For example, an owner-selected ceiling of $5 per 1000 GB is `VAST_MAX_DOWNLOAD_USD_PER_TB=5`; zero accepts genuinely free inbound quotes only. Leave the key absent/commented for no ceiling, not empty. Do not impose a different budget without the owner's choice. A configured ceiling excludes unknown rates and is not an all-in spending cap.
+
+Use the Python environment already configured for the service:
 
 ```bash
 source .venv/bin/activate
 pip install -e .
 python scripts/preflight.py
+sudo systemctl restart pixelpilot.service
+sudo systemctl is-active pixelpilot.service
 ```
 
-If the controller is managed by systemd, first identify the actual unit name instead of assuming one:
+Verify process startup and only the needed nonsecret configuration fields. Do not print tokens or entire environment files. Refresh Telegram offers after deployment; old snapshots lack machine IDs or transfer rates. Inspect a real offer's Download/Upload quotes, allocated-disk hourly price and estimated comparison before any paid confirmation.
 
-```bash
-systemctl list-units --type=service --all | grep -i pixelpilot
-```
+## Cost interpretation
 
-Then restart the unit that is actually present:
+- The comparison is `billed hours × dph_total + assumed download GB × precise inbound USD/GB`.
+- Defaults are 70 GB and one billed hour. The size is an allowance, not a measured model filesize; the period includes setup, and actual setup/session duration may exceed it.
+- `dph_total` already includes allocated disk: no double-added storage.
+- Display conversion is explicitly `1 TB = 1000 GB`. Native `inet_down_cost` and `inet_up_cost` are USD/GB; use their full precision rather than rounded invoice/console text.
+- Missing/invalid rates are unknown, not free. Known estimated costs rank first; the 48 GB+ only view remains available.
+- Uploads, optional enhancer downloads, additional transfers/retries and storage while stopped can add charges. The running-time counter shown during provision/status/deletion does not meter those charges and must not be called the final invoice.
+- Historical example: Instance `52659808` had a local hourly-component estimate of `$0.10310`, but the owner's invoice later showed `$1.61` of downloads and `$1.73` total. The invoice does not identify a byte breakdown by downloaded component.
 
-```bash
-sudo systemctl restart <actual-unit-name>
-sudo systemctl status <actual-unit-name> --no-pager
-```
+## Preflight and GPU profiles
 
-If the controller is run by Docker, tmux, screen, supervisord, or another process manager, restart it through that same manager.
+`python scripts/preflight.py` checks configured credentials/source, repository/ref reachability and Qwen metadata; live offer searches are read-only. Telegram readiness checking is separate from offer discovery so it remains responsive.
 
-The controller and GPU worker API changed together in the Qwen-Image-2.1 migration. Update the persistent controller before renting a fresh GPU worker.
+48 GB+ VRAM is the full-GPU tier for 2K and faster execution. The 24 GB fallback uses CPU offload and a 48 GB host-RAM floor; more RAM can help enhancement. Start with Standard quality for multiple references. Hardware preference is distinct from download-inclusive cost preference.
 
-## Preflight
-
-```bash
-python scripts/preflight.py
-```
-
-Expected:
-- Telegram credentials valid locally
-- Vast API configured
-- repository/template source configured
-- Qwen-Image-2.1 metadata reachable
-- GPU offers satisfy the configured price, VRAM, reliability, disk and network filters; host RAM is filtered on CPU-offload offers
-
-## GPU profiles
-
-Recommended:
-- 48 GB+ VRAM for 2K and faster full-GPU execution
-
-Fallback:
-- 24 GB VRAM with automatic model CPU offload
-- at least 48 GB host RAM for CPU offload; more may help optional enhancement
-- start with Standard quality when editing multiple references
-
-## Vast worker logs
-
-The bootstrap log is:
+## Worker logs and health
 
 ```text
 /workspace/pixelpilot-bootstrap.log
-```
-
-The image gateway log is:
-
-```text
 /workspace/pixelpilot-image-gateway.log
 ```
 
-## Health
+The controller probes the authenticated mapped inference port. Health reports model, memory mode, detected VRAM, reference limit and optional enhancer `download_policy`, `cached`, `downloading`, and `fail_open=true`.
 
-The controller probes the authenticated public mapped port. A ready worker reports:
-- configured model id
-- memory mode
-- detected GPU VRAM
-- maximum reference count
+Original readiness loads only the base image pipeline. An explicit enhanced request initiates only its required T2I or I2I checkpoint download; that image falls back to Original until the checkpoint is cached. Later requests use enhancement when available. Do not fetch both optional checkpoints just to pass readiness. Stopping or destroying the instance is the provider lifecycle operation; cancelling an asynchronous task is not proof of immediate cessation of a download thread or billing.
 
 ## Failure guidance
 
-CUDA out of memory:
-- switch to Standard quality
-- reduce reference-image count
-- use a 48 GB+ GPU
+CUDA out of memory: use Standard quality, fewer/lower-resolution references or a larger GPU. Host RAM pressure: choose more RAM; enhancement temporarily moves/releases diffusion components and may need extra headroom.
 
-Host RAM pressure while using a 24 GB GPU or the on-demand prompt enhancer:
-- choose a host with more system RAM
-- prefer a 48 GB+ GPU to avoid CPU model offload
+Download failure: inspect network, free disk space and logs. `HF_TOKEN` is optional. An enhanced image falling back is expected while its requested checkpoint downloads or when enhancement fails. A `PE_FAIL_OPEN` NameError identifies a stale worker; align its runtime with the published controller ref rather than reintroducing the retired setting.
 
-Model download failure:
-- check worker network
-- optionally configure `HF_TOKEN`
-- inspect the bootstrap log
+Uncertain rent after timeout/408/429/5xx: keep the pending label, inspect provider instances and use status/startup reconciliation. Do not clear pending state or rent again until the previous outcome is resolved. Never deliberately create another paid Instance to test ambiguity.
 
-Worker is running but not ready:
-- inspect the image gateway log
-- verify the model finished downloading/loading
-- verify the mapped inference port exists
+Offer absent before rent: verify whether discovery and validation show the same actual Offer ID. Live evidence showed `/bundles/` could return an empty `id` search for a simultaneously discoverable ask. Use the stored `machine_id`, explicit `verified=true`, `external=false`, `rentable=true`, `no_default=true` and the same allocated storage, then select only the original Offer ID from raw rows. Do not weaken this to accept another offer on the host.
 
-Qwen Enhance initially uses the original prompt:
-- optional T2I/I2I weights are downloading in the background; check the image gateway log and disk space
-- the result reports fallback; retry after the requested checkpoint is cached
-- health always reports `prompt_enhancer.fail_open=true`; a 500 mentioning the retired `PE_FAIL_OPEN` name means the worker is running code older than the September 26 health fix and should be updated to the controller's published ref
+Changed Download/Upload/hourly quote: refresh the list and review the new details; the controller intentionally requires renewed confirmation. A configured Download ceiling is checked again before creation, even for old cached cards.
 
-Rent outcome is uncertain after a timeout, 408/429 or 5xx:
-- inspect the controller's pending label and Vast instances; the controller blocks another rent
-- use the Telegram status control to retry exact-label reconciliation, or restart the controller to recover
-- do not reset pending state or rent again until the previous request is confirmed absent or its Instance ID is recovered
+## Live acceptance and cleanup
 
-An offer disappears before rent:
-- This is before `create_instance`; it does not create a paid instance. Refresh and compare the actual Offer IDs shown on the cards, since identical GPU/price labels may be different asks.
-- If the same ID appears again and still fails, compare a read-only discovery response with a machine-scoped revalidation using the snapshot's `machine_id`. Vast's `/bundles/` `id` filter was observed returning an empty list for a simultaneously discoverable Offer ID; do not treat that filter alone as proof that the ask vanished.
-- Revalidation must use `verified=true`, `external=false`, `rentable=true` with `no_default=true`, the same `allocated_storage`, and must select only the original Offer ID from the machine-scoped raw response. Never rent a different row automatically.
-- Snapshots created before the machine-scoped fix do not contain `machine_id`; refresh the Telegram offer list after upgrading instead of weakening validation.
+First verify prices/readiness through safe reads. A real image-generation/edit test is still pending and requires an authorized session and review of the download-inclusive cost. Before any paid trial, record any pre-existing instances and identify the new trial's unique Instance ID. Test one original generation and one edit as appropriate; optional enhancement may download another checkpoint and should not be enabled merely as a routine smoke test.
 
-## Lifecycle
-
-Stop pauses GPU billing according to provider behavior but storage can still incur cost. Destroy removes the instance and records the final PixelPilot billing estimate.
+Delete only the identified trial Instance, then verify provider absence and local inactive billing/state. Do not touch a pre-existing unrelated Instance. Stop can leave storage charges; deletion is the cleanup step. The old successful trial `52659808` is already documented as deleted and must not be recreated just to repeat that proof.

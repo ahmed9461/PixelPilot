@@ -1,28 +1,40 @@
-# Active plan — Vast download cost awareness (2026-09-26)
+# Vast download cost awareness — implementation complete, deployment pending
 
-Base: `codex/vast-offer-machine-lookup` at `d84c9e7e9c7dd0ef8c769efcc58c9de9517d0118`.
-Matching push CI: `36198172864`, success. `main` is still `aad2cb6`; do not discard the seven recovered commits or merge unrelated branches.
+Date: 2026-09-26.
+Branch: `fix/vast-download-cost-awareness`.
+Base: `codex/vast-offer-machine-lookup` at `d84c9e7e9c7dd0ef8c769efcc58c9de9517d0118`; its matching CI `36198172864` succeeded.
 
-## Evidence
+## Evidence and scope
 
-- Prior Codex work recorded a live rent/READY/destroy cycle for Instance `52659808`; this session has verified that record and its matching CI, not repeated the live cycle.
-- The owner's invoice for that Instance shows $1.61 download versus about $0.10 GPU. The prior $0.10310 controller estimate is running-time cost, not the Vast invoice total.
-- Current discovery ranks VRAM and hourly price; normalized snapshots omit bandwidth rates. Both optional enhancer checkpoints are prefetched after startup even in Original mode.
+- Prior Codex work recorded a successful rent/READY/destroy cycle for Instance `52659808`. This continuation verified that record and matching CI; it did not repeat the paid trial or a Telegram Desktop click.
+- The owner's invoice for that Instance shows $1.61 for downloading 61.8 GB versus about $0.10 GPU and $0.02 storage. The displayed $0.03/GB is rounded; it must not replace the precise API quote. The earlier $0.10310 controller figure was a running-time estimate, not the invoice total.
+- Before this change, discovery ranked VRAM/hourly price and snapshots dropped transfer rates. Startup also prefetched both optional enhancer checkpoints, including in Original mode. The invoice does not identify how many bytes came from each component.
 
-## Implementation
+## Completed implementation
 
-1. Preserve the machine-scoped, exact Offer ID lookup and all lifecycle safety guards.
-2. Preserve precise download/upload USD/GB rates in offer snapshots; show USD/TB with an explicit unit conversion and mark missing/invalid rates unknown, never free.
-3. Compare a configurable cold-download allowance plus a configurable number of billed running hours. Keep this estimate distinct from the real invoice, with storage already included in `dph_total` and ongoing transfers excluded.
-4. Add an optional download-rate ceiling, apply it to live discovery and before rent, and require fresh confirmation on bandwidth price changes.
-5. Make optional enhancer downloads owner-requested rather than unconditional; never delay Original readiness. Retain raw prompts and fail-open enhancement behavior.
-6. Add regression tests, run CI at the exact pushed HEAD, update memory/decisions/progress/runbook and report deployment separately.
+1. Preserve machine-scoped lookup with exact original Offer ID matching and all lifecycle protections: $0.50/hour cap, `cancel_unavail=true`, duplicate exclusion and ambiguous-create reconciliation.
+2. Preserve precise inbound/outbound USD/GB rates in public snapshots. Display USD/TB using an explicit 1 TB = 1000 GB convention. Missing, malformed, negative or non-finite rates are unknown, never free; genuine zero remains zero.
+3. Rank discovered candidates by a configurable cold-download allowance plus billed running hours. Defaults are 70 GB and 1 hour, comparison assumptions rather than a measured model size or a final-invoice guarantee. `dph_total` already includes allocated storage.
+4. Add an optional download-rate ceiling to discovery and live pre-create validation. Changes in either inbound or outbound rates require refreshed confirmation. No arbitrary new rate ceiling is imposed by default.
+5. Download only the optional T2I or I2I enhancer needed by an explicit enhanced request. Original readiness starts neither optional download. While the requested checkpoint is downloading, that image falls back to Original; cached enhancement retains fail-open behavior.
+6. Show traffic quotes and estimates before confirmation; label the running-time meter as excluding transfers and stopped-instance storage.
+7. Update memory, progress, decisions, environment examples, README and deployment instructions.
+
+## Validation
+
+- Implementation/test commit: `04e4362676d21a2e4ae735456be7c2943cfdc2bf`.
+- Matching GitHub Actions run: `36202559680`, job `108292131992`: **success**.
+- `python -m compileall -q src scripts`: passed.
+- Full `pytest -q`: **150 passed in 5.51s** on GitHub Actions.
+- Local pure pricing tests: **15 passed**; the complete dependency environment was supplied by CI, not the local container.
+- New coverage includes precision and units, zero/unknown/invalid rates, ranking, query/local caps, live down/up quote changes, same-ID single creation, Telegram disclosure, runtime-only billing labels, no Original prefetch, per-model download deduplication, caching/fallback and shutdown cleanup.
 
 ## Completion gates
 
-- [ ] Implementation and regression tests.
-- [ ] Exact-HEAD full CI success.
-- [ ] Updated project records and deployment handoff.
-- [ ] Deploy controller and runtime ref together; real Telegram generation/edit verification only with authorized server/desktop access. Do not create a paid instance merely to re-prove the previously completed rental fix.
+- [x] Implementation and regression tests.
+- [x] Full CI success for the exact implementation HEAD above.
+- [x] Updated project records and deployment handoff.
+- [ ] Deploy the controller and matching runtime branch on `/opt/pixelpilot`; verify `pixelpilot.service` and `PIXELPILOT_REPO_REF`.
+- [ ] Inspect refreshed real quotes and perform a budget-approved Telegram generation/edit smoke test with server/desktop access. Do not rent merely to re-prove the completed earlier rental fix.
 
-No new paid Vast instance has been created in this session. No server or Telegram Desktop connection is available through the currently connected tools.
+No new paid Vast instance was created or deleted in this continuation. The currently connected tools did not provide an authorized VPS/Telegram Desktop session, so no new deployment or live image-generation result is claimed. See `docs/RUNBOOK.md` before deployment; do not reset this work to the older `main`.

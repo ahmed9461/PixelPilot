@@ -1,84 +1,89 @@
 # Decisions
 
+## 2026-09-26 — Download-inclusive costs and requested-only optional downloads
+
+This decision supersedes the older VRAM-first price ranking and startup enhancer-prefetch policy below; the image product and lifecycle safety requirements remain unchanged.
+
+### Precise quotes and units
+
+Persist inbound/outbound quotes from native `inet_down_cost` / `inet_up_cost` as USD/GB, without rounding before computation. USD/TB display explicitly uses `1 TB = 1000 GB`; supported per-TB aliases are converted back to USD/GB only when the native field is absent. A present but invalid native value is unknown, not overridden by an alias. Missing, invalid, negative and non-finite values never become free; genuine zero remains zero.
+
+### Selection and disclosure
+
+Rank the discovered candidate pool using `dph_total × billed hours + inbound USD/GB × assumed cold-download GB`. Defaults are one billed hour and 70 GB, configurable via `VAST_COST_COMPARISON_HOURS` and `VAST_ESTIMATED_DOWNLOAD_GB`. They are comparison assumptions, not a measured filesize, setup-time prediction or final-invoice guarantee. Billed time includes setup, and actual setup/session duration may exceed the chosen period.
+
+Allocated disk is already included in `dph_total` and must not be double-counted. Upload, optional enhancer downloads, additional traffic/retries and stopped-instance storage can add costs. Known quotes rank before unknown quotes; 48 GB+ is an equal-cost tie-breaker, not an unconditional cost preference. The dedicated 48 GB+ view remains available. Do not claim a global marketplace optimum beyond the discovered pool.
+
+Display transfer quotes and the comparison before rental confirmation. A changed Download or Upload quote requires a new confirmation even when hourly price is unchanged. Label the running-time counter honestly, including after deletion: it does not meter traffic or the final invoice. The owner's $1.61 download charge versus roughly $0.10 GPU on Instance `52659808` motivates this separation; the invoice alone does not attribute bytes to specific checkpoints.
+
+### Optional ceiling, not an invented spending budget
+
+`VAST_MAX_DOWNLOAD_USD_PER_TB` is unset by default. When explicitly configured, apply it to the query, local candidate filtering and live pre-create validation; unknown rates are then rejected. Zero permits free download only. The hard $0.50/hour ceiling and all existing guards remain intact. A rate ceiling is not a total-spend ceiling, and this change does not impose an arbitrary additional budget.
+
+### Download only the requested enhancer
+
+Original startup and Original requests must not start either optional checkpoint download. The first explicit enhanced request starts only its necessary T2I or I2I checkpoint, with at most one in-flight download task per model. That image uses Original while uncached; later images may use the cached enhancer. Checkpoint failure leaves the model uncached and enhancement fails open. Health reports download/cached state and fixed `fail_open=true`.
+
+This removes hidden optional cold-start traffic while preserving the official enhancement capability. It does not claim that the base image model is free to download or that all historical invoice bytes came from enhancers. Shutdown cleans asynchronous task state; cancelling a wrapper task is not proof that its underlying download thread or provider billing stopped immediately.
+
+### Deployment boundary
+
+Repository pushes, CI and a historical live trial are distinct evidence. Deploy the controller and worker ref together from the verified branch/tag; do not reset to an older `main`. The current continuation has no new authorized VPS/Desktop session and therefore makes no new deployment, GUI or paid-instance claims. Implementation and regression tests passed full CI at `04e4362676d21a2e4ae735456be7c2943cfdc2bf` (150 tests, run `36202559680`).
+
 ## 2026-09-24 — Qwen-Image-2.1 pivot
 
-PixelPilot is now an image studio rather than a multimodal chat assistant.
+PixelPilot is an image studio rather than a multimodal chat assistant.
 
-### Model
-Use `Qwen/Qwen-Image-2.1` through the official Diffusers pipeline family.
+### Model and prompts
 
-### Prompt handling
-Original mode passes the user's prompt unchanged after non-empty validation. Do not apply assistant personality, emotion, tone, language, reasoning or chat context. Optional Qwen Enhance is selected explicitly.
+Use `Qwen/Qwen-Image-2.1` through the official Diffusers pipeline family. Original mode passes the user's prompt unchanged after non-empty validation. Do not apply assistant personality, emotion, tone, language, reasoning or chat context. Optional Qwen Enhance is selected explicitly.
 
 ### GPU policy
-- minimum searchable VRAM: 24 GB
-- preferred VRAM: 48 GB+
-- 24–47 GB uses model CPU offload in automatic mode
-- 48 GB+ uses full-GPU placement in automatic mode
-- VAE tiling/slicing enabled by default
-- BF16 is the default dtype
-- rental cap remains $0.50/hour
-- disk remains 100 GB
 
-### Quality profiles
-Standard mode uses approximately 1K-class dimensions to reduce VRAM pressure and latency. 2K mode uses Qwen-Image-2.1 model-card aspect-ratio dimensions. Default steps remain 40.
+Minimum searchable VRAM is 24 GB; preferred execution tier is 48 GB+. In automatic mode, 24–47 GB uses CPU offload and 48 GB+ uses full-GPU placement. VAE tiling/slicing are enabled, BF16 is the default, the hourly cap is $0.50 and default disk is 100 GB.
 
-### Editing
-Support a single reference image and Telegram albums up to 10 references.
+### Quality, editing and output
 
-### Output
-Use PNG rather than JPEG so image quality and alpha/transparency are preserved.
+Standard uses approximately 1K-class dimensions for lower VRAM/latency. 2K uses the model-card aspect-ratio sizes. Default steps remain 40. Support a single reference and Telegram albums up to 10 images. Use PNG to preserve quality and alpha/transparency when produced.
 
-### Removed architecture
 Remove vLLM, Whisper, Qwen3-VL, audio/video understanding, assistant profiles, chat history and text-response streaming from active code.
-
 
 ## 2026-09-24 — Optional official Qwen Prompt Enhancer
 
-Add two explicit prompt modes:
-- `original`: byte-preserving user prompt path.
-- `qwen`: official Qwen prompt rewriting.
+Modes: `original` preserves the user prompt; `qwen` requests official rewriting. Use the official 9B checkpoints `Qwen/Qwen-Image-2.1-PE-T2I` and `Qwen/Qwen-Image-2.1-PE-I2I`.
 
-Use the official 9B PE checkpoints:
-- `Qwen/Qwen-Image-2.1-PE-T2I`
-- `Qwen/Qwen-Image-2.1-PE-I2I`
-
-The PE model must not stay resident beside Qwen-Image-2.1. The worker temporarily frees/moves the diffusion pipeline, loads the required PE model on CUDA, rewrites once using the checkpoint's shipped `system_prompt.txt`, unloads it, clears CUDA, restores the diffusion placement, and then generates.
-
-This preserves 24 GB GPU compatibility at the cost of extra latency on enhanced requests. Original mode remains the default and has no extra model download/load cost.
-
+The PE model must not stay resident beside diffusion. Temporarily free/move the diffusion pipeline, load the necessary PE model on CUDA, rewrite once with the checkpoint's `system_prompt.txt`, unload it, clear CUDA, restore diffusion placement, then generate. This preserves the 24 GB profile at the cost of extra latency. Original remains default. The no-extra-optional-download intent is implemented by the requested-only policy above, replacing the intermediate startup-prefetch behavior.
 
 ### Official enhancer inference profile
 
-The Transformers path follows Qwen's published `prompt_rewrite/run_transformers.py` contract rather than a simplified text-only approximation:
-- both T2I and edit use `AutoProcessor` + `AutoModelForImageTextToText`
-- T2I uses presence penalty `1.5` and `max_new_tokens=16256`
-- edit uses presence penalty `0` and `max_new_tokens=24000`
-- both use temperature `1.0`, top-p `0.95`, top-k `20`, thinking enabled, and seed `42`
-- edit references are capped to about 1 megapixel before prompt rewriting, matching Qwen's reference profile
-- CPU-offload search requires 48 GB host RAM; full-GPU search does not require a host-RAM floor. Qwen Enhance may need extra RAM and always falls back to Original on failure.
+The Transformers path follows Qwen's published `prompt_rewrite/run_transformers.py` contract:
+- both paths use `AutoProcessor` and `AutoModelForImageTextToText`
+- T2I uses presence penalty 1.5 and `max_new_tokens=16256`
+- edit uses presence penalty 0 and `max_new_tokens=24000`
+- both use temperature 1.0, top-p 0.95, top-k 20, thinking enabled and seed 42
+- edit references are capped to about one megapixel before rewriting
+- CPU-offload search requires 48 GB host RAM; full-GPU search has no unconditional host-RAM floor. Enhancement may need more RAM and falls back to Original on failure.
 
 ## 2026-09-25 — Offer ID and lifecycle safety
 
-- Search the live Vast marketplace for discovery, then query the exact selected `id` without a ranked result limit before renting. Never silently substitute a similar ask.
-- Require a fresh confirmation when price, GPU, or VRAM changes; keep the $0.50/hour ceiling and 24 GB fallback.
-- Preserve `cancel_unavail=true`. Treat explicit rejection as safe; keep timeouts, 408/429 and 5xx ambiguous, retaining the label until matching instances can be recovered. No further rent while a label is pending.
-- Reserve Telegram lifecycle tasks before awaits; serialize stop/destroy after an in-flight Vast start. Retry isolated status timeouts during provisioning.
-- Prefetch optional PE weights after the image worker is ready so Original works immediately. Use Original until the requested checkpoint is cached or after any enhancer failure.
+- Query the live marketplace before rental rather than trusting a ranked cached pool. The original `id` filter approach was later superseded by machine-scoped proof below; exact original Offer ID matching remains mandatory.
+- Require confirmation on changed hourly price/GPU/VRAM; transfer-quote changes are now included by the current decision above.
+- Preserve `cancel_unavail=true`. Explicit rejection may clear pending state; timeouts, 408/429 and 5xx retain the unique label and block another rent until recovery.
+- Reserve Telegram lifecycle tasks before awaits, serialize manual stop/destroy after in-flight starts, and retry isolated status timeouts during provisioning.
+- The intermediate choice to prefetch PE weights after readiness is superseded. Original fallback for uncached/failed enhancement remains required.
 
 ## 2026-09-26 — Live offer identification
 
-- Keep the exact-ID check before rent. The initial choice to pass the ID as an integer was later superseded by the live API evidence below because Vast's `/bundles/` `id` filter returned no match for IDs present in discovery.
-- Show the Offer ID on every Telegram offer card. Cards with identical model, price and reliability can represent different asks; the refresh counter compares IDs, not just visible specifications.
-- The September 26 live screenshot shows one selected ID absent at validation, but does not by itself prove whether Vast removed it or the old string-typed query failed to match. Recheck with a read-only live query after deployment if the symptom persists.
+- Keep exact original ID matching before rent. Passing `id` as an integer was plausible but later live evidence showed the provider filter itself returned no match for discoverable IDs.
+- Show Offer ID on every Telegram card. Identical model, price and reliability may represent different asks; compare IDs and quote details on refresh.
+- A screenshot alone could not prove provider removal or a string-type mismatch. Read-only request/response evidence was required.
 
 ## 2026-09-26 — Match SDK search defaults on validation
 
-- The installed Vast SDK treats string and structured searches differently: its structured path adds `rented=false` while its string path does not. An exact-ID lookup must not add that extra filter compared with discovery or it can reject offers that were just shown.
-- Use explicit `verified=true`, `external=false`, `rentable=true` and `no_default=true`; keep all local price/GPU/VRAM/policy checks before create and `cancel_unavail=true` at create. The numeric `id` lookup portion of this decision is superseded below.
+The installed SDK structured search adds `rented=false` while string discovery does not. Use explicit `verified=true`, `external=false`, `rentable=true` and `no_default=true` so verification does not silently add a different constraint. Retain local price/specification/policy checks and `cancel_unavail=true`. Removing the extra constraint did not by itself repair the provider's empty `id` result.
 
 ## 2026-09-26 — Revalidate through the discovery machine
 
-- Live evidence is authoritative: `/bundles/` returned `49299788` during discovery and immediately returned an empty list for `id=49299788`, regardless of numeric/string representation and with identical 100 GB allocated storage. The same endpoint returned `49299788` when constrained by its discovery `machine_id`.
-- Persist `machine_id` with each displayed snapshot. Revalidation uses that numeric machine ID only to bound the raw result set, then requires the exact original Offer ID. No other offer on the machine may pass.
-- Continue explicit baseline filters with `no_default=true`, the hard `$0.50/hour` local check, policy/specification revalidation, `cancel_unavail=true`, duplicate-rent exclusion and ambiguous-create reconciliation.
+Live `/bundles/` evidence returned `49299788` during discovery, then an empty `id=49299788` lookup across numeric/string representations with the same 100 GB allocation. A query constrained by discovery `machine_id` returned that original ask.
+
+Persist numeric `machine_id` to bound raw lookup results, then require the exact original Offer ID. Never accept another offer on that machine. Keep explicit baseline filters with `no_default=true`, the hard hourly limit, all policy/specification checks, cancellation-on-unavailable behavior, duplicate exclusion and ambiguous-create reconciliation.
