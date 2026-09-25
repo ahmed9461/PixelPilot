@@ -260,7 +260,7 @@ class VastSdkGateway:
 
     async def search_offers(
         self,
-        query: str,
+        query: str | dict[str, Any],
         limit: int = 8,
         *,
         storage_gb: float = 5.0,
@@ -302,7 +302,9 @@ class VastSdkGateway:
         if offer_id <= 0:
             return None
         rows = await self.search_offers(
-            f"id={int(offer_id)} rentable=true", 1, storage_gb=storage_gb
+            {"id": {"eq": int(offer_id)}, "rentable": {"eq": True}},
+            1,
+            storage_gb=storage_gb,
         )
         return next((row for row in rows if row.offer_id == offer_id), None)
 

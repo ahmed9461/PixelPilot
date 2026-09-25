@@ -129,6 +129,7 @@ SQLite does not store:
 - Normal search performs a dedicated 48 GB+ query plus a 24 GB+ fallback query, deduplicates results, then ranks 48 GB+ first.
 - A separate owner-controlled “48 GB+ only” search mode is available from the offer list.
 - Search refreshes must remain live; do not rotate cached results to simulate market changes.
+- Offer cards show the actual Offer ID so equal GPU, price and reliability labels remain distinguishable.
 - Rental checks query the exact selected Offer ID, independently of the ranked discovery limit; changed price/GPU/VRAM requires renewed confirmation.
 - Explicit 4xx rejection can clear pending state; network, 408/429 and 5xx outcomes retain the unique label and block another rent until reconciliation.
 - Rapid refresh clicks should not launch overlapping marketplace searches.

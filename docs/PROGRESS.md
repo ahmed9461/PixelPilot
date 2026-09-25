@@ -72,3 +72,10 @@ Completed:
 - Optional enhancer weights prefetch after image readiness. Original is the default; uncached or failed enhancement falls back to the original prompt. Removed the fail-closed toggle.
 - Added regression tests for exact ID, stale/change/policy, explicit rejection, 5xx/timeout/408/429 ambiguity, duplicate rent, rapid taps, start/stop ordering, provisioning retry, recovery and both prompt modes.
 - Local full test suite: 104 passed. GPU rental and image runtime still require a live Vast smoke test; no paid instance was created during this work.
+
+## 2026-09-26 — Live rental follow-up
+
+- The first deployment smoke test reported that selected Offer ID `21004761` was absent at exact-ID validation; no create request was sent for that selection. A refresh showed one new ID and one removed ID while two A6000 cards shared the same visible specifications.
+- Updated exact-ID search to send a numeric ID in a structured Vast SDK query. The SDK's string parser preserves `id=...` as text, whereas Vast documents the offer filter as a numeric ID. This is a plausible mismatch; the screenshot alone cannot establish that it caused the failed lookup.
+- Added Offer IDs to Telegram offer cards and regression tests for numeric exact-ID query and visibly distinct same-spec asks. A read-only live exact-ID query and real rental are still needed to confirm the Vast-side result.
+- Local full test suite after this follow-up: 105 passed; no paid Vast instance was created in development.

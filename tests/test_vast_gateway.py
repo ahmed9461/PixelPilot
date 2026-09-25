@@ -115,7 +115,9 @@ def test_lookup_offer_queries_exact_id_without_ranked_pool():
 
         def search_offers(self, **kwargs):
             self.calls.append(kwargs)
-            assert kwargs["query"] == "id=321 rentable=true"
+            assert kwargs["query"] == {
+                "id": {"eq": 321}, "rentable": {"eq": True}
+            }
             return [{"id": 321, "gpu_name": "A6000", "gpu_ram": 48000,
                      "dph_total": 0.43}]
 

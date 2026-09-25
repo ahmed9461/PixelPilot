@@ -32,7 +32,7 @@ def offers_keyboard(
     rows = [
         [
             InlineKeyboardButton(
-                text=f"🔍 {offer.display_name}",
+                text=f"🔍 {offer.display_name} • #{offer.offer_id}",
                 callback_data=f"servers:offer:{offer.offer_id}:{'p' if preferred_only else 'a'}",
                 style="primary",
             )

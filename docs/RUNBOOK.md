@@ -110,6 +110,10 @@ Rent outcome is uncertain after a timeout, 408/429 or 5xx:
 - use the Telegram status control to retry exact-label reconciliation, or restart the controller to recover
 - do not reset pending state or rent again until the previous request is confirmed absent or its Instance ID is recovered
 
+An offer disappears before rent:
+- This is before `create_instance`; it does not create a paid instance. Refresh and compare the actual Offer IDs shown on the cards, since identical GPU/price labels may be different asks.
+- If the same ID appears again and still fails, run a read-only exact-ID Vast search with the configured API key to distinguish a marketplace change from a lookup mismatch. Do not bypass exact-ID validation or rent a different ask automatically.
+
 ## Lifecycle
 
 Stop pauses GPU billing according to provider behavior but storage can still incur cost. Destroy removes the instance and records the final PixelPilot billing estimate.

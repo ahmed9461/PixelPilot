@@ -65,3 +65,9 @@ The Transformers path follows Qwen's published `prompt_rewrite/run_transformers.
 - Preserve `cancel_unavail=true`. Treat explicit rejection as safe; keep timeouts, 408/429 and 5xx ambiguous, retaining the label until matching instances can be recovered. No further rent while a label is pending.
 - Reserve Telegram lifecycle tasks before awaits; serialize stop/destroy after an in-flight Vast start. Retry isolated status timeouts during provisioning.
 - Prefetch optional PE weights after the image worker is ready so Original works immediately. Use Original until the requested checkpoint is cached or after any enhancer failure.
+
+## 2026-09-26 — Live offer identification
+
+- Keep the exact-ID check before rent; pass the ID as an integer in the SDK's structured search query, matching Vast's numeric offer filter. A missing ID must still stop before creation.
+- Show the Offer ID on every Telegram offer card. Cards with identical model, price and reliability can represent different asks; the refresh counter compares IDs, not just visible specifications.
+- The September 26 live screenshot shows one selected ID absent at validation, but does not by itself prove whether Vast removed it or the old string-typed query failed to match. Recheck with a read-only live query after deployment if the symptom persists.
