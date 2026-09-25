@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, Message
 from pixelpilot.bot.callbacks import safe_callback_answer, safe_edit_text
 from pixelpilot.bot.keyboards import destroy_confirm_keyboard, main_menu, offer_confirm_keyboard, offers_keyboard
 from pixelpilot.preflight import run_external_preflight, run_local_preflight
+from pixelpilot.pricing import offer_cost_lines
 from pixelpilot.services.orchestrator import (
     OfferChangedError,
     OfferUnavailableError,
@@ -109,6 +110,8 @@ def _offer_signature(item: Any) -> tuple[Any, ...]:
             round(float(item.get("reliability") or 0.0), 6),
             round(float(item.get("inet_down_mbps") or 0.0), 3),
             str(item.get("gpu_name") or ""),
+            item.get("download_usd_per_gb"),
+            item.get("upload_usd_per_gb"),
         )
     return (
         int(item.offer_id),
@@ -116,6 +119,8 @@ def _offer_signature(item: Any) -> tuple[Any, ...]:
         round(float(item.reliability or 0.0), 6),
         round(float(item.inet_down_mbps or 0.0), 3),
         str(item.gpu_name),
+        getattr(item, "download_usd_per_gb", None),
+        getattr(item, "upload_usd_per_gb", None),
     )
 
 
@@ -154,10 +159,11 @@ def _billing_lines(billing: Any, *, final: bool = False) -> list[str]:
         return []
     active_seconds = float(billing.get("active_seconds") or 0.0)
     cost = float(billing.get("estimated_cost_usd") or 0.0)
-    label = "التكلفة النهائية المقدرة" if final else "التكلفة حتى الآن"
+    label = "تقدير مدة التشغيل بعد الحذف" if final else "تقدير مدة التشغيل فقط"
     return [
         f"⏱ وقت التشغيل المحتسب: <b>{_format_duration(active_seconds)}</b>",
         f"💵 {label}: <b>${cost:.4f}</b>",
+        "<i>ليس إجمالي فاتورة Vast؛ لا يشمل رسوم Download/Upload أو التخزين أثناء الإيقاف.</i>",
     ]
 
 
@@ -235,9 +241,9 @@ async def _search_offers(callback: CallbackQuery, *, preferred_only: bool) -> No
 
     if not offers:
         scope = (
-            "لا توجد حاليًا عروض 48GB+ مطابقة للفلاتر وسقف السعر."
+            "لا توجد حاليًا عروض 48GB+ مطابقة للفلاتر وسقوف الأسعار."
             if preferred_only
-            else "لا توجد عروض مناسبة حاليًا ضمن الفلاتر وسقف السعر المحدد."
+            else "لا توجد عروض مناسبة حاليًا ضمن الفلاتر وسقوف الأسعار المحددة."
         )
         await callback.message.edit_text(
             f"🔄 <b>تحديث السوق #{refresh_no}</b>\n\n{scope}",
@@ -252,17 +258,26 @@ async def _search_offers(callback: CallbackQuery, *, preferred_only: bool) -> No
         title = "🔥 <b>عروض 48GB+ المتاحة</b>"
         discovery = f"المرشحون المطابقون: <b>{candidate_count}</b>"
     else:
-        title = "🧾 <b>أفضل العروض المتاحة</b>"
+        title = "🧾 <b>العروض حسب التكلفة المقدرة</b>"
         discovery = (
             f"المرشحون المطابقون: <b>{candidate_count}</b> "
             f"— منها 48GB+: <b>{preferred_count}</b>"
         )
 
+    settings = orch().settings
+    comparison = (
+        f"المقارنة بين المرشحين: تنزيل مفترض <b>{settings.vast_estimated_download_gb:g} GB</b> "
+        f"+ <b>{settings.vast_cost_comparison_hours:g} ساعة</b> تشغيل.\n"
+        "الرسوم المجهولة تأتي أخيرًا؛ التفاصيل تقديرية وليست فاتورة."
+    )
+    if settings.vast_max_download_usd_per_tb is not None:
+        comparison += f"\nسقف Download: <b>${settings.vast_max_download_usd_per_tb:g}/TB</b>."
     await callback.message.edit_text(
         f"{title}\n{note}\n"
         f"{discovery}\n"
         f"المعروض لك الآن: <b>{len(offers)}</b>\n\n"
-        "اختر عرضًا لمراجعة السعر والمواصفات:",
+        f"{comparison}\n\n"
+        "اختر عرضًا لمراجعة السعر ورسوم البيانات والمواصفات:",
         reply_markup=offers_keyboard(offers, preferred_only=preferred_only),
     )
 
@@ -294,22 +309,28 @@ async def offer_details(callback: CallbackQuery) -> None:
         f"Offer ID: <code>{offer.offer_id}</code>",
         f"GPU: <b>{escape(offer.gpu_name)}</b>",
         f"VRAM: <b>{offer.gpu_ram_gb:.0f} GB</b>",
-        f"السعر: <b>${offer.price_per_hour:.3f}/ساعة</b>",
+        f"السعر مع القرص المخصص: <b>${offer.price_per_hour:.3f}/ساعة</b>",
         f"الموثوقية: <b>{'?' if offer.reliability is None else f'{offer.reliability * 100:.1f}%'} </b>",
     ]
     profile = (
-        "🚀 مفضّل — مناسب لوضع GPU الكامل و2K"
+        "🚀 مناسب لوضع GPU الكامل و2K"
         if offer.gpu_ram_gb >= orch().settings.vast_preferred_gpu_ram_gb
-        else "💡 اقتصادي — يعمل بوضع توفير الذاكرة، ويفضّل معه القياسي"
+        else "💡 يعمل بوضع توفير الذاكرة، ويفضّل معه القياسي"
     )
     lines.append(f"ملف التشغيل: <b>{profile}</b>")
     if offer.inet_down_mbps:
         lines.append(f"سرعة التنزيل: <b>{offer.inet_down_mbps:.0f} Mbps</b>")
     if offer.location:
         lines.append(f"الموقع: <b>{escape(offer.location)}</b>")
+    lines.append("")
+    lines.extend(offer_cost_lines(
+        offer,
+        download_gb=orch().settings.vast_estimated_download_gb,
+        billed_hours=orch().settings.vast_cost_comparison_hours,
+    ))
     lines.extend([
         "",
-        "⚠️ يبدأ عداد التكلفة عند الاستئجار، ويُحسب بالثانية حتى الإيقاف أو الحذف.",
+        "⚠️ تُحسب مدة التشغيل من الاستئجار؛ رسوم البيانات مستقلة، وقد يستمر التخزين بعد الإيقاف حتى الحذف.",
     ])
     await callback.message.edit_text(
         "\n".join(lines),
@@ -468,8 +489,6 @@ async def destroy(callback: CallbackQuery) -> None:
     billing = await orch().last_billing_snapshot()
     lines = ["🗑 تم حذف السيرفر نهائيًا."]
     lines.extend(_billing_lines(billing, final=True))
-    if billing:
-        lines.append("<i>قد توجد رسوم تخزين أو بيانات منفصلة عن عداد التشغيل.</i>")
     await callback.message.edit_text("\n".join(lines), reply_markup=main_menu())
 
 
@@ -622,6 +641,4 @@ async def status(callback: CallbackQuery) -> None:
     if isinstance(offer, dict) and offer.get("price_per_hour") is not None:
         lines.append(f"السعر: <b>${float(offer['price_per_hour']):.3f}/ساعة</b>")
     lines.extend(_billing_lines(state.get("billing")))
-    if state.get("billing"):
-        lines.append("<i>العداد مباشر بالثانية؛ رسوم التخزين أو البيانات قد تكون منفصلة.</i>")
     await callback.message.edit_text("\n".join(lines), reply_markup=main_menu())
