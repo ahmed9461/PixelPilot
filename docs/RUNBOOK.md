@@ -104,6 +104,7 @@ Worker is running but not ready:
 Qwen Enhance initially uses the original prompt:
 - optional T2I/I2I weights are downloading in the background; check the image gateway log and disk space
 - the result reports fallback; retry after the requested checkpoint is cached
+- health always reports `prompt_enhancer.fail_open=true`; a 500 mentioning the retired `PE_FAIL_OPEN` name means the worker is running code older than the September 26 health fix and should be updated to the controller's published ref
 
 Rent outcome is uncertain after a timeout, 408/429 or 5xx:
 - inspect the controller's pending label and Vast instances; the controller blocks another rent

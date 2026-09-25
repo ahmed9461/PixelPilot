@@ -1,12 +1,12 @@
 # TODO
 
 ## Deployment
-- update the persistent controller to the merged Qwen-Image code
-- identify and restart the actual controller service or process manager (see RUNBOOK)
-- rent a fresh GPU from the Telegram UI
-- validate first real Qwen-Image-2.1 download/load
+- completed: update the persistent controller to `codex/vast-offer-machine-lookup`
+- completed: identify and restart `pixelpilot.service`
+- completed through the production orchestration path: rent one displayed GPU, reach READY, then destroy only the test Instance; a literal Telegram Desktop click remains pending where computer-control tooling is available
+- completed: validate a real Qwen-Image-2.1 download/load and authenticated health readiness
 - run one text-to-image and one edit smoke test
-- verify one real exact-ID rental and ambiguous-error recovery with Vast without deliberately creating an extra paid instance
+- completed: verify one real exact-ID rental; ambiguous-create recovery remains covered by tests and should only be exercised live if an actual ambiguous response occurs, never by deliberately creating an extra paid Instance
 
 ## Runtime follow-up
 - record real 24 GB generation latency and peak VRAM
@@ -34,4 +34,4 @@ No persona/chat/audio/video work is planned for the image product.
 ## Machine-scoped exact Offer ID recovery (2026-09-26)
 1. Completed: captured discovery and validation request bodies and raw responses for the same live Offer ID `49299788` with the same 100 GB allocation.
 2. Completed: persist the discovery `machine_id`, query that host during validation, and locally require the unchanged original Offer ID; never substitute another ask.
-3. In progress: local full suite passed (108 tests, including the live-discovered health regression); push the updated independent repair branch, confirm matching CI, finish readiness on the existing test Instance, then destroy only that Instance.
+3. Completed: local full suite passed (108 tests), matching CI passed, the deployed controller rented Offer ID `45242185` and reached READY on Instance `52659808`, and that test Instance alone was destroyed with billing inactive afterward.

@@ -96,3 +96,7 @@ Completed:
 - Added SDK-serialization, same-machine exact-match, non-substitution and snapshot-persistence coverage. A read-only live pass re-found `49299788` with the same price/GPU/VRAM through the repaired path.
 - The first live worker reached the gateway, where health exposed one stale `PE_FAIL_OPEN` reference left after fail-closed configuration was removed. Health now reports the fixed fail-open policy directly, with a regression test.
 - Local CI-equivalent checks passed after both repairs: `compileall` succeeded and the full suite reported 108 passed.
+- Pushed the independent branch `codex/vast-offer-machine-lookup`; matching GitHub Actions runs succeeded for both the offer fix and the health follow-up.
+- Deployed the branch on the persistent controller, set `PIXELPILOT_REPO_REF` to the same published branch, restarted `pixelpilot.service`, and passed preflight including remote ref reachability and eight live offers.
+- The live lifecycle path rented displayed Offer ID `45242185` without substitution, created Instance `52659808` at `$0.45556/hour`, and reached Qwen-Image READY on the same Instance after the health fix. The environment did not expose Telegram Desktop/computer-control tooling, so the same callback-owned `Orchestrator.rent_and_prepare` path was invoked directly rather than claiming a GUI click.
+- Destroyed only test Instance `52659808`. Vast then reported no remaining Instances; SQLite returned to `phase=none`, and final billing was inactive at an estimated `$0.10310`.
