@@ -8,7 +8,7 @@ Active model: `Qwen/Qwen-Image-2.1`.
 
 Supported flows: text-to-image, single-image editing and multi-reference editing with Telegram albums, up to 10 reference images. Output is PNG with seed and dimensions shown to the owner.
 
-Current continuation: `fix/vast-download-cost-awareness`, based on `codex/vast-offer-machine-lookup` at `d84c9e7e9c7dd0ef8c769efcc58c9de9517d0118`. Active plan: `docs/DOWNLOAD_COST_PLAN.md`. The cost-aware changes have passed full CI but have not been deployed by this continuation. Do not replace this work with the older `main` or describe a repository push as a VPS deployment.
+Current stable baseline: `main`. PR #22 merged the validated Vast rental recovery and download-cost-aware work from `fix/vast-download-cost-awareness`. The owner deployed the pre-merge build and reported the live bot working correctly. Future work should branch from current `main`, and controller/worker refs must remain aligned when deploying.
 
 ## Non-negotiable behavior
 
@@ -119,4 +119,4 @@ Qwen3-VL, Qwen2.5-Omni, Whisper, vLLM, audio/video understanding, assistant pers
 
 ## Evidence and deployment boundary
 
-Prior Codex work recorded Offer `45242185` → Instance `52659808` → Qwen READY → deletion of that test Instance. Its local `$0.10310` figure was a running-time estimate, not the owner's later invoice containing `$1.61` download fees. This continuation did not create/delete another paid Instance, deploy the VPS or operate Telegram Desktop. Implementation commit `04e4362676d21a2e4ae735456be7c2943cfdc2bf` passed compile checks and all 150 tests in CI run `36202559680`. Deployment and real generation/edit checks remain explicit TODOs.
+Prior Codex work recorded Offer `45242185` → Instance `52659808` → Qwen READY → deletion of that test Instance. Its local `$0.10310` figure was a running-time estimate, not the owner's later invoice containing `$1.61` download fees. Implementation commit `04e4362676d21a2e4ae735456be7c2943cfdc2bf` passed compile checks and all 150 tests in CI run `36202559680`; head `5bc7cec7574f92b7c9980734cb6b6ff9f793c44d` also passed CI before merge. The owner subsequently deployed the build, verified the live bot behavior, and approved promotion to `main` via PR #22.
