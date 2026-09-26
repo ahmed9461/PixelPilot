@@ -2,9 +2,9 @@
 
 ## Current deployment target
 
-This continuation lives on `fix/vast-download-cost-awareness`, based on the completed rental repair in `codex/vast-offer-machine-lookup`. The owner identified the persistent controller as `/opt/pixelpilot` and its service as `pixelpilot.service`; verify these locally before changing anything.
+The stable repository baseline is now `main` after PR #22 merged the validated Vast rental and download-cost work. The persistent controller is `/opt/pixelpilot` and its service is `pixelpilot.service`; verify these locally before changing anything.
 
-Repository work and CI are complete. This continuation did **not** deploy the VPS or access Telegram Desktop. A prior Codex deployment/rental is historical evidence, not confirmation that this new branch is already running.
+The owner deployed and validated the pre-merge build live and reported the bot working correctly. After the merge, existing controllers/workers remain on whatever ref is already configured until explicitly updated; future deployments should use `main` for both controller and worker.
 
 ## Safe controller update
 
@@ -15,20 +15,20 @@ cd /opt/pixelpilot
 git status --short
 git branch --show-current
 git rev-parse HEAD
-git fetch origin fix/vast-download-cost-awareness
+git fetch origin main
 ```
 
 Stop and reconcile any local modifications rather than discarding them. For a clean clone, use the appropriate branch path:
 
 ```bash
 # First checkout only, if this local branch does not already exist:
-git switch --track origin/fix/vast-download-cost-awareness
+git switch --track origin/main
 # For an existing local branch instead:
-# git switch fix/vast-download-cost-awareness
-# git pull --ff-only origin fix/vast-download-cost-awareness
+# git switch main
+# git pull --ff-only origin main
 
 git rev-parse HEAD
-git rev-parse origin/fix/vast-download-cost-awareness
+git rev-parse origin/main
 ```
 
 Confirm both SHAs agree and GitHub Actions succeeded for that exact SHA, not an older green run. The implementation/test commit `04e4362676d21a2e4ae735456be7c2943cfdc2bf` passed all 150 tests in run `36202559680`; later documentation commits also need their matching CI checked.
@@ -36,7 +36,7 @@ Confirm both SHAs agree and GitHub Actions succeeded for that exact SHA, not an 
 Using the existing controller environment, edit only the intended nonsecret `.env` settings. Do not replace the whole file with `.env.example` on an existing installation:
 
 ```dotenv
-PIXELPILOT_REPO_REF=fix/vast-download-cost-awareness
+PIXELPILOT_REPO_REF=main
 VAST_ESTIMATED_DOWNLOAD_GB=70
 VAST_COST_COMPARISON_HOURS=1
 ```
