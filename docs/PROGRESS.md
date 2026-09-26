@@ -2,10 +2,11 @@
 
 ## Latest status — 2026-09-26, download-inclusive offer selection
 
-Branch: `fix/vast-download-cost-awareness`. Plan: `docs/DOWNLOAD_COST_PLAN.md`.
+Stable branch: `main`. Completed plan: `docs/DOWNLOAD_COST_PLAN.md`.
 
 - Continued from the actual Codex HEAD `d84c9e7e9c7dd0ef8c769efcc58c9de9517d0118` on `codex/vast-offer-machine-lookup`, not the earlier branch named in the interrupted prompt. Verified its matching CI `36198172864` was successful.
 - Confirmed that prior project records already documented rent/READY/destroy for the same Instance `52659808` shown in the owner's invoice. This continuation did not repeat that live test or a Telegram Desktop click.
+- 2026-09-26: owner deployed the validated build, confirmed the bot works correctly in live use, and approved promotion. PR #22 merged the stable work into `main`; future changes should branch from `main`.
 - The invoice shows `$1.61` download charges for 61.8 GB, around `$0.10` GPU and `$0.02` storage, with `$1.73` total. The displayed `$0.03/GB` is rounded. The earlier local `$0.10310` estimate was the hourly running-time component, not the final invoice. The invoice alone does not identify which downloaded component consumed each byte.
 - Added precise inbound/outbound USD/GB fields to normalized offer snapshots, explicit USD/TB display using 1 TB = 1000 GB, and validation distinguishing genuinely free quotes from unknown/invalid/negative/non-finite rates.
 - Discovery now ranks candidates by assumed cold-download cost plus billed hours. Defaults are 70 GB and one hour, both configurable and visibly described as assumptions. Allocated storage already included in `dph_total` is not added twice. The 48 GB+ only mode remains intact.
