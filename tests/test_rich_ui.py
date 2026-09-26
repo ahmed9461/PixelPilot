@@ -12,6 +12,7 @@ def test_home_rich_message_is_rtl_and_image_focused():
 def test_settings_rich_message_contains_image_controls():
     card = settings_card(
         {
+            "prompt_mode": "تحسين Qwen",
             "quality": "قياسي",
             "aspect_ratio": "1:1",
             "steps": 40,
@@ -20,6 +21,7 @@ def test_settings_rich_message_contains_image_controls():
     html = card.html or ""
     assert card.is_rtl is True
     assert "إعدادات الصور" in html
+    assert "تحسين Qwen" in html
     assert "1:1" in html
     assert "40" in html
     assert "الشخصية" not in html

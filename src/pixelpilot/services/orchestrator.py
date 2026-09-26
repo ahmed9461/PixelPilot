@@ -9,6 +9,7 @@ from typing import Any, Awaitable, Callable
 from pixelpilot.config import Settings
 from pixelpilot.db import Database
 from pixelpilot.domain import GeneratedImage, GpuOffer, InstancePhase, ReferenceImage
+from pixelpilot.pricing import GB_PER_TB, download_rate_allowed, offer_cost_rank
 from pixelpilot.services.billing import (
     begin_billing,
     billing_snapshot,
@@ -19,13 +20,25 @@ from pixelpilot.services.billing import (
     sync_billing_status,
 )
 from pixelpilot.services.inference_client import InferenceClient
-from pixelpilot.services.vast_gateway import VastSdkGateway, build_offer_query
+from pixelpilot.services.vast_gateway import VastCreateRejected, VastSdkGateway, build_offer_query
 
 
 ProgressCallback = Callable[[str], Awaitable[None]]
 
 
 class OrchestratorError(RuntimeError):
+    pass
+
+
+class OfferUnavailableError(OrchestratorError):
+    pass
+
+
+class OfferChangedError(OrchestratorError):
+    pass
+
+
+class RentRejectedError(OrchestratorError):
     pass
 
 
@@ -43,8 +56,10 @@ class Orchestrator:
         self.vast = vast
         self._inference_factory = inference_factory or self._default_inference_factory
         self._inference_lock = asyncio.Lock()
+        self._offers_lock = asyncio.Lock()
         self._rent_lock = asyncio.Lock()
         self._control_lock = asyncio.Lock()
+        self._status_reads: dict[int, asyncio.Task[Any]] = {}
 
     def _default_inference_factory(self, url: str, token: str) -> InferenceClient:
         return InferenceClient(
@@ -55,35 +70,115 @@ class Orchestrator:
             timeout_seconds=self.settings.inference_request_timeout_seconds,
         )
 
-    async def offers(self) -> list[GpuOffer]:
-        query = build_offer_query(
-            self.settings.vast_min_gpu_ram_gb,
-            self.settings.vast_min_reliability,
-            self.settings.vast_max_price_usd_hour,
-            disk_gb=self.settings.vast_disk_gb,
-            verified_only=self.settings.vast_verified_only,
-            datacenter_only=self.settings.vast_datacenter_only,
-            min_direct_ports=self.settings.vast_min_direct_ports,
-            min_inet_down_mbps=self.settings.vast_min_inet_down_mbps,
-            min_cpu_ram_gb=self.settings.vast_min_cpu_ram_gb,
+    async def _probe_inference_ready(self, inference: InferenceClient) -> bool:
+        try:
+            return await asyncio.wait_for(
+                inference.is_ready(),
+                timeout=float(self.settings.inference_probe_timeout_seconds),
+            )
+        except (TimeoutError, asyncio.TimeoutError):
+            return False
+        except Exception:
+            return False
+
+    async def _show_instance_bounded(self, instance_id: int) -> Any:
+        task = self._status_reads.get(instance_id)
+        if task is None or task.done():
+            task = asyncio.create_task(self.vast.show_instance(instance_id))
+            self._status_reads[instance_id] = task
+
+            def release(done: asyncio.Task[Any]) -> None:
+                if self._status_reads.get(instance_id) is done:
+                    self._status_reads.pop(instance_id, None)
+                if not done.cancelled():
+                    done.exception()  # consume an error after callers timed out
+
+            task.add_done_callback(release)
+        try:
+            return await asyncio.wait_for(
+                asyncio.shield(task),
+                timeout=float(self.settings.vast_status_timeout_seconds),
+            )
+        except (TimeoutError, asyncio.TimeoutError) as exc:
+            raise OrchestratorError(
+                "انتهت مهلة قراءة حالة السيرفر من Vast؛ حاول مرة أخرى."
+            ) from exc
+
+    async def offers(self, *, preferred_only: bool = False) -> list[GpuOffer]:
+        async with self._offers_lock:
+            return await self._offers_locked(preferred_only=preferred_only)
+
+    async def _offers_locked(self, *, preferred_only: bool) -> list[GpuOffer]:
+        preferred_query = self._offer_query_for(
+            max(self.settings.vast_min_gpu_ram_gb, self.settings.vast_preferred_gpu_ram_gb)
         )
-        rows = await self.vast.search_offers(
-            query,
-            self.settings.vast_default_limit,
+        preferred_rows = await self.vast.search_offers(
+            preferred_query,
+            self.settings.vast_search_pool_limit,
             storage_gb=float(self.settings.vast_disk_gb),
         )
-        # Prefer GPUs that can keep the full BF16 pipeline resident while still
-        # keeping cheaper 24 GB offload-capable offers visible as fallbacks.
-        rows.sort(
-            key=lambda row: (
-                row.gpu_ram_gb < self.settings.vast_preferred_gpu_ram_gb,
-                row.price_per_hour,
-                -(row.dlperf or 0.0),
+
+        fallback_query: str | None = None
+        fallback_rows: list[GpuOffer] = []
+        if (
+            not preferred_only
+            and self.settings.vast_min_gpu_ram_gb
+            < self.settings.vast_preferred_gpu_ram_gb
+        ):
+            fallback_query = self._offer_query_for(
+                self.settings.vast_min_gpu_ram_gb
+            )
+            fallback_rows = await self.vast.search_offers(
+                fallback_query,
+                self.settings.vast_search_pool_limit,
+                storage_gb=float(self.settings.vast_disk_gb),
+            )
+
+        deduped: dict[int, GpuOffer] = {}
+        for row in (*preferred_rows, *fallback_rows):
+            deduped[row.offer_id] = row
+
+        candidates = [
+            row
+            for row in deduped.values()
+            if 0 < row.price_per_hour <= self.settings.vast_max_price_usd_hour
+            and download_rate_allowed(row, self.settings.vast_max_download_usd_per_tb)
+        ]
+        candidates.sort(
+            key=lambda row: offer_cost_rank(
+                row,
+                download_gb=self.settings.vast_estimated_download_gb,
+                billed_hours=self.settings.vast_cost_comparison_hours,
+                preferred_vram_gb=self.settings.vast_preferred_gpu_ram_gb,
             )
         )
-        await self.db.set("offers.last", [row.public_dict() for row in rows])
-        await self.db.set("offers.last_refreshed_at", datetime.now(UTC).isoformat())
-        await self.db.event("offers.search", {"query": query, "count": len(rows)})
+        rows = candidates[: self.settings.vast_default_limit]
+        mode = "preferred" if preferred_only else "all"
+
+        await self.db.set_many(
+            {
+                "offers.last": [row.public_dict() for row in rows],
+                "offers.last_refreshed_at": datetime.now(UTC).isoformat(),
+                "offers.search_mode": mode,
+                "offers.candidate_count": len(candidates),
+                "offers.preferred_candidate_count": sum(
+                    row.gpu_ram_gb >= self.settings.vast_preferred_gpu_ram_gb
+                    for row in candidates
+                ),
+            }
+        )
+        await self.db.event(
+            "offers.search",
+            {
+                "mode": mode,
+                "preferred_query": preferred_query,
+                "fallback_query": fallback_query,
+                "candidate_count": len(candidates),
+                "display_count": len(rows),
+                "estimated_download_gb": self.settings.vast_estimated_download_gb,
+                "comparison_hours": self.settings.vast_cost_comparison_hours,
+            },
+        )
         return rows
 
     async def cached_offer(self, offer_id: int) -> GpuOffer | None:
@@ -92,6 +187,46 @@ class Orchestrator:
             if isinstance(row, dict) and int(row.get("offer_id") or 0) == offer_id:
                 return GpuOffer(**row)
         return None
+
+
+    def _offer_query_for(self, min_vram_gb: int) -> str:
+        query = build_offer_query(
+            min_vram_gb,
+            self.settings.vast_min_reliability,
+            self.settings.vast_max_price_usd_hour,
+            disk_gb=self.settings.vast_disk_gb,
+            verified_only=self.settings.vast_verified_only,
+            datacenter_only=self.settings.vast_datacenter_only,
+            min_direct_ports=self.settings.vast_min_direct_ports,
+            min_inet_down_mbps=self.settings.vast_min_inet_down_mbps,
+            min_cpu_ram_gb=(
+                self.settings.vast_min_cpu_ram_gb
+                if min_vram_gb < self.settings.image_full_gpu_min_vram_gb
+                or self.settings.image_memory_mode == "offload"
+                else 0
+            ),
+        )
+        cap = self.settings.vast_max_download_usd_per_tb
+        if cap is not None:
+            query += f" inet_down_cost<={cap / GB_PER_TB:.12g}"
+        return query
+
+    async def live_offer(self, snapshot: GpuOffer) -> GpuOffer | None:
+        return await self.vast.lookup_offer(
+            snapshot.offer_id,
+            machine_id=snapshot.machine_id,
+            storage_gb=float(self.settings.vast_disk_gb),
+        )
+
+    @staticmethod
+    def _offer_snapshot_changed(old: GpuOffer, new: GpuOffer) -> bool:
+        return (
+            old.gpu_name != new.gpu_name
+            or abs(old.gpu_ram_gb - new.gpu_ram_gb) > 1e-6
+            or abs(old.price_per_hour - new.price_per_hour) > 1e-9
+            or old.download_usd_per_gb != new.download_usd_per_gb
+            or old.upload_usd_per_gb != new.upload_usd_per_gb
+        )
 
     async def rent(self, offer_id: int) -> dict[str, Any]:
         async with self._rent_lock:
@@ -102,6 +237,10 @@ class Orchestrator:
         current = await self.db.get("instance.id")
         if current:
             raise OrchestratorError(f"There is already an active instance: {current}")
+        if await self.db.get("instance.pending_label"):
+            raise OrchestratorError(
+                "يوجد طلب استئجار سابق غير محسوم. افحص Instance في Vast أو انتظر استعادته قبل طلب جديد."
+            )
         phase = await self.db.get("instance.phase", InstancePhase.NONE.value)
         if phase in {
             InstancePhase.RENTING.value,
@@ -116,11 +255,74 @@ class Orchestrator:
 
         offer = await self.cached_offer(offer_id)
         if offer is None:
-            raise OrchestratorError("Offer is not in the latest search results. Search again before renting.")
+            raise OfferUnavailableError(
+                "هذا العرض لم يعد موجودًا في آخر قائمة. حدّث العروض وأعد الاختيار."
+            )
         if offer.price_per_hour > self.settings.vast_max_price_usd_hour:
-            raise OrchestratorError("Offer price exceeds the configured hard maximum")
+            raise OfferChangedError(
+                "سعر العرض تجاوز السقف المحدد. حدّث العروض وأعد التأكيد."
+            )
         if offer.gpu_ram_gb < self.settings.vast_min_gpu_ram_gb:
-            raise OrchestratorError("Offer VRAM is below the configured minimum")
+            raise OfferChangedError(
+                "مواصفات العرض لم تعد تطابق الحد الأدنى. حدّث العروض."
+            )
+
+        live_offer = await self.live_offer(offer)
+        if live_offer is None:
+            await self.db.event(
+                "offer.stale_before_rent",
+                {"offer_id": offer_id},
+            )
+            raise OfferUnavailableError(
+                f"العرض رقم {offer_id} اختفى من السوق قبل الاستئجار. "
+                "قد ترى جهازًا مشابهًا لكنه عرض مختلف. حدّث القائمة وأعد الاختيار."
+            )
+        if self._offer_snapshot_changed(offer, live_offer):
+            await self.db.event(
+                "offer.changed_before_rent",
+                {
+                    "offer_id": offer_id,
+                    "old_price": offer.price_per_hour,
+                    "new_price": live_offer.price_per_hour,
+                    "old_gpu": offer.gpu_name,
+                    "new_gpu": live_offer.gpu_name,
+                    "old_download_usd_per_gb": offer.download_usd_per_gb,
+                    "new_download_usd_per_gb": live_offer.download_usd_per_gb,
+                    "old_upload_usd_per_gb": offer.upload_usd_per_gb,
+                    "new_upload_usd_per_gb": live_offer.upload_usd_per_gb,
+                },
+            )
+            raise OfferChangedError(
+                f"العرض رقم {offer_id} تغيّر منذ فتح التفاصيل. "
+                "حدّث القائمة وراجِع سعر الساعة ورسوم البيانات والمواصفات مرة أخرى."
+            )
+        if (
+            live_offer.price_per_hour <= 0
+            or live_offer.price_per_hour > self.settings.vast_max_price_usd_hour
+            or live_offer.gpu_ram_gb < self.settings.vast_min_gpu_ram_gb
+        ):
+            raise OfferChangedError("تغير السعر أو VRAM خارج سياسة الاستئجار. حدّث العرض وأعد التأكيد.")
+        if not download_rate_allowed(live_offer, self.settings.vast_max_download_usd_per_tb):
+            raise OfferChangedError(
+                "سعر Download مجهول أو يتجاوز سقف التنزيل المحدد. حدّث العروض وأعد التأكيد."
+            )
+        raw = live_offer.raw or {}
+        needs_offload = (live_offer.gpu_ram_gb < self.settings.image_full_gpu_min_vram_gb
+                         or self.settings.image_memory_mode == "offload")
+        cpu_ram_mb = raw.get("cpu_ram")
+        if (
+            (self.settings.vast_verified_only and live_offer.verified is False)
+            or (live_offer.reliability is not None and live_offer.reliability < self.settings.vast_min_reliability)
+            or (live_offer.disk_space_gb is not None and live_offer.disk_space_gb < self.settings.vast_disk_gb)
+            or (live_offer.inet_down_mbps is not None and live_offer.inet_down_mbps < self.settings.vast_min_inet_down_mbps)
+            or (raw.get("num_gpus") is not None and int(raw["num_gpus"]) != 1)
+            or (raw.get("direct_port_count") is not None and int(raw["direct_port_count"]) < self.settings.vast_min_direct_ports)
+            or (self.settings.vast_datacenter_only and raw.get("datacenter") is False)
+            or (needs_offload and cpu_ram_mb is not None
+                and float(cpu_ram_mb) / 1000 < self.settings.vast_min_cpu_ram_gb)
+        ):
+            raise OfferChangedError("العرض لم يعد يطابق متطلبات التشغيل. حدّث القائمة وأعد التأكيد.")
+        offer = live_offer
 
         inference_token = secrets.token_urlsafe(32)
         unique_label = f"PixelPilot-{secrets.token_hex(6)}"
@@ -166,16 +368,40 @@ class Orchestrator:
                 )
 
         if not instance_id:
-            await self.db.set("instance.phase", InstancePhase.ERROR.value)
             await self.db.event(
                 "instance.rent_failed",
-                {"offer_id": offer_id, "label": unique_label, "error": str(create_error or result)},
+                {
+                    "offer_id": offer_id,
+                    "label": unique_label,
+                    "error": str(create_error or result),
+                },
             )
+            if isinstance(create_error, VastCreateRejected):
+                await self.db.set_many(
+                    {
+                        "instance.phase": InstancePhase.NONE.value,
+                        "instance.pending_label": None,
+                        "instance.offer": None,
+                        "inference.token": None,
+                        "inference.url": None,
+                    }
+                )
+                raise RentRejectedError(
+                    f"Vast رفض استئجار العرض رقم {offer_id}: "
+                    f"{create_error.reason}"
+                ) from create_error
+
+            await self.db.set("instance.phase", InstancePhase.ERROR.value)
             if create_error:
                 raise OrchestratorError(
-                    f"Vast create_instance failed and no matching instance was found: {create_error}"
+                    "تعذر تأكيد إنشاء السيرفر من Vast. "
+                    "تم الاحتفاظ بمعرّف التتبع حتى لا نفقد أي Instance "
+                    "قد يكون أُنشئ رغم انقطاع الرد."
                 ) from create_error
-            raise OrchestratorError(f"Could not determine instance id from Vast response: {result}")
+            raise OrchestratorError(
+                "Vast لم يُرجع رقم Instance صالحًا. "
+                "تم حفظ تفاصيل المحاولة للمراجعة."
+            )
 
         await self.db.set("instance.id", instance_id)
         await self.db.set("instance.label", unique_label)
@@ -211,6 +437,16 @@ class Orchestrator:
                     {"instance_id": result["instance_id"], "error": str(exc)},
                 )
                 raise
+            current_phase = await self.db.get(
+                "instance.phase",
+                InstancePhase.NONE.value,
+            )
+            if current_phase == InstancePhase.STOPPED.value:
+                await self.db.event(
+                    "instance.provision_stopped",
+                    {"instance_id": result["instance_id"], "error": str(exc)},
+                )
+                raise
             await self.db.set("instance.phase", InstancePhase.ERROR.value)
             await self.db.event(
                 "instance.provision_failed",
@@ -241,10 +477,23 @@ class Orchestrator:
             if not current_id or int(current_id) != int(instance_id):
                 raise OrchestratorError("Provisioning was cancelled because this instance is no longer current")
 
-            ref = await self.vast.show_instance(instance_id)
+            try:
+                ref = await self._show_instance_bounded(instance_id)
+            except OrchestratorError as exc:
+                # A slow status request is one missed poll, not evidence of a
+                # failed GPU. The overall readiness deadline still applies.
+                notice = str(exc)
+                if progress and notice != last_notice:
+                    await progress(notice)
+                    last_notice = notice
+                await asyncio.sleep(self.settings.provision_poll_seconds)
+                continue
             status = ref.status.lower()
             if status in {"running", "frozen", "stopped"}:
                 await sync_billing_status(self.db, status)
+            if status == "stopped":
+                await self.db.set("instance.phase", InstancePhase.STOPPED.value)
+                raise OrchestratorError("تم إيقاف السيرفر أثناء التجهيز")
             if status in {"exited", "error", "failed", "dead"}:
                 raise OrchestratorError(f"Vast instance entered terminal state: {ref.status}")
 
@@ -260,7 +509,7 @@ class Orchestrator:
                 await self.db.set("inference.url", url)
                 token = await self.db.get("inference.token")
                 inference = self._inference_factory(url, str(token or ""))
-                if await inference.is_ready():
+                if await self._probe_inference_ready(inference):
                     await self.db.set("instance.phase", InstancePhase.READY.value)
                     await self._touch_activity()
                     await self.db.event(
@@ -296,6 +545,11 @@ class Orchestrator:
             await self.db.set("instance.phase", InstancePhase.STOPPED.value)
             await self.db.event("instance.stopped", {"instance_id": instance_id})
             return True
+
+    async def wait_for_control_idle(self) -> None:
+        # Stop/destroy must wait for an in-flight SDK start/stop mutation.
+        async with self._control_lock:
+            pass
 
     async def start_current(self, progress: ProgressCallback | None = None) -> bool:
         async with self._control_lock:
@@ -337,6 +591,10 @@ class Orchestrator:
             return True
 
     async def current_state(self, *, probe_inference: bool = False) -> dict[str, Any]:
+        if (not self._rent_lock.locked()
+                and not await self.db.get("instance.id")
+                and await self.db.get("instance.pending_label")):
+            await self.reconcile_pending()
         instance_id = await self.db.get("instance.id")
         phase = await self.db.get("instance.phase", InstancePhase.NONE.value)
         offer = await self.db.get("instance.offer")
@@ -345,15 +603,26 @@ class Orchestrator:
             "phase": phase,
             "offer": offer,
             "model_id": self.settings.model_id,
+            "pending_label": await self.db.get("instance.pending_label"),
         }
         if not instance_id:
             return state_data
 
-        ref = await self.vast.show_instance(int(instance_id))
-        if ref.status.lower() in {"running", "frozen", "stopped"}:
+        ref = await self._show_instance_bounded(int(instance_id))
+        vast_status = ref.status.lower()
+        if vast_status in {"running", "frozen", "stopped"}:
             await sync_billing_status(self.db, ref.status)
+
+        if vast_status == "stopped":
+            phase = InstancePhase.STOPPED.value
+            await self.db.set("instance.phase", phase)
+        elif vast_status in {"exited", "error", "failed", "dead"}:
+            phase = InstancePhase.ERROR.value
+            await self.db.set("instance.phase", phase)
+
         state_data.update(
             {
+                "phase": phase,
                 "vast_status": ref.status,
                 "public_ip": ref.public_ip,
                 "mapped_port": ref.mapped_port,
@@ -363,7 +632,9 @@ class Orchestrator:
         if probe_inference:
             try:
                 inference = await self._current_inference()
-                state_data["inference_ready"] = await inference.is_ready()
+                state_data["inference_ready"] = await self._probe_inference_ready(
+                    inference
+                )
             except Exception:
                 state_data["inference_ready"] = False
         return state_data
@@ -377,6 +648,7 @@ class Orchestrator:
         steps: int,
         seed: int | None = None,
         reference_images: tuple[ReferenceImage, ...] = (),
+        enhance_prompt: bool = False,
     ) -> GeneratedImage:
         if self._inference_lock.locked():
             raise OrchestratorError("يوجد طلب إنشاء صورة آخر قيد المعالجة حاليًا")
@@ -410,6 +682,7 @@ class Orchestrator:
                     steps=steps,
                     seed=seed,
                     reference_images=reference_images,
+                    enhance_prompt=enhance_prompt,
                 )
                 await self.db.event(
                     "image.generated",
@@ -422,6 +695,9 @@ class Orchestrator:
                         "steps": steps,
                         "seed": result.seed,
                         "model": result.model,
+                        "prompt_enhanced": result.prompt_enhanced,
+                        "enhancer_model": result.enhancer_model,
+                        "enhancer_fallback": result.enhancer_fallback,
                     },
                 )
                 return result
@@ -450,35 +726,12 @@ class Orchestrator:
 
         instance_id = await self.db.get("instance.id")
         if not instance_id:
-            pending_label = await self.db.get("instance.pending_label")
-            if not pending_label:
+            instance_id = await self.reconcile_pending()
+            if not instance_id:
                 return
-            try:
-                matches = await self.vast.find_instances_by_label(str(pending_label))
-            except Exception as exc:
-                await self.db.event(
-                    "instance.pending_recovery_failed",
-                    {"label": pending_label, "error": str(exc)},
-                )
-                return
-            if len(matches) != 1:
-                await self.db.event(
-                    "instance.pending_recovery_unresolved",
-                    {"label": pending_label, "count": len(matches)},
-                )
-                return
-            instance_id = matches[0].instance_id
-            await self.db.set("instance.id", instance_id)
-            await self.db.set("instance.label", pending_label)
-            await self.db.set("instance.pending_label", None)
-            await self.db.set("instance.phase", InstancePhase.BOOTING.value)
-            await self.db.event(
-                "instance.pending_recovered",
-                {"instance_id": instance_id, "label": pending_label},
-            )
 
         try:
-            ref = await self.vast.show_instance(int(instance_id))
+            ref = await self._show_instance_bounded(int(instance_id))
         except Exception as exc:
             await self.db.event(
                 "instance.recovery_probe_failed",
@@ -510,6 +763,34 @@ class Orchestrator:
                 "instance.recovery_failed",
                 {"instance_id": instance_id, "error": str(exc)},
             )
+
+    async def reconcile_pending(self) -> int | None:
+        pending_label = await self.db.get("instance.pending_label")
+        if not pending_label:
+            return None
+        try:
+            matches = await asyncio.wait_for(
+                self.vast.find_instances_by_label(str(pending_label)),
+                timeout=float(self.settings.vast_status_timeout_seconds),
+            )
+        except Exception as exc:
+            await self.db.event("instance.pending_recovery_failed", {"error": str(exc)})
+            return None
+        if len(matches) != 1:
+            await self.db.event("instance.pending_recovery_unresolved", {"count": len(matches)})
+            return None
+        instance_id = matches[0].instance_id
+        await self.db.set_many({
+            "instance.id": instance_id,
+            "instance.label": pending_label,
+            "instance.pending_label": None,
+            "instance.phase": InstancePhase.BOOTING.value,
+        })
+        offer = await self.db.get("instance.offer")
+        if isinstance(offer, dict) and offer.get("price_per_hour"):
+            await begin_billing(self.db, float(offer["price_per_hour"]))
+        await self.db.event("instance.pending_recovered", {"instance_id": instance_id})
+        return instance_id
 
     async def last_billing_snapshot(self) -> dict[str, Any] | None:
         return await last_billing_snapshot(self.db)
@@ -544,6 +825,8 @@ class Orchestrator:
             "IMAGE_VAE_SLICING": str(self.settings.image_vae_slicing).lower(),
             "IMAGE_MAX_REFERENCE_IMAGES": str(self.settings.image_max_reference_images),
             "IMAGE_MAX_UPLOAD_MB": str(self.settings.image_max_upload_mb),
+            "PROMPT_ENHANCER_T2I_ID": self.settings.prompt_enhancer_t2i_id,
+            "PROMPT_ENHANCER_I2I_ID": self.settings.prompt_enhancer_i2i_id,
             "HF_HOME": "/workspace/hf-cache",
             "DATA_DIRECTORY": "/workspace",
         }

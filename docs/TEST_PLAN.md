@@ -12,8 +12,11 @@ Every push and pull request runs:
 - Qwen-Image defaults and validation
 - 24 GB minimum / 48 GB preferred GPU policy
 - Vast query and lifecycle
+- machine-scoped exact Offer ID lookup with SDK request parity and no same-host substitution, changed price/GPU/VRAM, hard cap, rejection and ambiguous create reconciliation
+- duplicate rent and rapid callback handling, start/stop ordering, retry of transient status timeouts
 - image generation API payloads
 - exact prompt preservation
+- optional official T2I/I2I enhancement and fallback to Original when uncached or failed
 - multi-reference multipart edits
 - image settings/preset dimensions
 - owner-only access helpers

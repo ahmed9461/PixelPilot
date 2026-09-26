@@ -12,6 +12,14 @@ class VastError(RuntimeError):
     pass
 
 
+class VastCreateRejected(VastError):
+    """Vast explicitly rejected an instance creation request."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(f"Vast rejected instance creation: {reason}")
+
+
 def build_offer_query(
     min_gpu_ram_gb: int,
     min_reliability: float,
@@ -73,6 +81,12 @@ def normalize_offer(raw: dict[str, Any]) -> GpuOffer:
         verified = bool(verified_raw)
     elif raw.get("verification") is not None:
         verified = str(raw.get("verification")).lower() in {"verified", "true", "1"}
+    machine_id: int | None = None
+    try:
+        if raw.get("machine_id") is not None:
+            machine_id = int(raw["machine_id"])
+    except (TypeError, ValueError):
+        pass
     return GpuOffer(
         offer_id=int(raw.get("id") or raw.get("ask_id") or 0),
         gpu_name=str(raw.get("gpu_name") or raw.get("gpu_display_name") or "Unknown GPU"),
@@ -84,8 +98,61 @@ def normalize_offer(raw: dict[str, Any]) -> GpuOffer:
         inet_down_mbps=_num(raw, "inet_down", default=0.0) or None,
         disk_space_gb=_num(raw, "disk_space", default=0.0) or None,
         verified=verified,
+        machine_id=machine_id,
         raw=raw,
     )
+
+
+def _safe_error_text(value: Any, *, limit: int = 300) -> str:
+    if value is None:
+        return "Vast rejected the request"
+    text = " ".join(str(value).split())
+    if not text:
+        return "Vast rejected the request"
+    return text[:limit]
+
+
+def _http_rejection_reason(exc: Exception) -> str | None:
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    try:
+        status_code = int(status)
+    except (TypeError, ValueError):
+        return None
+    # A gateway timeout or rate limiter is not proof that the request did not
+    # reach Vast. Keep the label until reconciliation can establish the result.
+    if not 400 <= status_code < 500 or status_code in {408, 429}:
+        return None
+
+    payload: Any = None
+    try:
+        payload = response.json()
+    except Exception:
+        payload = None
+
+    if isinstance(payload, dict):
+        for key in ("msg", "message", "error", "detail", "reason"):
+            if payload.get(key):
+                return f"HTTP {status_code}: {_safe_error_text(payload.get(key))}"
+    body = getattr(response, "text", None)
+    if body:
+        return f"HTTP {status_code}: {_safe_error_text(body)}"
+    return f"HTTP {status_code}"
+
+
+def _create_rejection_reason(mapped: dict[str, Any]) -> str | None:
+    success = mapped.get("success")
+    if success is False:
+        for key in ("msg", "message", "error", "detail", "reason"):
+            if mapped.get(key):
+                return _safe_error_text(mapped.get(key))
+        return "Vast reported success=false"
+
+    if not any(mapped.get(key) for key in ("new_contract", "instance_id", "contract_id")):
+        for key in ("error", "errors"):
+            if mapped.get(key):
+                return _safe_error_text(mapped.get(key))
+    return None
 
 
 def _coerce_mapping(value: Any) -> dict[str, Any]:
@@ -200,10 +267,11 @@ class VastSdkGateway:
 
     async def search_offers(
         self,
-        query: str,
+        query: str | dict[str, Any],
         limit: int = 8,
         *,
         storage_gb: float = 5.0,
+        no_default: bool = False,
     ) -> list[GpuOffer]:
         """Run a fresh marketplace request and return the cheapest matches.
 
@@ -223,6 +291,7 @@ class VastSdkGateway:
                 order="dph_total",
                 limit=backend_limit,
                 storage=float(storage_gb),
+                no_default=no_default,
             )
         except Exception as exc:
             raise VastError(f"Vast search failed: {exc}") from exc
@@ -236,6 +305,39 @@ class VastSdkGateway:
         offers = [x for x in offers if x.offer_id > 0]
         offers.sort(key=lambda x: (x.price_per_hour, -(x.dlperf or 0)))
         return offers[:display_limit]
+
+    async def lookup_offer(
+        self,
+        offer_id: int,
+        *,
+        machine_id: int | None,
+        storage_gb: float,
+    ) -> GpuOffer | None:
+        """Re-read one discovered ask without trusting Vast's broken ID filter.
+
+        The marketplace returns an offer ``id`` in each row, but its live
+        ``/bundles/`` search currently returns no rows when that same value is
+        sent back as an ``id`` filter. Restrict the read to the machine captured
+        in the discovery snapshot, then require the exact original offer ID in
+        the response. A different ask on the same host is never substituted.
+        """
+        if offer_id <= 0 or not machine_id or machine_id <= 0:
+            return None
+        # Structured SDK searches add rented=false unless defaults are disabled.
+        # Keep the validation baseline aligned with discovery and let the
+        # orchestrator re-check all price/hardware policy fields on the row.
+        rows = await self.search_offers(
+            {
+                "machine_id": {"eq": int(machine_id)},
+                "rentable": {"eq": True},
+                "verified": {"eq": True},
+                "external": {"eq": False},
+            },
+            200,
+            storage_gb=storage_gb,
+            no_default=True,
+        )
+        return next((row for row in rows if row.offer_id == offer_id), None)
 
     async def create_instance(self, offer_id: int, *, image: str | None, disk_gb: int, template_hash: str | None = None, env: str | None = None, onstart_cmd: str | None = None, label: str = "PixelPilot", cancel_unavail: bool = True) -> dict[str, Any]:
         client = self._get_client()
@@ -251,9 +353,22 @@ class VastSdkGateway:
         try:
             result = await asyncio.to_thread(client.create_instance, **kwargs)
         except Exception as exc:
+            rejection = _http_rejection_reason(exc)
+            if rejection:
+                raise VastCreateRejected(rejection) from exc
             raise VastError(f"Vast create_instance failed: {exc}") from exc
         mapped = _coerce_mapping(result)
-        return mapped if mapped else {"result": result}
+        if mapped:
+            rejection = _create_rejection_reason(mapped)
+            if rejection:
+                raise VastCreateRejected(rejection)
+            return mapped
+
+        if isinstance(result, str):
+            lowered = result.lower()
+            if any(marker in lowered for marker in ("error", "unavailable", "not available", "failed")):
+                raise VastCreateRejected(_safe_error_text(result))
+        return {"result": result}
 
     async def show_instance(self, instance_id: int) -> InstanceRef:
         client = self._get_client()

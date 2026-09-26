@@ -1,4 +1,10 @@
-from pixelpilot.services.vast_gateway import build_offer_query, extract_mapped_port, normalize_offer
+from pixelpilot.services.vast_gateway import (
+    VastCreateRejected,
+    VastSdkGateway,
+    build_offer_query,
+    extract_mapped_port,
+    normalize_offer,
+)
 
 
 def test_build_query_contains_cost_ram_and_safety_filters():
@@ -43,6 +49,18 @@ def test_normalize_offer():
     assert offer.reliability == 0.995
     assert offer.inet_down_mbps == 750
     assert offer.verified is True
+
+
+def test_normalize_offer_keeps_machine_id_for_safe_revalidation():
+    offer = normalize_offer({
+        "id": 77,
+        "machine_id": "1234",
+        "gpu_name": "RTX A6000",
+        "gpu_ram": 49140,
+        "dph_total": 0.42,
+    })
+    assert offer.machine_id == 1234
+    assert offer.public_dict()["machine_id"] == 1234
 
 
 def test_extract_mapped_port_from_vast_raw():
@@ -96,6 +114,97 @@ def test_search_offers_runs_live_request_each_time_and_requests_price_order():
         assert client.calls[0]["storage"] == 80.0
         assert first[0].offer_id == 1
         assert second[0].offer_id == 2
+
+    asyncio.run(scenario())
+
+
+def test_lookup_offer_queries_snapshot_machine_without_ranked_pool():
+    import asyncio
+
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        def search_offers(self, **kwargs):
+            self.calls.append(kwargs)
+            assert kwargs["query"] == {
+                "machine_id": {"eq": 444},
+                "rentable": {"eq": True},
+                "verified": {"eq": True},
+                "external": {"eq": False},
+            }
+            assert kwargs["no_default"] is True
+            return [
+                {"id": 320, "machine_id": 444, "gpu_name": "A6000",
+                 "gpu_ram": 48000, "dph_total": 0.42},
+                {"id": 321, "machine_id": 444, "gpu_name": "A6000",
+                 "gpu_ram": 48000, "dph_total": 0.43},
+            ]
+
+    async def scenario():
+        gateway = VastSdkGateway("secret")
+        gateway._client = FakeClient()
+        offer = await gateway.lookup_offer(321, machine_id=444, storage_gb=100)
+        assert offer.offer_id == 321
+        assert gateway._client.calls[0]["storage"] == 100.0
+        assert gateway._client.calls[0]["limit"] == 200
+
+    asyncio.run(scenario())
+
+
+def test_lookup_offer_sdk_request_uses_machine_and_has_no_extra_rented_filter(monkeypatch):
+    import asyncio
+    from vastai import VastAI
+
+    sent = []
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"offers": [{
+                "id": 321, "machine_id": 444,
+                "gpu_name": "A6000", "gpu_ram": 48000,
+                "dph_total": 0.43,
+            }]}
+
+    async def scenario():
+        sdk = VastAI(api_key="fake", raw=True, quiet=True)
+
+        def post(path, json_data):
+            assert path == "/bundles/"
+            sent.append(json_data)
+            return Response()
+
+        monkeypatch.setattr(sdk.client, "post", post)
+        gateway = VastSdkGateway("fake")
+        gateway._client = sdk
+        offer = await gateway.lookup_offer(321, machine_id=444, storage_gb=100)
+        assert offer is not None and offer.offer_id == 321
+
+    asyncio.run(scenario())
+    assert len(sent) == 1
+    assert sent[0]["machine_id"] == {"eq": 444}
+    assert "id" not in sent[0]
+    assert sent[0]["rentable"] == {"eq": True}
+    assert sent[0]["verified"] == {"eq": True}
+    assert sent[0]["external"] == {"eq": False}
+    assert "rented" not in sent[0]
+
+
+def test_lookup_offer_does_not_substitute_another_id():
+    import asyncio
+
+    class FakeClient:
+        def search_offers(self, **kwargs):
+            return [{"id": 322, "gpu_name": "A6000", "gpu_ram": 48000,
+                     "dph_total": 0.43}]
+
+    async def scenario():
+        gateway = VastSdkGateway("secret")
+        gateway._client = FakeClient()
+        assert await gateway.lookup_offer(321, machine_id=444, storage_gb=100) is None
 
     asyncio.run(scenario())
 
@@ -173,3 +282,160 @@ def test_find_instances_by_label_parses_instance_list():
         assert refs[0].instance_id == 91
         assert refs[0].status == "loading"
     asyncio.run(scenario())
+
+
+
+def test_create_instance_classifies_explicit_rejection():
+    import asyncio
+
+    class FakeClient:
+        def create_instance(self, **kwargs):
+            return {
+                "success": False,
+                "msg": "offer is no longer available",
+            }
+
+    async def scenario():
+        gateway = VastSdkGateway("secret")
+        gateway._client = FakeClient()
+        try:
+            await gateway.create_instance(
+                123,
+                image="vastai/pytorch:test",
+                disk_gb=100,
+            )
+        except VastCreateRejected as exc:
+            assert exc.reason == "offer is no longer available"
+        else:
+            raise AssertionError("expected explicit Vast rejection")
+
+    asyncio.run(scenario())
+
+
+def test_create_instance_keeps_success_contract():
+    import asyncio
+
+    class FakeClient:
+        def create_instance(self, **kwargs):
+            return {"success": True, "new_contract": 987}
+
+    async def scenario():
+        gateway = VastSdkGateway("secret")
+        gateway._client = FakeClient()
+        result = await gateway.create_instance(
+            123,
+            image="vastai/pytorch:test",
+            disk_gb=100,
+        )
+        assert result["new_contract"] == 987
+
+    asyncio.run(scenario())
+
+
+
+def test_create_instance_classifies_http_4xx_rejection():
+    import asyncio
+
+    class FakeResponse:
+        status_code = 409
+        text = '{"msg":"offer no longer available"}'
+
+        def json(self):
+            return {"msg": "offer no longer available"}
+
+    class FakeHttpError(Exception):
+        def __init__(self):
+            super().__init__("409 Client Error")
+            self.response = FakeResponse()
+
+    class FakeClient:
+        def create_instance(self, **kwargs):
+            raise FakeHttpError()
+
+    async def scenario():
+        gateway = VastSdkGateway("secret")
+        gateway._client = FakeClient()
+        try:
+            await gateway.create_instance(
+                123,
+                image="vastai/pytorch:test",
+                disk_gb=100,
+            )
+        except VastCreateRejected as exc:
+            assert "HTTP 409" in exc.reason
+            assert "offer no longer available" in exc.reason
+        else:
+            raise AssertionError("expected HTTP rejection classification")
+
+    asyncio.run(scenario())
+
+
+def test_create_instance_keeps_5xx_ambiguous():
+    import asyncio
+    from pixelpilot.services.vast_gateway import VastError
+
+    class FakeResponse:
+        status_code = 503
+        text = "temporary upstream failure"
+
+        def json(self):
+            return {"error": "temporary upstream failure"}
+
+    class FakeHttpError(Exception):
+        def __init__(self):
+            super().__init__("503 Server Error")
+            self.response = FakeResponse()
+
+    class FakeClient:
+        def create_instance(self, **kwargs):
+            raise FakeHttpError()
+
+    async def scenario():
+        gateway = VastSdkGateway("secret")
+        gateway._client = FakeClient()
+        try:
+            await gateway.create_instance(
+                123,
+                image="vastai/pytorch:test",
+                disk_gb=100,
+            )
+        except VastCreateRejected:
+            raise AssertionError("5xx must remain ambiguous")
+        except VastError:
+            pass
+        else:
+            raise AssertionError("expected ambiguous Vast error")
+
+    asyncio.run(scenario())
+
+
+def test_http_408_and_429_are_ambiguous():
+    import asyncio
+    from pixelpilot.services.vast_gateway import VastError
+
+    async def scenario(status):
+        class FakeResponse:
+            status_code = status
+            text = "uncertain"
+
+            def json(self):
+                return {"detail": "uncertain"}
+
+        class FakeHttpError(Exception):
+            response = FakeResponse()
+
+        class FakeClient:
+            def create_instance(self, **kwargs):
+                raise FakeHttpError()
+
+        gateway = VastSdkGateway("secret")
+        gateway._client = FakeClient()
+        try:
+            await gateway.create_instance(123, image="image", disk_gb=100)
+        except VastError as exc:
+            assert not isinstance(exc, VastCreateRejected)
+        else:
+            raise AssertionError("ambiguous HTTP outcome was treated as success")
+
+    for status in (408, 429):
+        asyncio.run(scenario(status))

@@ -37,4 +37,4 @@ GitHub Actions reached successful full test runs after the code transition and c
 
 ## Deployment status
 
-The code is prepared on the transition branch. The persistent controller and the merged main branch must be updated together before a fresh GPU rental, because the old controller and new image worker use different APIs.
+This report records the initial transition as of 2026-09-24. The Qwen-Image-2.1 stable version subsequently reached `main`. For the current selective Vast and optional enhancer improvements, see `PROGRESS.md` and `RUNBOOK.md`; a live Vast smoke test remains pending.
