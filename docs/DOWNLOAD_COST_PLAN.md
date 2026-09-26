@@ -1,7 +1,7 @@
 # Vast download cost awareness — implementation complete, deployment pending
 
 Date: 2026-09-26.
-Branch: `fix/vast-download-cost-awareness`.
+Status: completed and merged to `main` via PR #22.
 Base: `codex/vast-offer-machine-lookup` at `d84c9e7e9c7dd0ef8c769efcc58c9de9517d0118`; its matching CI `36198172864` succeeded.
 
 ## Evidence and scope
@@ -37,4 +37,4 @@ Base: `codex/vast-offer-machine-lookup` at `d84c9e7e9c7dd0ef8c769efcc58c9de9517d
 - [ ] Deploy the controller and matching runtime branch on `/opt/pixelpilot`; verify `pixelpilot.service` and `PIXELPILOT_REPO_REF`.
 - [ ] Inspect refreshed real quotes and perform a budget-approved Telegram generation/edit smoke test with server/desktop access. Do not rent merely to re-prove the completed earlier rental fix.
 
-No new paid Vast instance was created or deleted in this continuation. The currently connected tools did not provide an authorized VPS/Telegram Desktop session, so no new deployment or live image-generation result is claimed. See `docs/RUNBOOK.md` before deployment; do not reset this work to the older `main`.
+No additional paid Vast instance was created by the repository continuation itself. The owner later deployed the validated build, confirmed the live bot behavior was working correctly, and approved promotion to `main`. PR #22 is the integration point; future deployments should follow `docs/RUNBOOK.md` and keep controller/worker refs aligned to `main`.
