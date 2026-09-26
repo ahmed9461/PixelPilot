@@ -86,7 +86,7 @@ python scripts/preflight.py
 
 Required controller values: `TELEGRAM_BOT_TOKEN`, `OWNER_TELEGRAM_ID`, `VAST_API_KEY`, and `PIXELPILOT_REPO_URL` or `VAST_TEMPLATE_HASH`. `HF_TOKEN` is optional.
 
-For an existing installation, preserve its `.env` and SQLite. Follow [the runbook](docs/RUNBOOK.md), not a blind reset to `main`. This continuation is on `fix/vast-download-cost-awareness`; deploy the controller and set the worker's `PIXELPILOT_REPO_REF` to the same published branch/tag. A repository push does not update an existing VPS or worker. See [the current plan](docs/DOWNLOAD_COST_PLAN.md) for CI evidence and outstanding deployment checks.
+For an existing installation, preserve its `.env` and SQLite. Follow [the runbook](docs/RUNBOOK.md) and deploy from the stable `main` baseline. Keep the controller checkout and worker `PIXELPILOT_REPO_REF` aligned to `main`; a repository push does not update an existing VPS or worker automatically. See [the completed cost-awareness plan](docs/DOWNLOAD_COST_PLAN.md) for the implementation and validation history.
 
 ## Vast bootstrap
 
