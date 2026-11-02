@@ -26,16 +26,20 @@ class Settings(BaseSettings):
     # because the BF16 checkpoint is roughly 33 GB before runtime overhead.
     vast_min_gpu_ram_gb: int = 24
     vast_preferred_gpu_ram_gb: int = 48
+    vast_premium_gpu_ram_gb: int = 80
     # CPU offload keeps large model components in host memory on 24 GB GPUs.
     vast_min_cpu_ram_gb: int = 48
     vast_min_reliability: float = 0.98
-    vast_max_price_usd_hour: float = 0.50
+    vast_max_price_usd_hour: float = 0.60
     vast_default_limit: int = 8
-    vast_search_pool_limit: int = 64
+    vast_search_pool_limit: int = 100
     vast_verified_only: bool = True
     vast_datacenter_only: bool = False
     vast_min_direct_ports: int = 1
-    vast_min_inet_down_mbps: float = 100.0
+    vast_min_inet_down_mbps: float = 150.0
+    vast_min_inet_up_mbps: float = 80.0
+    vast_preferred_inet_down_mbps: float = 500.0
+    vast_preferred_inet_up_mbps: float = 200.0
     vast_cancel_unavailable: bool = True
     vast_auto_destroy_on_provision_failure: bool = False
     # Comparison assumptions, not measurements or a promised final invoice.
@@ -56,6 +60,10 @@ class Settings(BaseSettings):
 
     # Qwen-Image-2.1 runtime.
     model_id: str = "Qwen/Qwen-Image-2.1"
+    chat_model_id: str = "Qwen/Qwen3.5-9B"
+    chat_max_images: int = 3
+    chat_max_new_tokens: int = 384
+    chat_context_turns: int = 8
     model_dtype: str = "bfloat16"
     image_memory_mode: str = "auto"  # auto | gpu | offload
     image_full_gpu_min_vram_gb: int = 48
@@ -113,8 +121,8 @@ class Settings(BaseSettings):
     @field_validator("vast_max_price_usd_hour")
     @classmethod
     def positive_price_cap(cls, value: float) -> float:
-        if not 0 < value <= 0.50:
-            raise ValueError("VAST_MAX_PRICE_USD_HOUR must be > 0 and <= $0.50")
+        if not isfinite(value) or not 0 < value <= 0.60:
+            raise ValueError("VAST_MAX_PRICE_USD_HOUR must be > 0 and <= $0.60")
         return value
 
     @field_validator(
@@ -122,6 +130,10 @@ class Settings(BaseSettings):
         "vast_search_pool_limit",
         "vast_min_gpu_ram_gb",
         "vast_preferred_gpu_ram_gb",
+        "vast_premium_gpu_ram_gb",
+        "chat_max_images",
+        "chat_max_new_tokens",
+        "chat_context_turns",
         "vast_min_cpu_ram_gb",
         "image_full_gpu_min_vram_gb",
         "image_default_steps",
@@ -206,6 +218,39 @@ class Settings(BaseSettings):
             raise ValueError("IMAGE_MAX_REFERENCE_IMAGES must be between 1 and 10")
         return value
 
+    @field_validator(
+        "vast_min_inet_down_mbps",
+        "vast_min_inet_up_mbps",
+        "vast_preferred_inet_down_mbps",
+        "vast_preferred_inet_up_mbps",
+    )
+    @classmethod
+    def nonnegative_bandwidth(cls, value: float) -> float:
+        if not isfinite(value) or value < 0:
+            raise ValueError("bandwidth thresholds must be finite and nonnegative")
+        return value
+
+    @field_validator("chat_max_images")
+    @classmethod
+    def vision_image_limit(cls, value: int) -> int:
+        if value > 3:
+            raise ValueError("CHAT_MAX_IMAGES must be <= 3")
+        return value
+
+    @field_validator("chat_max_new_tokens")
+    @classmethod
+    def new_tokens_limit(cls, value: int) -> int:
+        if value > 1024:
+            raise ValueError("CHAT_MAX_NEW_TOKENS must be <= 1024")
+        return value
+
+    @field_validator("chat_context_turns")
+    @classmethod
+    def history_limit(cls, value: int) -> int:
+        if value > 10:
+            raise ValueError("CHAT_CONTEXT_TURNS must be <= 10")
+        return value
+
     def validate_runtime(self) -> None:
         missing: list[str] = []
         if not self.telegram_bot_token:
@@ -223,6 +268,8 @@ class Settings(BaseSettings):
             missing.append("PIXELPILOT_REPO_URL or VAST_TEMPLATE_HASH")
         if not self.model_id:
             missing.append("MODEL_ID")
+        if not self.chat_model_id:
+            missing.append("CHAT_MODEL_ID")
         if not self.vast_cancel_unavailable:
             missing.append("VAST_CANCEL_UNAVAILABLE=true (required for safe on-demand rent)")
         if missing:
