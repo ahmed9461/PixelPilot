@@ -1,64 +1,27 @@
-# Architecture
+# PixelPilot architecture
 
-## Controller
+## Controller on the persistent VPS
 
-The persistent PixelPilot controller runs:
-- aiogram Telegram polling
-- owner-only middleware
-- SQLite state/settings/events
-- Vast marketplace and instance lifecycle
-- billing/cost guard
-- authenticated calls to the temporary image worker
+Owner-only aiogram Telegram routers provide chat, visual questions, generation and editing modes. SQLite stores configuration, per-chat/topic bounded text history, lifecycle reconciliation labels and running-time estimates. Images never enter SQLite.
 
-The controller does not load the image model locally.
+A single inference gate protects chat and image requests. Lifecycle changes have a separate lock. Automatic idle cleanup revalidates instance identity, activity and worker busy status; explicit manual deletion remains available to stop costs.
 
-## Temporary GPU worker
+## Disposable Vast GPU worker
 
-Each Vast instance runs:
-- CUDA-enabled PyTorch from the Vast image
-- Transformers + Accelerate
-- current Diffusers with `QwenImage21Pipeline`
-- FastAPI/Uvicorn image gateway on port 8190
+An authenticated FastAPI gateway starts Qwen3.5-9B for chat/vision. Qwen-Image-2.1 loads on demand for editing/generation. Only one model is resident at once. A single GPU lock serializes model switching and inference. Cancellation drains the executing thread before releasing that lock.
 
-The worker supports:
-- `GET /health`
-- `GET /v1/models`
-- `POST /v1/images/generations`
-- `POST /v1/images/edits`
+API version 2 advertises chat, vision, image generation and editing capabilities. Health indicates busy/switching rather than treating a transient switch as a dead server. A failed load is not ready.
 
-Every endpoint requires the random bearer token generated when the instance is rented.
+Authentication occurs before request-body parsing. Body size, image bytes, decoded pixel count, history characters and actual tokenized context all have bounds. EXIF orientation is normalized; image editing preserves alpha when the model produces it.
 
-## Memory policy
+## Marketplace and paid mutations
 
-`IMAGE_MEMORY_MODE=auto`:
-- rounded VRAM >= 48 GB: full GPU
-- otherwise: Diffusers model CPU offload
+Search each VRAM tier with independent price/performance/network orderings, at most three concurrent read requests. Normalize quotes defensively and apply one policy at discovery and immediately before rent. The final rate cannot exceed $0.60/hour; disk allocation is already included in `dph_total`.
 
-VAE tiling and slicing remain enabled by default.
+Only the exact confirmed Offer ID is rented. Financial/hardware changes require new confirmation; volatile speed measurements are checked against the configured floors. An ambiguous create retains its unique label and blocks another paid create until reconciliation. Failed or ambiguous stop/delete responses retain the instance record instead of falsely reporting success.
 
-Vast discovery accepts 24 GB+ GPUs but ranks 48 GB+ offers ahead of lower-memory fallback offers.
-The 48 GB+ discovery query has no host-RAM floor; the 24 GB CPU-offload fallback requires 48 GB host RAM. A selected ask is revalidated by exact ID outside the ranked search window before `create_instance`. Ambiguous create outcomes retain a unique label in SQLite for recovery and block duplicate rent.
+## Trust boundaries
 
-## Prompt path
+Vast keys remain on the VPS. Each GPU has a random bearer token. HTTPS certificate verification is enabled by default when HTTPS is used; the default HTTP transport still requires a trusted tunnel or separately configured TLS for sensitive data. No model weights, production GPU performance or private-network deployment were tested by the CPU-only suite.
 
-```text
-Telegram text/caption
-  -> non-empty validation
-  -> InferenceClient
-  -> image gateway
-  -> QwenImage21Pipeline
-```
-
-There is no chat history, persona layer or tone layer. Prompt rewriting occurs only when the owner explicitly selects the official Qwen Prompt Enhancer; Original mode sends the prompt unchanged.
-PE weights prefetch in the background after image readiness. Uncached or failed enhancement uses the original prompt; PE inference temporarily yields GPU memory and restores diffusion placement before image generation.
-
-## Reference images
-
-- one Telegram photo/document can be used as an edit reference
-- Telegram photo albums are collected in memory and sent together
-- maximum references: 10
-- image bytes are not persisted in SQLite
-
-## Output
-
-The gateway encodes the generated PIL image as PNG base64 for transport to the controller. The controller decodes it and sends a PNG document to Telegram with output size and seed.
+The multimodal requirements supersede historical image-only decisions. See [migration](MULTIMODAL.md) and [hardening/acceptance](HARDENING.md).

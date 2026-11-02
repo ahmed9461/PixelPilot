@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
+import logging
 import re
 from typing import Any
 
@@ -63,51 +65,63 @@ def build_offer_query(
 def _num(raw: dict[str, Any], *names: str, default: float = 0.0) -> float:
     for name in names:
         value = raw.get(name)
-        if value is not None:
-            try:
-                return float(value)
-            except (TypeError, ValueError):
-                pass
+        if value is None or isinstance(value, bool):
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if math.isfinite(number) and number >= 0:
+            return number
     return default
+
+
+def _bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (str, int)):
+        text = str(value).strip().lower()
+        if text in {"true", "1", "verified"}:
+            return True
+        if text in {"false", "0", "unverified", "deverified"}:
+            return False
+    return None
+
+
+def _integer(raw: dict[str, Any], name: str) -> int | None:
+    value = _num(raw, name, default=-1)
+    return int(value) if value >= 0 and float(value).is_integer() else None
 
 
 def normalize_offer(raw: dict[str, Any]) -> GpuOffer:
     gpu_ram_mb = _num(raw, "gpu_ram", "gpu_ram_mb")
-    reliability = raw.get("reliability", raw.get("reliability2"))
-    if reliability is not None:
-        reliability = float(reliability)
-        if reliability > 1:
-            reliability /= 100
-    verified_raw = raw.get("verified")
-    verified: bool | None = None
-    if verified_raw is not None:
-        if isinstance(verified_raw, bool):
-            verified = verified_raw
-        elif isinstance(verified_raw, (int, float)):
-            verified = verified_raw == 1
-        else:
-            verified = str(verified_raw).strip().lower() in {"true", "1", "yes", "verified"}
-    elif raw.get("verification") is not None:
-        verified = str(raw.get("verification")).lower() in {"verified", "true", "1"}
-    machine_id: int | None = None
-    try:
-        if raw.get("machine_id") is not None:
-            machine_id = int(raw["machine_id"])
-    except (TypeError, ValueError):
-        pass
+    reliability = _num(raw, "reliability", "reliability2") or None
+    if reliability is not None and reliability > 1:
+        reliability /= 100
+    verified = _bool(raw.get("verified"))
+    if verified is None:
+        verified = _bool(raw.get("verification"))
+    # Only dph_total prices the requested allocation. dph_base is NOT a safe
+    # fallback: it could put a quote whose total exceeds $0.60 under the cap.
     return GpuOffer(
-        offer_id=int(raw.get("id") or raw.get("ask_id") or 0),
+        offer_id=_integer(raw, "id") or _integer(raw, "ask_id") or 0,
         gpu_name=str(raw.get("gpu_name") or raw.get("gpu_display_name") or "Unknown GPU"),
         gpu_ram_gb=gpu_ram_mb / 1000 if gpu_ram_mb else _num(raw, "gpu_ram_gb"),
-        price_per_hour=_num(raw, "dph_total", "dph_base", "price"),
+        price_per_hour=_num(raw, "dph_total"),
         reliability=reliability,
-        dlperf=_num(raw, "dlperf", default=0.0) or None,
+        dlperf=_num(raw, "dlperf") or None,
         location=raw.get("geolocation") or raw.get("location"),
-        inet_down_mbps=_num(raw, "inet_down", default=0.0) or None,
-        inet_up_mbps=_num(raw, "inet_up", default=0.0) or None,
-        disk_space_gb=_num(raw, "disk_space", default=0.0) or None,
+        inet_down_mbps=_num(raw, "inet_down") or None,
+        inet_up_mbps=_num(raw, "inet_up") or None,
+        disk_space_gb=_num(raw, "disk_space") or None,
         verified=verified,
-        machine_id=machine_id,
+        machine_id=_integer(raw, "machine_id"),
+        num_gpus=_integer(raw, "num_gpus"),
+        direct_port_count=_integer(raw, "direct_port_count"),
+        cpu_ram_gb=_num(raw, "cpu_ram") / 1000 or None,
+        cpu_cores=_num(raw, "cpu_cores_effective", "cpu_cores") or None,
+        disk_bw_mbps=_num(raw, "disk_bw") or None,
+        datacenter=_bool(raw.get("datacenter")),
         raw=raw,
     )
 
@@ -151,7 +165,7 @@ def _http_rejection_reason(exc: Exception) -> str | None:
 
 def _create_rejection_reason(mapped: dict[str, Any]) -> str | None:
     success = mapped.get("success")
-    if success is False:
+    if _bool(success) is False:
         for key in ("msg", "message", "error", "detail", "reason"):
             if mapped.get(key):
                 return _safe_error_text(mapped.get(key))
@@ -281,8 +295,9 @@ class VastSdkGateway:
         *,
         storage_gb: float = 5.0,
         no_default: bool = False,
+        order: str = "dph_total",
     ) -> list[GpuOffer]:
-        """Run a fresh marketplace request and return the cheapest matches.
+        """Run a fresh marketplace request using the requested ordering.
 
         Vast's SDK performs a live HTTP request for each search_offers() call;
         PixelPilot keeps only the returned snapshot for comparison/details.
@@ -290,6 +305,8 @@ class VastSdkGateway:
         than the Telegram display size so local ranking is not limited to a
         small score-sorted subset.
         """
+        if order not in {"dph_total", "dlperf-", "inet_down-", "inet_up-"}:
+            raise ValueError("Unsupported marketplace ordering")
         client = self._get_client()
         display_limit = max(1, int(limit))
         backend_limit = max(32, min(200, display_limit * 8))
@@ -297,7 +314,7 @@ class VastSdkGateway:
             result = await asyncio.to_thread(
                 client.search_offers,
                 query=query,
-                order="dph_total",
+                order=order,
                 limit=backend_limit,
                 storage=float(storage_gb),
                 no_default=no_default,
@@ -310,9 +327,19 @@ class VastSdkGateway:
             except json.JSONDecodeError:
                 result = []
         rows = result if isinstance(result, list) else result.get("offers", []) if isinstance(result, dict) else []
-        offers = [normalize_offer(row) for row in rows if isinstance(row, dict)]
-        offers = [x for x in offers if x.offer_id > 0]
-        offers.sort(key=lambda x: (x.price_per_hour, -(x.dlperf or 0)))
+        offers: list[GpuOffer] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                offer = normalize_offer(row)
+            except (ValueError, TypeError, OverflowError):
+                logging.getLogger(__name__).warning("Skipped malformed Vast offer")
+                continue
+            if offer.offer_id > 0:
+                offers.append(offer)
+        if order == "dph_total":
+            offers.sort(key=lambda x: (x.price_per_hour, -(x.dlperf or 0)))
         return offers[:display_limit]
 
     async def lookup_offer(
@@ -459,6 +486,11 @@ class VastSdkGateway:
     async def _lifecycle(self, method: str, instance_id: int) -> None:
         client = self._get_client()
         try:
-            await asyncio.to_thread(getattr(client, method), id=instance_id)
+            result = await asyncio.to_thread(getattr(client, method), id=instance_id)
         except Exception as exc:
-            raise VastError(f"Vast {method} failed: {exc}") from exc
+            raise VastError(f"Vast {method} failed; the instance remains tracked") from exc
+        mapped = _coerce_mapping(result)
+        if _bool(mapped.get("success")) is not True:
+            # A 200 response is not success if its JSON says otherwise. Unknown
+            # outcomes must keep the instance ID and billing state for recovery.
+            raise VastError(f"Vast {method} was not confirmed; inspect instance status before retrying")

@@ -4,9 +4,11 @@ import asyncio
 import secrets
 import shlex
 from datetime import UTC, datetime
+from contextlib import asynccontextmanager
 from typing import Any, Awaitable, Callable
 
 from pixelpilot.config import Settings
+from pixelpilot.contracts import MAX_PROMPT_CHARS, MAX_TOTAL_IMAGE_BYTES, trim_history
 from pixelpilot.db import Database
 from pixelpilot.domain import GeneratedImage, GpuOffer, InstancePhase, ReferenceImage
 from pixelpilot.pricing import GB_PER_TB, download_rate_allowed, offer_quality_rank
@@ -20,6 +22,7 @@ from pixelpilot.services.billing import (
     sync_billing_status,
 )
 from pixelpilot.services.inference_client import InferenceClient
+from pixelpilot.services.offer_policy import violations as offer_violations
 from pixelpilot.services.vast_gateway import VastCreateRejected, VastSdkGateway, build_offer_query
 
 
@@ -56,7 +59,6 @@ class Orchestrator:
         self.vast = vast
         self._inference_factory = inference_factory or self._default_inference_factory
         self._inference_lock = asyncio.Lock()
-        self._chat_lock = asyncio.Lock()
         self._offers_lock = asyncio.Lock()
         self._rent_lock = asyncio.Lock()
         self._control_lock = asyncio.Lock()
@@ -67,6 +69,7 @@ class Orchestrator:
             url,
             token,
             self.settings.model_id,
+            chat_model_id=self.settings.chat_model_id,
             verify_tls=self.settings.inference_verify_tls,
             timeout_seconds=self.settings.inference_request_timeout_seconds,
         )
@@ -122,15 +125,21 @@ class Orchestrator:
         )
         floors = sorted(set(max(self.settings.vast_min_gpu_ram_gb, n) for n in floors), reverse=True)
         queries = [self._offer_query_for(n) for n in floors]
-        results = await asyncio.gather(
-            *(
-                self.vast.search_offers(
-                    query,
-                    self.settings.vast_search_pool_limit,
-                    storage_gb=float(self.settings.vast_disk_gb),
+        # A cheapest-only shortlist can hide much faster servers within the
+        # same budget. Cover three independent orderings in every memory tier.
+        searches = [(query, order) for query in queries
+                    for order in ("dph_total", "dlperf-", "inet_down-")]
+        semaphore = asyncio.Semaphore(3)
+
+        async def search(query: str, order: str) -> list[GpuOffer]:
+            async with semaphore:
+                return await self.vast.search_offers(
+                    query, self.settings.vast_search_pool_limit,
+                    storage_gb=float(self.settings.vast_disk_gb), order=order,
                 )
-                for query in queries
-            ),
+
+        results = await asyncio.gather(
+            *(search(query, order) for query, order in searches),
             return_exceptions=True,
         )
         failures = [item for item in results if isinstance(item, BaseException)]
@@ -144,20 +153,11 @@ class Orchestrator:
             for offer in result:
                 deduped[offer.offer_id] = offer
 
-        candidates = [
-            offer for offer in deduped.values()
-            if 0 < offer.price_per_hour <= self.settings.vast_max_price_usd_hour
-            and offer.gpu_ram_gb >= (
-                self.settings.vast_premium_gpu_ram_gb if premium_only
-                else (self.settings.vast_preferred_gpu_ram_gb if preferred_only
-                else self.settings.vast_min_gpu_ram_gb)
-            )
-            and (offer.inet_down_mbps or 0) >= self.settings.vast_min_inet_down_mbps
-            and (offer.inet_up_mbps or 0) >= self.settings.vast_min_inet_up_mbps
-            and (offer.reliability or 0) >= self.settings.vast_min_reliability
-            and (not self.settings.vast_verified_only or offer.verified is True)
-            and download_rate_allowed(offer, self.settings.vast_max_download_usd_per_tb)
-        ]
+        minimum = (self.settings.vast_premium_gpu_ram_gb if premium_only
+                   else self.settings.vast_preferred_gpu_ram_gb if preferred_only
+                   else self.settings.vast_min_gpu_ram_gb)
+        candidates = [offer for offer in deduped.values()
+                      if not offer_violations(offer, self.settings, minimum_vram=minimum)]
         candidates.sort(
             key=lambda offer: offer_quality_rank(
                 offer,
@@ -174,6 +174,7 @@ class Orchestrator:
             "offers.last_refreshed_at": datetime.now(UTC).isoformat(),
             "offers.search_mode": "premium" if premium_only else ("preferred" if preferred_only else "all"),
             "offers.candidate_count": len(candidates),
+            "offers.query_failures": len(failures),
             "offers.preferred_candidate_count": sum(
                 offer.gpu_ram_gb >= self.settings.vast_preferred_gpu_ram_gb
                 for offer in candidates
@@ -240,10 +241,7 @@ class Orchestrator:
             or abs(old.price_per_hour - new.price_per_hour) > 1e-9
             or old.download_usd_per_gb != new.download_usd_per_gb
             or old.upload_usd_per_gb != new.upload_usd_per_gb
-            or old.inet_down_mbps != new.inet_down_mbps
-            or old.inet_up_mbps != new.inet_up_mbps
-            or old.dlperf != new.dlperf
-            or old.reliability != new.reliability
+            or old.machine_id != new.machine_id
         )
 
     async def rent(self, offer_id: int) -> dict[str, Any]:
@@ -324,23 +322,8 @@ class Orchestrator:
             raise OfferChangedError(
                 "سعر Download مجهول أو يتجاوز سقف التنزيل المحدد. حدّث العروض وأعد التأكيد."
             )
-        raw = live_offer.raw or {}
-        needs_offload = (live_offer.gpu_ram_gb < self.settings.image_full_gpu_min_vram_gb
-                         or self.settings.image_memory_mode == "offload")
-        cpu_ram_mb = raw.get("cpu_ram")
-        if (
-            (self.settings.vast_verified_only and live_offer.verified is not True)
-            or (live_offer.reliability is None or live_offer.reliability < self.settings.vast_min_reliability)
-            or (live_offer.disk_space_gb is not None and live_offer.disk_space_gb < self.settings.vast_disk_gb)
-            or (live_offer.inet_down_mbps is None or live_offer.inet_down_mbps < self.settings.vast_min_inet_down_mbps)
-            or (live_offer.inet_up_mbps is None or live_offer.inet_up_mbps < self.settings.vast_min_inet_up_mbps)
-            or (raw.get("num_gpus") is not None and int(raw["num_gpus"]) != 1)
-            or (raw.get("direct_port_count") is not None and int(raw["direct_port_count"]) < self.settings.vast_min_direct_ports)
-            or (self.settings.vast_datacenter_only and raw.get("datacenter") is False)
-            or (needs_offload and cpu_ram_mb is not None
-                and float(cpu_ram_mb) / 1000 < self.settings.vast_min_cpu_ram_gb)
-        ):
-            raise OfferChangedError("العرض لم يعد يطابق متطلبات التشغيل. حدّث القائمة وأعد التأكيد.")
+        if offer_violations(live_offer, self.settings):
+            raise OfferChangedError("العرض لم يعد يطابق متطلبات التشغيل أو بياناته ناقصة. حدّث القائمة وأعد التأكيد.")
         offer = live_offer
 
         inference_token = secrets.token_urlsafe(32)
@@ -521,7 +504,7 @@ class Orchestrator:
                 notice = f"Vast: {ref.status}"
             elif not ref.public_ip or not ref.mapped_port:
                 await self.db.set("instance.phase", InstancePhase.PROVISIONING.value)
-                notice = "السيرفر يعمل، بانتظار منفذ إنشاء الصور..."
+                notice = "السيرفر يعمل، بانتظار منفذ الدردشة والصور..."
             else:
                 await self.db.set("instance.phase", InstancePhase.PROVISIONING.value)
                 url = self._inference_url(ref.public_ip, ref.mapped_port)
@@ -540,9 +523,9 @@ class Orchestrator:
                         },
                     )
                     if progress:
-                        await progress("✅ محرك الصور جاهز.")
+                        await progress("✅ محرك الدردشة وفهم الصور جاهز؛ محرك التعديل يُحمّل عند أول طلب.")
                     return
-                notice = "السيرفر يعمل؛ جاري تحميل محرك إنشاء الصور..."
+                notice = "السيرفر يعمل؛ جاري تحميل نموذج الدردشة والتحقق من توافق العامل..."
 
             if progress and notice != last_notice:
                 await progress(notice)
@@ -582,11 +565,30 @@ class Orchestrator:
         await self._touch_activity()
         return True
 
-    async def destroy_current(self) -> bool:
+    async def destroy_current(
+        self, *, expected_instance_id: int | None = None,
+        expected_activity_at: str | None = None, only_if_idle: bool = False,
+    ) -> bool:
         async with self._control_lock:
             instance_id = await self.db.get("instance.id")
             if not instance_id:
                 return False
+            if expected_instance_id is not None and int(instance_id) != expected_instance_id:
+                return False
+            if only_if_idle:
+                if (self._inference_lock.locked() or await self.db.get("inference.active", False)
+                    or await self.db.get("instance.last_activity_at") != expected_activity_at):
+                    return False
+                try:
+                    inference = await self._current_inference()
+                    health = await asyncio.wait_for(inference.health_info(),
+                        timeout=self.settings.inference_probe_timeout_seconds)
+                except Exception:
+                    # An unreachable worker might still be processing a request.
+                    # Only explicit manual deletion may override that uncertainty.
+                    return False
+                if health.get("busy") is not False or self._inference_lock.locked():
+                    return False
             await self.db.set("instance.phase", InstancePhase.DESTROYING.value)
             await self.vast.destroy_instance(int(instance_id))
             billing = await finalize_billing(self.db)
@@ -659,147 +661,104 @@ class Orchestrator:
                 state_data["inference_ready"] = False
         return state_data
 
+    @asynccontextmanager
+    async def _inference_session(self, *, image: bool = False):
+        if self._inference_lock.locked():
+            raise OrchestratorError("يوجد طلب قيد التنفيذ؛ أعد المحاولة بعد اكتماله")
+        async with self._inference_lock:
+            marked = False
+            instance_id = None
+            try:
+                async with self._control_lock:
+                    phase = await self.db.get("instance.phase", InstancePhase.NONE.value)
+                    instance_id = await self.db.get("instance.id")
+                    if phase != InstancePhase.READY.value or not instance_id:
+                        raise OrchestratorError("السيرفر غير جاهز؛ شغّله أو افحص حالته أولًا")
+                    await self.db.set_many({"inference.active": True, "generation.active": image})
+                    marked = True
+                    await self._touch_activity()
+                yield int(instance_id)
+            finally:
+                if marked:
+                    await self.db.set_many({"inference.active": False, "generation.active": False})
+                    if await self.db.get("instance.id") == instance_id:
+                        await self._touch_activity()
+
+    def _validate_request(self, prompt: str, references: tuple[ReferenceImage, ...], limit: int) -> None:
+        if not prompt.strip():
+            raise OrchestratorError("اكتب رسالة أو وصفًا للصورة")
+        if len(prompt) > MAX_PROMPT_CHARS:
+            raise OrchestratorError(f"الرسالة طويلة؛ الحد الأقصى {MAX_PROMPT_CHARS} حرف")
+        if len(references) > limit:
+            raise OrchestratorError(f"الحد الأقصى لهذا الوضع هو {limit} صور")
+        per_file = self.settings.image_max_upload_mb * 1024 * 1024
+        if any(not image.data or len(image.data) > per_file for image in references):
+            raise OrchestratorError("إحدى الصور فارغة أو أكبر من الحد المسموح")
+        if sum(len(image.data) for image in references) > MAX_TOTAL_IMAGE_BYTES:
+            raise OrchestratorError("مجموع أحجام الصور يتجاوز 50 MB")
+
     async def generate_image(
-        self,
-        prompt: str,
-        *,
-        width: int,
-        height: int,
-        steps: int,
+        self, prompt: str, *, width: int, height: int, steps: int,
         seed: int | None = None,
         reference_images: tuple[ReferenceImage, ...] = (),
         enhance_prompt: bool = False,
     ) -> GeneratedImage:
-        if self._inference_lock.locked():
-            raise OrchestratorError("يوجد طلب إنشاء صورة آخر قيد المعالجة حاليًا")
-
-        if not prompt.strip():
-            raise OrchestratorError("اكتب وصف الصورة أو تعليمات التعديل")
-        if len(reference_images) > self.settings.image_max_reference_images:
-            raise OrchestratorError(
-                f"الحد الأقصى للصور المرجعية هو {self.settings.image_max_reference_images}"
-            )
-
-        async with self._inference_lock:
-            phase = await self.db.get("instance.phase", InstancePhase.NONE.value)
-            instance_id = await self.db.get("instance.id")
-            if phase != InstancePhase.READY.value or not instance_id:
-                raise OrchestratorError("السيرفر غير جاهز لإنشاء الصور")
-
-            await self.db.set_many(
-                {
-                    "inference.active": True,
-                    "generation.active": True,
-                }
-            )
-            await self._touch_activity()
+        self._validate_request(prompt, reference_images, self.settings.image_max_reference_images)
+        async with self._inference_session(image=True) as instance_id:
             try:
                 inference = await self._current_inference()
                 result = await inference.generate(
-                    prompt,
-                    width=width,
-                    height=height,
-                    steps=steps,
-                    seed=seed,
-                    reference_images=reference_images,
-                    enhance_prompt=enhance_prompt,
+                    prompt, width=width, height=height, steps=steps, seed=seed,
+                    reference_images=reference_images, enhance_prompt=enhance_prompt,
                 )
-                await self.db.event(
-                    "image.generated",
-                    {
-                        "instance_id": int(instance_id),
-                        "prompt_chars": len(prompt),
-                        "reference_count": len(reference_images),
-                        "width": result.width,
-                        "height": result.height,
-                        "steps": steps,
-                        "seed": result.seed,
-                        "model": result.model,
-                        "prompt_enhanced": result.prompt_enhanced,
-                        "enhancer_model": result.enhancer_model,
-                        "enhancer_fallback": result.enhancer_fallback,
-                    },
-                )
+                await self.db.event("image.generated", {
+                    "instance_id": instance_id, "prompt_chars": len(prompt),
+                    "reference_count": len(reference_images), "width": result.width,
+                    "height": result.height, "steps": steps, "seed": result.seed,
+                    "model": result.model, "prompt_enhanced": result.prompt_enhanced,
+                    "enhancer_model": result.enhancer_model,
+                    "enhancer_fallback": result.enhancer_fallback,
+                })
                 return result
             except Exception as exc:
-                await self.db.event(
-                    "image.failed",
-                    {
-                        "instance_id": int(instance_id),
-                        "prompt_chars": len(prompt),
-                        "reference_count": len(reference_images),
-                        "error": str(exc),
-                    },
-                )
+                # Store error class only, never a remote response or user media.
+                await self.db.event("image.failed", {
+                    "instance_id": instance_id, "error_type": type(exc).__name__,
+                })
                 raise
-            finally:
-                await self.db.set_many(
-                    {
-                        "inference.active": False,
-                        "generation.active": False,
-                    }
-                )
-                await self._touch_activity()
 
     async def chat(
-        self,
-        prompt: str,
-        *,
-        reference_images: tuple[ReferenceImage, ...] = (),
+        self, prompt: str, *, reference_images: tuple[ReferenceImage, ...] = (),
+        history_key: str = "chat.history",
     ) -> str:
-        if not prompt.strip():
-            raise OrchestratorError("اكتب رسالة أو سؤالًا عن الصورة")
-        if len(reference_images) > self.settings.chat_max_images:
-            raise OrchestratorError(
-                f"الحد الأقصى لفهم الصور هو {self.settings.chat_max_images}"
+        self._validate_request(prompt, reference_images, self.settings.chat_max_images)
+        async with self._inference_session() as instance_id:
+            history = trim_history(await self.db.get(history_key, []),
+                                   max_turns=self.settings.chat_context_turns)
+            inference = await self._current_inference()
+            answer = await inference.chat(
+                prompt, history=history, images=reference_images,
+                max_new_tokens=self.settings.chat_max_new_tokens,
             )
-        async with self._chat_lock:
-            phase = await self.db.get("instance.phase", InstancePhase.NONE.value)
-            instance_id = await self.db.get("instance.id")
-            if phase != InstancePhase.READY.value or not instance_id:
-                raise OrchestratorError("شغّل السيرفر قبل بدء الدردشة")
-            stored = await self.db.get("chat.history", [])
-            turns = [
-                {"role": row["role"], "content": row["content"][:4000]}
-                for row in stored if isinstance(row, dict)
-                and row.get("role") in {"user", "assistant"}
-                and isinstance(row.get("content"), str)
-            ] if isinstance(stored, list) else []
-            history = turns[-self.settings.chat_context_turns * 2:]
-            await self.db.set("inference.active", True)
-            await self._touch_activity()
-            try:
-                inference = await self._current_inference()
-                answer = await inference.chat(
-                    prompt,
-                    history=history,
-                    images=reference_images,
-                    max_new_tokens=self.settings.chat_max_new_tokens,
-                )
-                # Images remain ephemeral: only texts and generated explanations
-                # are persisted to SQLite on the always-on controller.
-                user_text = prompt + (" [تم إرفاق صورة]" if reference_images else "")
-                await self.db.set(
-                    "chat.history",
-                    (history + [
-                        {"role": "user", "content": user_text[:4000]},
-                        {"role": "assistant", "content": answer[:4000]},
-                    ])[-self.settings.chat_context_turns * 2:],
-                )
-                await self.db.event("chat.completed", {
-                    "instance_id": int(instance_id),
-                    "images": len(reference_images),
-                    "prompt_chars": len(prompt),
-                    "response_chars": len(answer),
-                })
-                return answer
-            finally:
-                await self.db.set("inference.active", False)
-                await self._touch_activity()
+            # Store only complete bounded exchanges. Each Telegram conversation
+            # supplies its own history_key; images never enter SQLite.
+            user_text = prompt + (" [تم إرفاق صورة]" if reference_images else "")
+            history.extend([
+                {"role": "user", "content": user_text},
+                {"role": "assistant", "content": answer},
+            ])
+            await self.db.set(history_key, trim_history(history, max_turns=self.settings.chat_context_turns))
+            await self.db.event("chat.completed", {
+                "instance_id": instance_id, "images": len(reference_images),
+                "prompt_chars": len(prompt), "response_chars": len(answer),
+            })
+            return answer
 
-    async def clear_chat_history(self) -> None:
-        async with self._chat_lock:
-            await self.db.set("chat.history", [])
+    async def clear_chat_history(self, *, history_key: str = "chat.history") -> None:
+        # Wait for an in-flight reply to finish before clearing it, so it cannot
+        # reappear in history immediately after /clear.
+        async with self._inference_lock:
+            await self.db.set(history_key, [])
             await self.db.event("chat.cleared", {})
 
     async def recover_current(self) -> None:
@@ -934,7 +893,7 @@ class Orchestrator:
         return (
             f"if [ ! -d {root}/.git ]; then "
             f"git clone --depth 1 --branch {ref} {repo} {root}; "
-            f"else git -C {root} fetch --depth 1 origin {ref} && git -C {root} reset --hard FETCH_HEAD; fi; "
+            f"else git -C {root} fetch --depth 1 origin {ref} && git -C {root} reset --hard FETCH_HEAD; fi && "
             f"nohup bash {root}/scripts/bootstrap_vast.sh > /workspace/pixelpilot-bootstrap.log 2>&1 &"
         )
 

@@ -5,6 +5,7 @@ import base64
 import gc
 import io
 import logging
+import math
 import os
 import secrets
 from contextlib import asynccontextmanager
@@ -12,7 +13,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+
+from pixelpilot.contracts import (GATEWAY_API_VERSION, MAX_HISTORY_CHARS, MAX_IMAGE_PIXELS,
+                                  MAX_PROMPT_CHARS, MAX_TOTAL_IMAGE_BYTES)
+from pixelpilot.services.worker_safety import AuthenticatedBodyLimit, run_thread_safely
 
 from pixelpilot.services.prompt_enhancer import PromptEnhancement, enhance_i2i, enhance_t2i
 from pixelpilot.services.vision_runtime import load_chat_model, run_chat
@@ -36,18 +43,18 @@ PE_I2I_ID = os.environ.get("PROMPT_ENHANCER_I2I_ID", "Qwen/Qwen-Image-2.1-PE-I2I
 
 
 class GenerationRequest(BaseModel):
-    prompt: str = Field(min_length=1)
+    prompt: str = Field(min_length=1, max_length=MAX_PROMPT_CHARS)
     width: int = 1024
     height: int = 1024
     num_inference_steps: int = 40
     seed: int | None = None
-    true_cfg_scale: float = 1.0
+    true_cfg_scale: float = Field(default=1.0, ge=0.0, le=20.0, allow_inf_nan=False)
     negative_prompt: str | None = None
     enhance_prompt: bool = False
 
 
 class ChatRequest(BaseModel):
-    prompt: str = Field(min_length=1, max_length=12000)
+    prompt: str = Field(min_length=1, max_length=MAX_PROMPT_CHARS)
     history: list[dict[str, str]] = Field(default_factory=list, max_length=20)
     images: list[str] = Field(default_factory=list, max_length=3)
     max_new_tokens: int = Field(default=384, ge=32, le=1024)
@@ -59,6 +66,7 @@ class RuntimeState:
     chat_model: Any | None = None
     chat_processor: Any | None = None
     active_model: str = "none"
+    initialized: bool = False
     torch: Any | None = None
     device: str = "unknown"
     memory_mode: str = "unknown"
@@ -124,7 +132,7 @@ def _validate_steps(steps: int) -> None:
 def _dtype(torch: Any) -> Any:
     if MODEL_DTYPE == "float16":
         return torch.float16
-    return torch.bfloat16
+    return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
 
 def _load_pipeline() -> None:
@@ -207,8 +215,13 @@ def _switch_to_chat() -> None:
     state.active_model = "loading-chat"
     _release_gpu()
     import torch
-    model, processor = load_chat_model(CHAT_MODEL_ID)
     state.torch = torch
+    try:
+        model, processor = load_chat_model(CHAT_MODEL_ID)
+    except Exception:
+        state.active_model = "error"
+        _release_gpu()
+        raise
     state.chat_model = model
     state.chat_processor = processor
     state.active_model = "chat"
@@ -223,7 +236,13 @@ def _switch_to_image() -> None:
     state.chat_processor = None
     state.active_model = "loading-image"
     _release_gpu()
-    _load_pipeline()
+    try:
+        _load_pipeline()
+    except Exception:
+        state.pipe = None
+        state.active_model = "error"
+        _release_gpu()
+        raise
 
 
 @asynccontextmanager
@@ -232,7 +251,8 @@ async def lifespan(_app: FastAPI):
         raise RuntimeError("PIXELPILOT_INFERENCE_TOKEN is required")
     # Chat is immediately available. The (much larger) image pipeline only
     # loads after the first image request, avoiding duplicate model residency.
-    await asyncio.to_thread(_switch_to_chat)
+    await run_thread_safely(_switch_to_chat)
+    state.initialized = True
     try:
         yield
     finally:
@@ -245,10 +265,22 @@ async def lifespan(_app: FastAPI):
         state.chat_model = None
         state.chat_processor = None
         state.active_model = "none"
+        state.initialized = False
         _release_gpu()
 
 
-app = FastAPI(title="PixelPilot Multimodal Gateway", lifespan=lifespan)
+app = FastAPI(title="PixelPilot Multimodal Gateway", lifespan=lifespan,
+              docs_url=None, redoc_url=None, openapi_url=None)
+app.add_middleware(
+    AuthenticatedBodyLimit, token=lambda: TOKEN,
+    max_bytes=MAX_TOTAL_IMAGE_BYTES * 4 // 3 + 1024 * 1024,
+)
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request(_request: Any, _exc: RequestValidationError) -> JSONResponse:
+    # Pydantic's default details may echo prompts or whole base64 images.
+    return JSONResponse(status_code=422, content={"detail": "Invalid request payload"})
 
 
 def _generator(seed: int) -> Any:
@@ -274,20 +306,30 @@ def _encode_png(image: Any) -> str:
 
 
 def _decode_uploaded_image(data: bytes) -> Any:
-    from PIL import Image
+    import warnings
+    from PIL import Image, ImageOps
 
     if not data:
         raise HTTPException(status_code=400, detail="Empty reference image")
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Reference image is too large")
     try:
-        image = Image.open(io.BytesIO(data))
-        image.load()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(data)) as source:
+                # Check BEFORE decoding pixel storage, including compressed bombs.
+                if source.width * source.height > MAX_IMAGE_PIXELS:
+                    raise HTTPException(status_code=413, detail="Image dimensions are too large")
+                source.load()
+                oriented = ImageOps.exif_transpose(source)
+                has_alpha = oriented.mode in {"RGBA", "LA"} or "transparency" in oriented.info
+                return oriented.convert("RGBA" if has_alpha else "RGB")
+    except HTTPException:
+        raise
+    except (Image.DecompressionBombWarning, Image.DecompressionBombError) as exc:
+        raise HTTPException(status_code=413, detail="Image dimensions are too large") from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Invalid reference image") from exc
-
-    has_alpha = image.mode in {"RGBA", "LA"} or "transparency" in image.info
-    return image.convert("RGBA" if has_alpha else "RGB")
 
 
 def _prepare_diffusion_for_enhancer() -> None:
@@ -393,8 +435,12 @@ async def _generate_response(
     negative_prompt: str | None,
     enhance_prompt: bool,
 ) -> dict[str, Any]:
-    if not prompt.strip():
-        raise HTTPException(status_code=422, detail="prompt cannot be empty")
+    if not prompt.strip() or len(prompt) > MAX_PROMPT_CHARS:
+        raise HTTPException(status_code=422, detail="prompt is blank or too long")
+    if negative_prompt is not None and len(negative_prompt) > MAX_PROMPT_CHARS:
+        raise HTTPException(status_code=422, detail="negative_prompt is too long")
+    if not math.isfinite(true_cfg_scale) or not 0 <= true_cfg_scale <= 20:
+        raise HTTPException(status_code=422, detail="true_cfg_scale must be finite and between 0 and 20")
     _validate_dimensions(width, height)
     _validate_steps(steps)
     if len(reference_images) > MAX_REFERENCE_IMAGES:
@@ -411,19 +457,21 @@ async def _generate_response(
     enhancer_ratio_follow: str | None = None
     enhancer_fallback = False
 
+    if generation_lock.locked():
+        raise HTTPException(status_code=409, detail="Inference is busy; try again after this request")
     async with generation_lock:
         try:
-            await asyncio.to_thread(_switch_to_image)
+            await run_thread_safely(_switch_to_image)
         except Exception as exc:
             logger.exception("Image model could not load")
-            raise HTTPException(status_code=503, detail="Image model failed to load: " + str(exc)[:300]) from exc
+            raise HTTPException(status_code=503, detail="Image model failed to load; inspect worker logs") from exc
         if enhance_prompt:
             try:
                 needed_model = PE_I2I_ID if reference_images else PE_T2I_ID
                 if needed_model not in enhancer_ready:
                     _ensure_enhancer_download(needed_model)
                     raise RuntimeError("Requested Qwen enhancer is downloading; this image uses Original")
-                enhanced = await asyncio.to_thread(
+                enhanced = await run_thread_safely(
                     _enhance_prompt,
                     prompt,
                     reference_images,
@@ -443,7 +491,7 @@ async def _generate_response(
                 enhancer_fallback = True
 
         try:
-            image = await asyncio.to_thread(
+            image = await run_thread_safely(
                 _run_pipeline,
                 prompt=effective_prompt,
                 width=width,
@@ -458,8 +506,8 @@ async def _generate_response(
             raise
         except Exception as exc:
             logger.exception("Image generation failed")
-            detail = str(exc)
-            if "out of memory" in detail.lower():
+            detail = "Image inference failed; inspect worker logs"
+            if "out of memory" in str(exc).lower():
                 detail = (
                     "GPU ran out of memory. Try Standard quality, fewer/lower-resolution "
                     "reference images, disable prompt enhancement, or use a GPU with more VRAM."
@@ -470,8 +518,8 @@ async def _generate_response(
         "b64_json": _encode_png(image),
         "mime_type": "image/png",
         "seed": actual_seed,
-        "width": width,
-        "height": height,
+        "width": getattr(image, "width", width),
+        "height": getattr(image, "height", height),
         "model": MODEL_ID,
         "reference_count": len(reference_images),
         "prompt_enhanced": prompt_enhanced,
@@ -484,10 +532,15 @@ async def _generate_response(
 @app.get("/health")
 async def health(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     _check_auth(authorization)
-    if state.pipe is None and state.chat_model is None:
-        raise HTTPException(status_code=503, detail="Multimodal model is loading")
+    if state.pipe is None and state.chat_model is None and not (
+        state.initialized and state.active_model in {"loading-chat", "loading-image"}
+    ):
+        raise HTTPException(status_code=503, detail="Multimodal runtime is not ready")
     return {
         "status": "ok",
+        "api_version": GATEWAY_API_VERSION,
+        "busy": generation_lock.locked(),
+        "capabilities": ["chat", "vision", "image_generation", "image_editing"],
         "model": CHAT_MODEL_ID if state.active_model == "chat" else MODEL_ID,
         "active_model": state.active_model,
         "device": state.device,
@@ -511,8 +564,10 @@ async def health(authorization: str | None = Header(default=None)) -> dict[str, 
 @app.get("/v1/models")
 async def models(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     _check_auth(authorization)
-    if state.pipe is None and state.chat_model is None:
-        raise HTTPException(status_code=503, detail="Multimodal model is loading")
+    if state.pipe is None and state.chat_model is None and not (
+        state.initialized and state.active_model in {"loading-chat", "loading-image"}
+    ):
+        raise HTTPException(status_code=503, detail="Multimodal runtime is not ready")
     return {"object": "list", "data": [
         {"id": CHAT_MODEL_ID, "object": "model"},
         {"id": MODEL_ID, "object": "model"},
@@ -561,11 +616,20 @@ async def image_edits(
         )
 
     reference_images: list[Any] = []
-    for upload in image:
-        mime = (upload.content_type or "").lower()
-        if mime and not mime.startswith("image/"):
-            raise HTTPException(status_code=415, detail="Only image references are supported")
-        reference_images.append(_decode_uploaded_image(await upload.read()))
+    total_bytes = 0
+    try:
+        for upload in image:
+            mime = (upload.content_type or "").lower()
+            if mime and not mime.startswith("image/"):
+                raise HTTPException(status_code=415, detail="Only image references are supported")
+            data = await upload.read(MAX_UPLOAD_BYTES + 1)
+            total_bytes += len(data)
+            if total_bytes > MAX_TOTAL_IMAGE_BYTES:
+                raise HTTPException(status_code=413, detail="Combined images are too large")
+            reference_images.append(_decode_uploaded_image(data))
+    finally:
+        for upload in image:
+            await upload.close()
 
     return await _generate_response(
         prompt=prompt,
@@ -588,10 +652,13 @@ async def chat_completions(
     _check_auth(authorization)
     if len(request.images) > CHAT_MAX_IMAGES:
         raise HTTPException(status_code=422, detail=f"At most {CHAT_MAX_IMAGES} images supported")
-    if sum(len(str(turn.get("content", ""))) for turn in request.history) > 16000:
+    if not request.prompt.strip():
+        raise HTTPException(status_code=422, detail="Chat prompt cannot be blank")
+    if sum(len(str(turn.get("content", ""))) for turn in request.history) > MAX_HISTORY_CHARS:
         raise HTTPException(status_code=413, detail="Chat history too long")
 
     images: list[Any] = []
+    total_bytes = 0
     for encoded in request.images:
         if len(encoded) > MAX_UPLOAD_BYTES * 4 // 3 + 100:
             raise HTTPException(status_code=413, detail="Image too large")
@@ -599,16 +666,19 @@ async def chat_completions(
             blob = base64.b64decode(encoded, validate=True)
         except Exception as exc:
             raise HTTPException(status_code=400, detail="Invalid base64 image") from exc
+        total_bytes += len(blob)
+        if total_bytes > MAX_TOTAL_IMAGE_BYTES:
+            raise HTTPException(status_code=413, detail="Combined images are too large")
         img = _decode_uploaded_image(blob)
-        if img.width * img.height > 25_000_000:
-            raise HTTPException(status_code=413, detail="Image pixel dimensions too large")
         img.thumbnail((1600, 1600))
         images.append(img.convert("RGB"))
 
+    if generation_lock.locked():
+        raise HTTPException(status_code=409, detail="Inference is busy; try again after this request")
     async with generation_lock:
         try:
-            await asyncio.to_thread(_switch_to_chat)
-            reply = await asyncio.to_thread(
+            await run_thread_safely(_switch_to_chat)
+            reply = await run_thread_safely(
                 run_chat,
                 state.chat_model,
                 state.chat_processor,
@@ -619,7 +689,7 @@ async def chat_completions(
             )
         except Exception as exc:
             logger.exception("Multimodal chat request failed")
-            raise HTTPException(status_code=500, detail="Chat inference failed: " + str(exc)[:250]) from exc
+            raise HTTPException(status_code=500, detail="Chat inference failed; shorten the input or inspect worker logs") from exc
 
     return {
         "id": "pixelpilot-chat",

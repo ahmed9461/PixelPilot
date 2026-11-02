@@ -1,11 +1,25 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Vast injects environment variables into PID 1. Recover them when onstart
+# executes in a child shell.
+if [[ -r /proc/1/environ ]]; then
+  while IFS= read -r -d '' entry; do
+    key="${entry%%=*}"
+    case "$key" in
+      HF_TOKEN|PIXELPILOT_INFERENCE_TOKEN|INFERENCE_PORT|MODEL_ID|CHAT_MODEL_ID|CHAT_MAX_IMAGES|MODEL_DTYPE|IMAGE_MEMORY_MODE|IMAGE_FULL_GPU_MIN_VRAM_GB|IMAGE_VAE_TILING|IMAGE_VAE_SLICING|IMAGE_MAX_REFERENCE_IMAGES|IMAGE_MAX_UPLOAD_MB|PROMPT_ENHANCER_T2I_ID|PROMPT_ENHANCER_I2I_ID|HF_HOME|DATA_DIRECTORY|PIXELPILOT_REPO_URL|PIXELPILOT_REPO_REF)
+        if [[ -z "${!key:-}" ]]; then export "$entry"; fi
+        ;;
+    esac
+  done < /proc/1/environ
+fi
+
+
 WORKSPACE="${WORKSPACE:-/workspace}"
 PIXELPILOT_ROOT="${PIXELPILOT_ROOT:-$WORKSPACE/PixelPilot}"
 VENV_DIR="${VENV_DIR:-$WORKSPACE/pixelpilot-image-runtime}"
 RUNTIME_MARKER="$VENV_DIR/.pixelpilot-runtime-version"
-RUNTIME_VERSION="pixelpilot-multimodal-v1"
+RUNTIME_VERSION="pixelpilot-multimodal-v2"
 
 INFERENCE_PORT="${INFERENCE_PORT:-8190}"
 MODEL_ID="${MODEL_ID:-Qwen/Qwen-Image-2.1}"
@@ -26,6 +40,19 @@ LOG_FILE="${LOG_FILE:-$WORKSPACE/pixelpilot-bootstrap.log}"
 GATEWAY_LOG="${GATEWAY_LOG:-$WORKSPACE/pixelpilot-image-gateway.log}"
 
 mkdir -p "$WORKSPACE" "$HF_HOME"
+# Do not kill an unrelated process or start duplicate paid model downloads.
+exec 9>"$WORKSPACE/pixelpilot-bootstrap.lock"
+if ! flock -n 9; then
+  echo "[PixelPilot] a worker bootstrap is already running"
+  exit 0
+fi
+# A stale runtime may be rebuilt, but only within its dedicated workspace.
+resolved_venv="$(realpath -m "$VENV_DIR")"
+resolved_workspace="$(realpath -m "$WORKSPACE")"
+if [[ "$resolved_workspace" == "/" || "$resolved_venv" != "$resolved_workspace/"* || "$resolved_venv" == "$(realpath -m "$PIXELPILOT_ROOT")"* ]]; then
+  echo "[PixelPilot] refusing unsafe runtime directory" >&2
+  exit 25
+fi
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 GATEWAY_PID=""
@@ -34,6 +61,7 @@ cleanup() {
   local code=$?
   if [[ -n "$GATEWAY_PID" ]] && kill -0 "$GATEWAY_PID" 2>/dev/null; then
     kill "$GATEWAY_PID" 2>/dev/null || true
+    wait "$GATEWAY_PID" 2>/dev/null || true
   fi
   exit "$code"
 }
@@ -62,18 +90,6 @@ if [[ ! -f "$PIXELPILOT_ROOT/pyproject.toml" ]]; then
   exit 20
 fi
 
-# Vast injects environment variables into PID 1. Recover them when onstart
-# executes in a child shell.
-if [[ -r /proc/1/environ ]]; then
-  while IFS= read -r -d '' entry; do
-    key="${entry%%=*}"
-    case "$key" in
-      HF_TOKEN|PIXELPILOT_INFERENCE_TOKEN|INFERENCE_PORT|MODEL_ID|CHAT_MODEL_ID|CHAT_MAX_IMAGES|MODEL_DTYPE|IMAGE_MEMORY_MODE|IMAGE_FULL_GPU_MIN_VRAM_GB|IMAGE_VAE_TILING|IMAGE_VAE_SLICING|IMAGE_MAX_REFERENCE_IMAGES|IMAGE_MAX_UPLOAD_MB|PROMPT_ENHANCER_T2I_ID|PROMPT_ENHANCER_I2I_ID|HF_HOME|DATA_DIRECTORY|PIXELPILOT_REPO_URL|PIXELPILOT_REPO_REF)
-        if [[ -z "${!key:-}" ]]; then export "$entry"; fi
-        ;;
-    esac
-  done < /proc/1/environ
-fi
 
 if [[ -z "${PIXELPILOT_INFERENCE_TOKEN:-}" ]]; then
   echo "[PixelPilot] ERROR: PIXELPILOT_INFERENCE_TOKEN is unavailable" >&2
@@ -107,7 +123,6 @@ fi
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
   echo "[PixelPilot] creating runtime venv at $VENV_DIR"
   "$PYTHON_BIN" -m venv --system-site-packages "$VENV_DIR"
-  echo "$RUNTIME_VERSION" > "$RUNTIME_MARKER"
 fi
 PYTHON_BIN="$VENV_DIR/bin/python"
 
@@ -116,16 +131,22 @@ if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
   exit 22
 fi
 
-echo "[PixelPilot] installing Qwen-Image runtime..."
-"$PYTHON_BIN" -m pip install -U pip wheel setuptools
-"$PYTHON_BIN" -m pip install -U   'transformers>=5.17.0'   accelerate   pillow   fastapi   uvicorn   python-multipart   hf_xet
-"$PYTHON_BIN" -m pip install -U   'git+https://github.com/huggingface/diffusers.git'
+# Reject an incompatible base before downloading a large replacement PyTorch.
+# The official Vast PyTorch image must provide CUDA-enabled torch already.
+if ! "$PYTHON_BIN" -c 'import sys, torch; assert sys.version_info >= (3, 11); assert torch.cuda.is_available()'; then
+  echo "[PixelPilot] Python >=3.11 and CUDA-enabled PyTorch are required; choose a compatible Vast image" >&2
+  exit 26
+fi
 
-# Reuse the CUDA-enabled torch from the Vast PyTorch image. If it is absent
-# from the image, install a current PyTorch wheel as a fallback.
-if ! "$PYTHON_BIN" -c 'import torch; assert torch.cuda.is_available()' >/dev/null 2>&1; then
-  echo "[PixelPilot] CUDA PyTorch was not visible in the runtime; installing torch fallback"
-  "$PYTHON_BIN" -m pip install -U 'torch>=2.4.0'
+if [[ "$(cat "$RUNTIME_MARKER" 2>/dev/null || true)" != "$RUNTIME_VERSION" ]]; then
+  echo "[PixelPilot] installing multimodal runtime..."
+  "$PYTHON_BIN" -m pip install -U pip wheel setuptools
+  "$PYTHON_BIN" -m pip install -U 'transformers>=5.17.0,<6' accelerate pillow fastapi uvicorn python-multipart hf_xet
+  "$PYTHON_BIN" -m pip install -U 'git+https://github.com/huggingface/diffusers.git'
+  "$PYTHON_BIN" -m pip check
+  # Fail during setup, not after renting and announcing a ready but broken bot.
+  "$PYTHON_BIN" -c 'from transformers import AutoModelForMultimodalLM, AutoProcessor; from diffusers import QwenImage21Pipeline'
+  echo "$RUNTIME_VERSION" > "$RUNTIME_MARKER"
 fi
 
 export HF_HOME MODEL_ID CHAT_MODEL_ID CHAT_MAX_IMAGES MODEL_DTYPE IMAGE_MEMORY_MODE
@@ -134,8 +155,6 @@ export IMAGE_MAX_REFERENCE_IMAGES IMAGE_MAX_UPLOAD_MB PIXELPILOT_INFERENCE_TOKEN
 export PROMPT_ENHANCER_T2I_ID PROMPT_ENHANCER_I2I_ID
 if [[ -n "${HF_TOKEN:-}" ]]; then export HF_TOKEN; fi
 
-pkill -f "pixelpilot.inference_gateway" 2>/dev/null || true
-sleep 1
 
 echo "[PixelPilot] launching chat + image gateway (chat first, image on demand)"
 export PYTHONPATH="$PIXELPILOT_ROOT/src${PYTHONPATH:+:$PYTHONPATH}"

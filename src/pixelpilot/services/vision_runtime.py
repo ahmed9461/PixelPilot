@@ -6,8 +6,9 @@ ordinary single-GPU instances.
 """
 from __future__ import annotations
 
-import re
 from typing import Any
+
+from pixelpilot.contracts import MAX_CHAT_INPUT_TOKENS, visible_reply
 
 
 def load_chat_model(model_id: str) -> tuple[Any, Any]:
@@ -19,7 +20,7 @@ def load_chat_model(model_id: str) -> tuple[Any, Any]:
     processor = AutoProcessor.from_pretrained(model_id)
     model = AutoModelForMultimodalLM.from_pretrained(
         model_id,
-        torch_dtype=torch.bfloat16,
+        torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
         device_map="auto",
         low_cpu_mem_usage=True,
     ).eval()
@@ -49,14 +50,23 @@ def run_chat(
     parts.append({"type": "text", "text": prompt})
     messages.append({"role": "user", "content": parts})
 
-    encoded = processor.apply_chat_template(
-        messages,
-        add_generation_prompt=True,
-        tokenize=True,
-        return_dict=True,
-        return_tensors="pt",
-        enable_thinking=False,
-    ).to(model.device)
+    # Trim only complete historical exchanges. Never silently truncate the
+    # current question or the image tokens; excessive current inputs fail cleanly.
+    while True:
+        encoded = processor.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+            enable_thinking=False,
+        )
+        if encoded["input_ids"].shape[-1] <= MAX_CHAT_INPUT_TOKENS:
+            break
+        if len(messages) <= 1:
+            raise ValueError("Current input is too large; shorten the question or use fewer images")
+        del messages[:2]
+    encoded = encoded.to(model.device)
 
     with torch.inference_mode():
         tokens = model.generate(
@@ -68,7 +78,5 @@ def run_chat(
     response = processor.decode(
         tokens[0][prompt_tokens:], skip_special_tokens=True
     ).strip()
-    # Prevent raw internal thinking markup from reaching Telegram in case a
-    # checkpoint ignores enable_thinking=False.
-    response = re.sub(r"<think>.*?</think>\s*", "", response, flags=re.DOTALL).strip()
-    return response or "لم أتمكن من توليد إجابة. حاول بصياغة أخرى."
+    response = visible_reply(response)
+    return response or "لم أتمكن من توليد إجابة مكتملة. حاول بصياغة أخرى."

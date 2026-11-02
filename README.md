@@ -23,20 +23,20 @@ Advanced (optional): `CHAT_MODEL_ID=Qwen/Qwen3.5-27B` for larger GPUs; increase 
 - `/clear` deletes the recent text history. Images themselves are not saved in history.
 - Image settings preserve aspect ratio, Standard/2K presets, steps, and the optional Qwen prompt enhancer.
 
-A maximum of 3 images can be submitted at once to visual chat; the image editor accepts up to 10 references. Chat context is intentionally bounded to avoid VRAM exhaustion. The vision model's prior image pixels are **not** retained between messages, so follow-up questions rely on its previous text explanation, not the original pixels.
+A maximum of 3 images can be submitted at once to visual chat; the image editor accepts up to 10 references. Chat context is intentionally bounded to avoid VRAM exhaustion. History and modes are isolated by Telegram chat/topic. A reply to a previous image reattaches that image; otherwise follow-ups rely on the prior text explanation, not stored pixels. History is bounded to 16,000 characters and actual model input to 8,192 tokens. Combined images are limited to 50 MB per request; pixel bounds are checked before decoding.
 
 ## Vast.ai offers and safeguards
 
 **Hard upper limit: $0.60 per GPU hour**, verified at discovery **and again before renting**. This is an hourly rental price ceiling, **not an entire-session bill limit**. Internet egress/ingress, continued storage charges while stopped, and additional downloads may cost extra.
 
-The bot queries 80GB+, 48GB+ and 24GB+ GPU pools (and offers 80GB+ and 48GB+ shortlist buttons), deduplicates asks, and ranks by advertised `dlperf`, GPU VRAM, download/upload speed, host reliability, rental price, and transfer-aware cost. An expensive but powerful GPU may rank above a cheap/slow GPU while remaining under the cap.
+The bot queries price-, performance- and download-sorted 80GB+, 48GB+ and 24GB+ GPU pools (and offers 80GB+ and 48GB+ shortlist buttons), deduplicates asks, and ranks by advertised `dlperf`, GPU VRAM, download/upload speed, host reliability, rental price, and transfer-aware cost. An expensive but powerful GPU may rank above a cheap/slow GPU while remaining under the cap.
 
 Default selection rules:
 
 - Verified offers, reliability >= 98%.
 - One GPU, minimum 24GB VRAM, preferred 48GB+, with 80GB+ premium searches.
 - At least 150 Mbps **advertised** download and 80 Mbps **advertised** upload; preferred 500/200 Mbps.
-- Explicit Offer ID confirmation, revalidation of GPU/price/bandwidth/transfer terms before creating the instance, pending-instance reconciliation, and `cancel_unavail=true`.
+- Explicit Offer ID confirmation, revalidation of identity/GPU/price/transfer terms and bandwidth policy before creating the instance, pending-instance reconciliation, and `cancel_unavail=true`.
 - Live marketplace quote prices and bandwidth values are **not speed tests** and must not be treated as guaranteed.
 - Optional inbound rate ceiling via `VAST_MAX_DOWNLOAD_USD_PER_TB`; unknown transfer prices never count as free.
 
@@ -54,14 +54,14 @@ python -m pixelpilot.main
 
 For the GPU worker, `scripts/bootstrap_vast.sh` installs Diffusers/Transformers and launches `pixelpilot.inference_gateway:app` on the mapped port. The worker starts the Qwen3.5 chat model and lazily switches to the image pipeline when requested.
 
-**Existing VPS configurations:** old `.env` values override new code defaults, so explicitly change `VAST_MAX_PRICE_USD_HOUR=0.50` to `0.60` if desired, add the chat model settings, and deploy the same Git branch/ref to both controller and new worker. Pushing a commit does not restart a running VPS or upgrade an already rented worker.
+**Existing VPS configurations:** old `.env` values override new code defaults, so explicitly change `VAST_MAX_PRICE_USD_HOUR=0.50` to `0.60` if desired, add the chat model settings, and deploy the same Git branch/ref to both controller and new worker. Pushing a commit does not restart a running VPS or upgrade an already rented worker. API-version/capability checks intentionally reject the old image-only worker.
 
-See [Runbook](docs/RUNBOOK.md), [Security](docs/SECURITY.md), and [the multimodal migration notes](docs/MULTIMODAL.md).
+See [the hardening and deployment acceptance report](docs/HARDENING.md), [current architecture](docs/ARCHITECTURE.md), and [migration notes](docs/MULTIMODAL.md). Older image-only decision/progress documents are historical and superseded by this multimodal migration.
 
 ## Data, safety and licenses
 
 - The Telegram bot is restricted to the owner ID. Vast credentials remain in the controller, not on the GPU. Worker requests require a per-instance bearer token.
-- **Text chat history** resides in the controller's SQLite DB. Images are processed in memory, not written into SQLite. Telegram and the hosting provider still have their respective data-handling policies.
+- **Text chat history** resides in the controller's SQLite DB. Images are not written into SQLite; HTTP multipart handling can use temporary files, which are closed after processing. Request bodies are authenticated and bounded before parsing. Telegram and the hosting provider still have their respective data-handling policies.
 - The public worker endpoint currently uses HTTP by default unless HTTPS is configured; bearer authentication is **not encryption**. Use a private tunnel/reverse proxy with TLS for sensitive images. Never publish secrets in Git.
 - No automatic server destruction unless explicitly enabled in the cost guard; monitor real Vast billing.
 - Qwen3.5-9B: [Apache 2.0](https://huggingface.co/Qwen/Qwen3.5-9B). Qwen-Image-2.1: [Qwen Research License](https://huggingface.co/Qwen/Qwen-Image-2.1) — review terms, especially for commercial use.
