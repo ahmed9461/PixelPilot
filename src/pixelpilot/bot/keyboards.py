@@ -8,6 +8,14 @@ from pixelpilot.domain import GpuOffer
 def main_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🧠 دردشة", callback_data="chat:mode:chat", style="primary"),
+                InlineKeyboardButton(text="👁️ فهم الصور", callback_data="chat:mode:vision"),
+            ],
+            [
+                InlineKeyboardButton(text="🎨 إنشاء صور", callback_data="chat:mode:generate"),
+                InlineKeyboardButton(text="🖌️ تعديل صور", callback_data="chat:mode:edit"),
+            ],
             [InlineKeyboardButton(text="⚙️ إعدادات الصور", callback_data="imagesettings:open", style="primary")],
             [InlineKeyboardButton(text="🎨 طريقة الاستخدام", callback_data="chat:help")],
             [InlineKeyboardButton(text="🔎 البحث عن سيرفر", callback_data="servers:search", style="primary")],
