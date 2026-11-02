@@ -441,3 +441,11 @@ def test_http_408_and_429_are_ambiguous():
 
     for status in (408, 429):
         asyncio.run(scenario(status))
+
+
+def test_false_string_is_not_treated_as_a_verified_host():
+    raw = {"id": 1, "gpu_name": "A6000", "gpu_ram": 48000,
+           "dph_total": 0.4, "verified": "false"}
+    assert normalize_offer(raw).verified is False
+    raw["verified"] = "true"
+    assert normalize_offer(raw).verified is True
