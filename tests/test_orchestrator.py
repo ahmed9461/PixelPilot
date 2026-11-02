@@ -418,11 +418,11 @@ def test_offer_search_hides_rows_above_final_price_ceiling(tmp_path):
             async def search_offers(self, query, limit, **kwargs):
                 if "gpu_ram>=48" in query:
                     return [
-                        GpuOffer(1, "RTX A6000", 48, 0.49, 0.99, 40),
-                        GpuOffer(2, "RTX A6000", 48, 0.53, 0.99, 42),
+                        GpuOffer(1, "RTX A6000", 48, 0.49, 0.99, 40, verified=True, inet_down_mbps=600, inet_up_mbps=250, download_usd_per_gb=0),
+                        GpuOffer(2, "RTX A6000", 48, 0.53, 0.99, 42, verified=True, inet_down_mbps=600, inet_up_mbps=250, download_usd_per_gb=0),
                     ]
                 return [
-                    GpuOffer(3, "RTX 3090", 24, 0.25, 0.99, 60),
+                    GpuOffer(3, "RTX 3090", 24, 0.25, 0.99, 60, verified=True, inet_down_mbps=600, inet_up_mbps=250, download_usd_per_gb=0),
                 ]
 
         orch = Orchestrator(
@@ -526,7 +526,9 @@ def test_rent_revalidates_exact_offer_and_rejects_stale_id(tmp_path):
                 self.search_calls.append((query, limit, kwargs))
                 if self.live:
                     preferred = GpuOffer(
-                        78, "RTX A6000", 48, 0.40, 0.99, 40
+                        78, "RTX A6000", 48, 0.40, 0.99, 40, verified=True,
+                        inet_down_mbps=600, inet_up_mbps=350,
+                        download_usd_per_gb=0, upload_usd_per_gb=0,
                     )
                     if "gpu_ram>=48" in query:
                         return [preferred]
@@ -577,7 +579,9 @@ def test_rent_requires_reconfirmation_when_price_changes(tmp_path):
             async def search_offers(self, query, limit, **kwargs):
                 self.search_calls.append((query, limit, kwargs))
                 offer = GpuOffer(
-                    78, "RTX A6000", 48, self.price, 0.99, 40
+                    78, "RTX A6000", 48, self.price, 0.99, 40, verified=True,
+                    inet_down_mbps=600, inet_up_mbps=350,
+                    download_usd_per_gb=0, upload_usd_per_gb=0,
                 )
                 return [offer]
 
@@ -657,7 +661,9 @@ def test_rent_exact_id_survives_ranked_market_churn(tmp_path):
             async def lookup_offer(self, offer_id, *, machine_id=None, storage_gb):
                 # Search result has fallen outside the top 64, but the exact ID is live.
                 assert offer_id == 78
-                return GpuOffer(78, "RTX A6000", 48, 0.40, 0.99, 40)
+                return GpuOffer(78, "RTX A6000", 48, 0.40, 0.99, 40, machine_id=78000,
+                                verified=True, inet_down_mbps=600, inet_up_mbps=350,
+                                download_usd_per_gb=0, upload_usd_per_gb=0)
 
         vast = ChurnVast()
         orch = Orchestrator(settings, db, vast)
