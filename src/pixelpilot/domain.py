@@ -49,10 +49,11 @@ class GpuOffer:
     @property
     def display_name(self) -> str:
         rel = "?" if self.reliability is None else f"{self.reliability * 100:.1f}%"
-        down = "?" if self.inet_down_mbps is None else f"{self.inet_down_mbps:.0f}"
+        down = "?" if self.download_usd_per_gb is None else f"${self.download_usd_per_gb * GB_PER_TB:.6g}"
+        down_mbps = "?" if self.inet_down_mbps is None else f"{self.inet_down_mbps:.0f}"
         return (
             f"{self.gpu_name} • {self.gpu_ram_gb:.0f}GB • "
-            + f"$ {self.price_per_hour:.3f}/h • ↓{down}Mbps • R {rel}"
+            + f"$ {self.price_per_hour:.3f}/h • ↓ {down}/TB • {down_mbps}Mbps • R {rel}"
         )
 
     def public_dict(self) -> dict[str, Any]:
