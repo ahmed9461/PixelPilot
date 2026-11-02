@@ -81,7 +81,12 @@ def normalize_offer(raw: dict[str, Any]) -> GpuOffer:
     verified_raw = raw.get("verified")
     verified: bool | None = None
     if verified_raw is not None:
-        verified = bool(verified_raw)
+        if isinstance(verified_raw, bool):
+            verified = verified_raw
+        elif isinstance(verified_raw, (int, float)):
+            verified = verified_raw == 1
+        else:
+            verified = str(verified_raw).strip().lower() in {"true", "1", "yes", "verified"}
     elif raw.get("verification") is not None:
         verified = str(raw.get("verification")).lower() in {"verified", "true", "1"}
     machine_id: int | None = None
