@@ -280,7 +280,7 @@ async def _search_offers(
     settings = orch().settings
     comparison = (
         f"سقف الإيجار الصارم: <b>${settings.vast_max_price_usd_hour:.2f}/ساعة</b>. "
-        f"نت مطلوب ↓{settings.vast_min_inet_down_mbps:g}/↑{settings.vast_min_inet_up_mbps:g} Mbps.\\n"
+        f"نت مطلوب ↓{settings.vast_min_inet_down_mbps:g}/↑{settings.vast_min_inet_up_mbps:g} Mbps.\n"
         f"المقارنة بين المرشحين: تنزيل مفترض <b>{settings.vast_estimated_download_gb:g} GB</b> "
         f"+ <b>{settings.vast_cost_comparison_hours:g} ساعة</b> تشغيل.\n"
         "الترتيب يعطي أولوية للأداء والنت والموثوقية، مع تقدير رسوم التنزيل؛ السرعات معلنة وليست قياسات فعلية."
