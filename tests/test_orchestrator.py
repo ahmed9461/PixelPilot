@@ -36,12 +36,23 @@ class FakeVast:
     async def search_offers(self, query, limit, **kwargs):
         self.search_calls.append((query, limit, kwargs))
         preferred = GpuOffer(
-            78, "RTX A6000", 48, 0.40, 0.99, 40, machine_id=78000
+            78, "RTX A6000", 48, 0.40, 0.99, 40, machine_id=78000,
+            inet_down_mbps=600, inet_up_mbps=350, verified=True,
+            download_usd_per_gb=0, upload_usd_per_gb=0,
         )
+        premium = GpuOffer(
+            79, "H100", 80, 0.57, 0.995, 85, machine_id=79000,
+            inet_down_mbps=1100, inet_up_mbps=700, verified=True,
+            download_usd_per_gb=0, upload_usd_per_gb=0,
+        )
+        if "gpu_ram>=80" in query:
+            return [premium]
         if "gpu_ram>=48" in query:
             return [preferred]
         return [
-            GpuOffer(77, "RTX 4090", 24, 0.25, 0.99, 60, machine_id=77000),
+            GpuOffer(77, "RTX 4090", 24, 0.25, 0.99, 60, machine_id=77000,
+                     inet_down_mbps=500, inet_up_mbps=250, verified=True,
+                     download_usd_per_gb=0),
             preferred,
         ]
 
@@ -73,9 +84,14 @@ class FakeVast:
 class FakeInference:
     def __init__(self):
         self.request = None
+        self.chat_request = None
 
     async def is_ready(self):
         return True
+
+    async def chat(self, prompt, **kwargs):
+        self.chat_request = (prompt, kwargs)
+        return "أرى شجرة ونهرًا في الصورة."
 
     async def generate(self, prompt, **kwargs):
         self.request = (prompt, kwargs)
@@ -110,16 +126,18 @@ def test_orchestrator_full_fake_lifecycle(tmp_path):
         orch = Orchestrator(settings, db, vast, inference_factory=lambda url, token: inference)
 
         offers = await orch.offers()
-        assert offers[0].gpu_ram_gb == 48
-        assert len(vast.search_calls) == 2
-        assert "gpu_ram>=48" in vast.search_calls[0][0]
-        assert "gpu_ram>=24" in vast.search_calls[1][0]
+        assert offers[0].gpu_ram_gb == 80
+        assert len(vast.search_calls) == 3
+        assert "gpu_ram>=80" in vast.search_calls[0][0]
+        assert "gpu_ram>=48" in vast.search_calls[1][0]
+        assert "gpu_ram>=24" in vast.search_calls[2][0]
         assert vast.search_calls[0][1] == settings.vast_search_pool_limit
         await orch.rent_and_prepare(78)
         assert vast.lookup_calls == [(78, 78000, 100.0)]
         assert await db.get("instance.phase") == "ready"
         env = vast.create_kwargs["env"]
         assert "MODEL_ID=Qwen/Qwen-Image-2.1" in env
+        assert "CHAT_MODEL_ID=Qwen/Qwen3.5-9B" in env
         assert "IMAGE_MEMORY_MODE=auto" in env
         assert "IMAGE_MAX_REFERENCE_IMAGES=10" in env
         assert "PROMPT_ENHANCER_T2I_ID=Qwen/Qwen-Image-2.1-PE-T2I" in env
@@ -137,6 +155,12 @@ def test_orchestrator_full_fake_lifecycle(tmp_path):
             enhance_prompt=True,
         )
         assert result.data == b"png"
+        reply = await orch.chat("ماذا ترى؟", reference_images=(ReferenceImage(b"x"),))
+        assert "شجرة" in reply
+        assert inference.chat_request[1]["images"][0].data == b"x"
+        assert await db.get("chat.history")
+        await orch.clear_chat_history()
+        assert await db.get("chat.history") == []
         assert inference.request[0] == prompt
         assert inference.request[1]["enhance_prompt"] is True
 
@@ -226,8 +250,9 @@ def test_preferred_only_offer_search_skips_fallback_pool(tmp_path):
         )
 
         offers = await orch.offers(preferred_only=True)
-        assert len(vast.search_calls) == 1
-        assert "gpu_ram>=48" in vast.search_calls[0][0]
+        assert len(vast.search_calls) == 2
+        assert "gpu_ram>=80" in vast.search_calls[0][0]
+        assert "gpu_ram>=48" in vast.search_calls[1][0]
         assert offers
         assert all(item.gpu_ram_gb >= 48 for item in offers)
         assert await db.get("offers.search_mode") == "preferred"
@@ -793,5 +818,22 @@ def test_rent_rejects_changed_gpu_vram_price_or_policy(tmp_path, changed):
         with pytest.raises(OfferChangedError):
             await orch.rent(78)
         assert vast.create_kwargs is None
+
+    asyncio.run(scenario())
+
+
+def test_premium_only_offer_search_is_strict(tmp_path):
+    async def scenario():
+        settings = Settings(_env_file=None, database_path=tmp_path / "db.sqlite3")
+        db = Database(settings.database_path)
+        await db.init()
+        vast = FakeVast()
+        orch = Orchestrator(settings, db, vast)
+        offers = await orch.offers(premium_only=True)
+        assert len(vast.search_calls) == 1
+        assert "gpu_ram>=80" in vast.search_calls[0][0]
+        assert len(offers) == 1
+        assert offers[0].gpu_ram_gb == 80
+        assert await db.get("offers.search_mode") == "premium"
 
     asyncio.run(scenario())
