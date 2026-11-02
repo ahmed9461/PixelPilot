@@ -105,14 +105,14 @@ class Orchestrator:
                 "انتهت مهلة قراءة حالة السيرفر من Vast؛ حاول مرة أخرى."
             ) from exc
 
-    async def offers(self, *, preferred_only: bool = False) -> list[GpuOffer]:
+    async def offers(self, *, preferred_only: bool = False, premium_only: bool = False) -> list[GpuOffer]:
         async with self._offers_lock:
-            return await self._offers_locked(preferred_only=preferred_only)
+            return await self._offers_locked(preferred_only=preferred_only, premium_only=premium_only)
 
-    async def _offers_locked(self, *, preferred_only: bool) -> list[GpuOffer]:
+    async def _offers_locked(self, *, preferred_only: bool, premium_only: bool = False) -> list[GpuOffer]:
         # Explore 80GB+, 48GB+ and 24GB+ pools, then rank actual performance,
         # not simply GPU memory or the cheapest hourly ask.
-        floors = (
+        floors = (self.settings.vast_premium_gpu_ram_gb,) if premium_only else (
             self.settings.vast_premium_gpu_ram_gb,
             self.settings.vast_preferred_gpu_ram_gb,
         ) if preferred_only else (
@@ -148,8 +148,9 @@ class Orchestrator:
             offer for offer in deduped.values()
             if 0 < offer.price_per_hour <= self.settings.vast_max_price_usd_hour
             and offer.gpu_ram_gb >= (
-                self.settings.vast_preferred_gpu_ram_gb if preferred_only
-                else self.settings.vast_min_gpu_ram_gb
+                self.settings.vast_premium_gpu_ram_gb if premium_only
+                else (self.settings.vast_preferred_gpu_ram_gb if preferred_only
+                else self.settings.vast_min_gpu_ram_gb)
             )
             and (offer.inet_down_mbps or 0) >= self.settings.vast_min_inet_down_mbps
             and (offer.inet_up_mbps or 0) >= self.settings.vast_min_inet_up_mbps
@@ -171,7 +172,7 @@ class Orchestrator:
         await self.db.set_many({
             "offers.last": [offer.public_dict() for offer in rows],
             "offers.last_refreshed_at": datetime.now(UTC).isoformat(),
-            "offers.search_mode": "preferred" if preferred_only else "all",
+            "offers.search_mode": "premium" if premium_only else ("preferred" if preferred_only else "all"),
             "offers.candidate_count": len(candidates),
             "offers.preferred_candidate_count": sum(
                 offer.gpu_ram_gb >= self.settings.vast_preferred_gpu_ram_gb
@@ -183,7 +184,7 @@ class Orchestrator:
             ),
         })
         await self.db.event("offers.search", {
-            "mode": "preferred" if preferred_only else "all",
+            "mode": "premium" if premium_only else ("preferred" if preferred_only else "all"),
             "queries": queries,
             "query_failures": len(failures),
             "candidate_count": len(candidates),
