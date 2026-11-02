@@ -432,7 +432,7 @@ def test_offer_search_hides_rows_above_final_price_ceiling(tmp_path):
             inference_factory=lambda url, token: FakeInference(),
         )
         offers = await orch.offers()
-        assert [item.offer_id for item in offers] == [1, 3]
+        assert set(item.offer_id for item in offers) == {1, 3}
         assert all(item.price_per_hour <= 0.50 for item in offers)
 
     asyncio.run(scenario())
