@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from pixelpilot.domain import GeneratedImage, ReferenceImage
+from pixelpilot.contracts import GATEWAY_API_VERSION, MAX_PROMPT_CHARS, MAX_TOTAL_IMAGE_BYTES, trim_history, visible_reply
 
 
 class InferenceError(RuntimeError):
@@ -21,12 +22,14 @@ class InferenceClient:
         token: str,
         model_id: str,
         *,
-        verify_tls: bool = False,
+        chat_model_id: str | None = None,
+        verify_tls: bool = True,
         timeout_seconds: float = 3600.0,
     ):
         self.base_url = base_url.rstrip("/")
         self.token = token
         self.model_id = model_id
+        self.chat_model_id = chat_model_id
         self.verify_tls = verify_tls
         self.timeout_seconds = timeout_seconds
 
@@ -37,7 +40,7 @@ class InferenceClient:
         async with httpx.AsyncClient(
             verify=self.verify_tls,
             timeout=self.timeout_seconds,
-            follow_redirects=True,
+            follow_redirects=False,
         ) as client:
             response = await client.request(
                 method,
@@ -48,11 +51,17 @@ class InferenceClient:
             try:
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
-                detail = response.text[:2000]
                 raise InferenceError(
-                    f"Inference API returned HTTP {response.status_code}: {detail}"
+                    f"Inference API returned HTTP {response.status_code}; inspect worker logs"
                 ) from exc
             return response
+
+    async def health_info(self) -> dict[str, Any]:
+        response = await self._request("GET", "/health")
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise InferenceError("Invalid worker health response")
+        return payload
 
     async def health(self) -> bool:
         try:
@@ -74,10 +83,17 @@ class InferenceClient:
         ]
 
     async def is_ready(self) -> bool:
-        if not await self.health():
-            return False
         try:
-            return self.model_id in await self.models()
+            if self.chat_model_id:
+                health = await self.health_info()
+                if health.get("status") != "ok" or health.get("api_version") != GATEWAY_API_VERSION:
+                    return False
+                capabilities = health.get("capabilities", [])
+                if not {"chat", "vision", "image_generation", "image_editing"}.issubset(capabilities):
+                    return False
+                return {self.model_id, self.chat_model_id}.issubset(await self.models())
+            # Compatibility for clients using just the historical image API.
+            return await self.health() and self.model_id in await self.models()
         except Exception:
             return False
 
@@ -89,14 +105,18 @@ class InferenceClient:
         images: tuple[ReferenceImage, ...] = (),
         max_new_tokens: int = 384,
     ) -> str:
-        if not prompt.strip():
-            raise InferenceError("Chat prompt cannot be empty")
+        if not prompt.strip() or len(prompt) > MAX_PROMPT_CHARS:
+            raise InferenceError("Chat prompt is blank or too long")
+        if not 32 <= max_new_tokens <= 1024 or len(images) > 3:
+            raise InferenceError("Invalid chat token or image limit")
+        if sum(len(image.data) for image in images) > MAX_TOTAL_IMAGE_BYTES:
+            raise InferenceError("Combined images exceed 50 MB")
         response = await self._request(
             "POST",
             "/v1/chat/completions",
             json={
                 "prompt": prompt,
-                "history": history or [],
+                "history": trim_history(history or [], max_turns=10),
                 "images": [base64.b64encode(image.data).decode("ascii") for image in images],
                 "max_new_tokens": max_new_tokens,
             },
@@ -108,7 +128,10 @@ class InferenceClient:
             raise InferenceError("Chat endpoint returned an invalid response") from exc
         if not isinstance(content, str) or not content.strip():
             raise InferenceError("Chat endpoint returned an empty response")
-        return content.strip()
+        content = visible_reply(content)
+        if not content:
+            raise InferenceError("Chat endpoint returned no completed visible response")
+        return content
 
     async def generate(
         self,

@@ -1,3 +1,7 @@
+# Current scope
+
+This multimodal direction supersedes earlier image-only exclusions. See [hardening and deployment acceptance](HARDENING.md) for the latest limits, fixes and validation boundaries.
+
 # Multimodal migration (Vast.ai price cap: $0.60/hour)
 
 ## Scope
@@ -22,7 +26,7 @@ This makes 48GB and 80GB GPUs useful for faster image loading while allowing 24G
 - One GPU, verified offers, min reliability 0.98 and min 150 Mbps advertised download + 80 Mbps advertised upload.
 - Search pools: 80GB+, 48GB+, 24GB+; premium-only 80GB and preferred-only 48GB buttons available.
 - Results ranked by published DLPerf, GPU VRAM, download/upload speeds, reliability, datacenter flag and price, with a nonzero penalty for unknown inbound transfer cost.
-- Rental must match original Offer ID and its live price, GPU, VRAM, speeds and quoted transfer rates. Changed offers require refreshed user confirmation. Unknown upload/download prices are not automatically treated as free.
+- Rental must match original Offer ID and its live price, GPU, VRAM and quoted transfer rates. Speeds and reliability must still meet policy, but normal metric fluctuations are not financial quote changes. Changed offers require refreshed user confirmation. Unknown upload/download prices are not automatically treated as free.
 
 Storage and traffic may result in extra charges, and speed is not measured by this code.
 
@@ -40,7 +44,7 @@ Storage and traffic may result in extra charges, and speed is not measured by th
 ## Limitations
 
 - Chat history saves *text only* on the controller and is truncated to the last N turns. Images and visual embeddings are not persisted; follow-up questions about the same image should resend it for accuracy.
-- Model switching is synchronous to the worker's inference lock; a second request queues while the first runs.
+- Model switching is synchronous to the worker's inference lock; a second inference request receives a busy response while the first runs, preventing an unbounded queue.
 - No Web search or speech transcription is added by this migration.
 - No live Vast rental, billing or real GPU test was run through the GitHub connector alone.
 - HTTP worker transport without TLS remains an existing security limitation; route sensitive media through TLS or private networking in production.

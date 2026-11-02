@@ -121,13 +121,15 @@ def offer_quality_rank(
     cost_penalty = 8.0 if estimate is None else min(15.0, max(0.0, estimate - offer.price_per_hour * billed_hours) * 20.0)
 
     quality = (
-        25.0 * min(perf / 50.0, 1.0)
+        25.0 * min(1.5 * perf / (perf + 50.0), 1.0)
         + 20.0 * min(vram / 80.0, 1.0)
         + 22.0 * min(download / max(preferred_down_mbps, 1.0), 1.0)
         + 12.0 * min(upload / max(preferred_up_mbps, 1.0), 1.0)
         + 11.0 * max(0.0, (reliability - 0.97) / 0.03)
         + 10.0 * max(0.0, (hourly_cap - offer.price_per_hour) / hourly_cap)
-        + (5.0 if (offer.raw or {}).get("datacenter") is True else 0.0)
+        + (5.0 if offer.datacenter is True else 0.0)
+        + 3.0 * min((offer.cpu_cores or 0.0) / 16.0, 1.0)
+        + 3.0 * min((offer.disk_bw_mbps or 0.0) / 1000.0, 1.0)
         - cost_penalty
     )
     # Quality first, then prefer known cheaper transfer-inclusive estimates.

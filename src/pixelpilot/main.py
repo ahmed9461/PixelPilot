@@ -57,6 +57,7 @@ async def main() -> None:
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        await chat.shutdown()
         for task in (recovery_task, guard_task):
             task.cancel()
         await asyncio.gather(recovery_task, guard_task, return_exceptions=True)

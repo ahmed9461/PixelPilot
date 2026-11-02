@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.0 — multimodal hardening (feature branch)
+
+Chat/vision plus image generation/editing; shared inference locking and bounded per-conversation history; cancellation-safe GPU work; strict $0.60 quotes with multi-order GPU discovery; verified lifecycle acknowledgements; bounded/authenticated media ingress; improved Telegram routing and bootstrap checks. CPU regression and Python-version CI coverage added. Production GPU acceptance is still required.
+
+
 ## 2026-09-24 — Qwen-Image-2.1
 
 - Pivoted PixelPilot to image generation/editing.

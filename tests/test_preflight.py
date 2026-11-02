@@ -24,7 +24,7 @@ def test_external_preflight_aggregates_checks(monkeypatch):
 
     settings = Settings(_env_file=None)
     monkeypatch.setattr(module, "_git_source_check", lambda settings: Check("git", True, "ok"))
-    monkeypatch.setattr(module, "_hf_access_check", lambda settings: Check("hf", True, "ok"))
+    monkeypatch.setattr(module, "_hf_access_check", lambda settings, chat=False: Check("chat" if chat else "hf", True, "ok"))
     checks = asyncio.run(module.run_external_preflight(settings))
-    assert [item.name for item in checks] == ["git", "hf"]
+    assert [item.name for item in checks] == ["git", "hf", "chat"]
     assert all(item.ok for item in checks)

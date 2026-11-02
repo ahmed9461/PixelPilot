@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime
-from html import escape
 
 from aiogram import Bot
 
@@ -56,12 +56,14 @@ async def _cost_guard_tick(
     auto_after = settings.cost_guard_auto_destroy_minutes
     if auto_after > 0 and idle_minutes >= auto_after:
         try:
-            destroyed = await orchestrator.destroy_current()
-        except Exception as exc:
+            destroyed = await orchestrator.destroy_current(
+                expected_instance_id=int(instance_id), expected_activity_at=stamp, only_if_idle=True,
+            )
+        except Exception:
+            logging.getLogger(__name__).exception("Automatic idle cleanup failed")
             await bot.send_message(
                 settings.owner_telegram_id,
-                f"⚠️ Cost Guard حاول حذف Instance <code>{instance_id}</code> وفشل:\n"
-                f"<code>{escape(str(exc))}</code>",
+                f"⚠️ تعذر حذف السيرفر <code>{instance_id}</code> تلقائيًا. افحص الحالة أو احذفه يدويًا.",
             )
             return
         if destroyed:

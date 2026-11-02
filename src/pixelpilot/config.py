@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore", validate_assignment=True)
 
     # Controller / Telegram
     telegram_bot_token: str = ""
@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     # Public authenticated image inference endpoint.
     inference_port: int = 8190
     inference_use_https: bool = False
-    inference_verify_tls: bool = False
+    inference_verify_tls: bool = True
     inference_request_timeout_seconds: int = 3600
     inference_probe_timeout_seconds: float = 5.0
     vast_status_timeout_seconds: float = 8.0
@@ -156,8 +156,8 @@ class Settings(BaseSettings):
     )
     @classmethod
     def positive_timeouts(cls, value: float) -> float:
-        if value <= 0:
-            raise ValueError("timeout values must be > 0")
+        if not isfinite(value) or value <= 0:
+            raise ValueError("timeout values must be finite and > 0")
         return value
 
     @field_validator("vast_disk_gb")
@@ -240,8 +240,8 @@ class Settings(BaseSettings):
     @field_validator("chat_max_new_tokens")
     @classmethod
     def new_tokens_limit(cls, value: int) -> int:
-        if value > 1024:
-            raise ValueError("CHAT_MAX_NEW_TOKENS must be <= 1024")
+        if not 32 <= value <= 1024:
+            raise ValueError("CHAT_MAX_NEW_TOKENS must be between 32 and 1024")
         return value
 
     @field_validator("chat_context_turns")

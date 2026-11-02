@@ -16,6 +16,14 @@ from pixelpilot.services.orchestrator import (
 )
 
 
+def qualified_offer(*args, **kwargs):
+    defaults = dict(num_gpus=1, direct_port_count=2, disk_space_gb=200,
+                    cpu_ram_gb=64, verified=True, inet_down_mbps=600,
+                    inet_up_mbps=350)
+    defaults.update(kwargs)
+    return GpuOffer(*args, **defaults)
+
+
 def test_extract_instance_id_direct():
     assert _extract_instance_id({"instance_id": 123}) == 123
 
@@ -35,12 +43,12 @@ class FakeVast:
 
     async def search_offers(self, query, limit, **kwargs):
         self.search_calls.append((query, limit, kwargs))
-        preferred = GpuOffer(
+        preferred = qualified_offer(
             78, "RTX A6000", 48, 0.40, 0.99, 40, machine_id=78000,
             inet_down_mbps=600, inet_up_mbps=350, verified=True,
             download_usd_per_gb=0, upload_usd_per_gb=0,
         )
-        premium = GpuOffer(
+        premium = qualified_offer(
             79, "H100", 80, 0.57, 0.995, 85, machine_id=79000,
             inet_down_mbps=1100, inet_up_mbps=700, verified=True,
             download_usd_per_gb=0, upload_usd_per_gb=0,
@@ -50,7 +58,7 @@ class FakeVast:
         if "gpu_ram>=48" in query:
             return [preferred]
         return [
-            GpuOffer(77, "RTX 4090", 24, 0.25, 0.99, 60, machine_id=77000,
+            qualified_offer(77, "RTX 4090", 24, 0.25, 0.99, 60, machine_id=77000,
                      inet_down_mbps=500, inet_up_mbps=250, verified=True,
                      download_usd_per_gb=0),
             preferred,
@@ -127,10 +135,10 @@ def test_orchestrator_full_fake_lifecycle(tmp_path):
 
         offers = await orch.offers()
         assert offers[0].gpu_ram_gb == 80
-        assert len(vast.search_calls) == 3
+        assert len(vast.search_calls) == 9
         assert "gpu_ram>=80" in vast.search_calls[0][0]
-        assert "gpu_ram>=48" in vast.search_calls[1][0]
-        assert "gpu_ram>=24" in vast.search_calls[2][0]
+        assert "gpu_ram>=48" in vast.search_calls[3][0]
+        assert "gpu_ram>=24" in vast.search_calls[6][0]
         assert vast.search_calls[0][1] == settings.vast_search_pool_limit
         await orch.rent_and_prepare(78)
         assert vast.lookup_calls == [(78, 78000, 100.0)]
@@ -250,9 +258,9 @@ def test_preferred_only_offer_search_skips_fallback_pool(tmp_path):
         )
 
         offers = await orch.offers(preferred_only=True)
-        assert len(vast.search_calls) == 2
+        assert len(vast.search_calls) == 6
         assert "gpu_ram>=80" in vast.search_calls[0][0]
-        assert "gpu_ram>=48" in vast.search_calls[1][0]
+        assert "gpu_ram>=48" in vast.search_calls[3][0]
         assert offers
         assert all(item.gpu_ram_gb >= 48 for item in offers)
         assert await db.get("offers.search_mode") == "preferred"
@@ -418,11 +426,11 @@ def test_offer_search_hides_rows_above_final_price_ceiling(tmp_path):
             async def search_offers(self, query, limit, **kwargs):
                 if "gpu_ram>=48" in query:
                     return [
-                        GpuOffer(1, "RTX A6000", 48, 0.49, 0.99, 40, verified=True, inet_down_mbps=600, inet_up_mbps=250, download_usd_per_gb=0),
-                        GpuOffer(2, "RTX A6000", 48, 0.53, 0.99, 42, verified=True, inet_down_mbps=600, inet_up_mbps=250, download_usd_per_gb=0),
+                        qualified_offer(1, "RTX A6000", 48, 0.49, 0.99, 40, verified=True, inet_down_mbps=600, inet_up_mbps=250, download_usd_per_gb=0),
+                        qualified_offer(2, "RTX A6000", 48, 0.53, 0.99, 42, verified=True, inet_down_mbps=600, inet_up_mbps=250, download_usd_per_gb=0),
                     ]
                 return [
-                    GpuOffer(3, "RTX 3090", 24, 0.25, 0.99, 60, verified=True, inet_down_mbps=600, inet_up_mbps=250, download_usd_per_gb=0),
+                    qualified_offer(3, "RTX 3090", 24, 0.25, 0.99, 60, verified=True, inet_down_mbps=600, inet_up_mbps=250, download_usd_per_gb=0),
                 ]
 
         orch = Orchestrator(
@@ -525,7 +533,7 @@ def test_rent_revalidates_exact_offer_and_rejects_stale_id(tmp_path):
             async def search_offers(self, query, limit, **kwargs):
                 self.search_calls.append((query, limit, kwargs))
                 if self.live:
-                    preferred = GpuOffer(
+                    preferred = qualified_offer(
                         78, "RTX A6000", 48, 0.40, 0.99, 40, verified=True,
                         inet_down_mbps=600, inet_up_mbps=350,
                         download_usd_per_gb=0, upload_usd_per_gb=0,
@@ -578,7 +586,7 @@ def test_rent_requires_reconfirmation_when_price_changes(tmp_path):
 
             async def search_offers(self, query, limit, **kwargs):
                 self.search_calls.append((query, limit, kwargs))
-                offer = GpuOffer(
+                offer = qualified_offer(
                     78, "RTX A6000", 48, self.price, 0.99, 40, verified=True,
                     inet_down_mbps=600, inet_up_mbps=350,
                     download_usd_per_gb=0, upload_usd_per_gb=0,
@@ -661,7 +669,7 @@ def test_rent_exact_id_survives_ranked_market_churn(tmp_path):
             async def lookup_offer(self, offer_id, *, machine_id=None, storage_gb):
                 # Search result has fallen outside the top 64, but the exact ID is live.
                 assert offer_id == 78
-                return GpuOffer(78, "RTX A6000", 48, 0.40, 0.99, 40, machine_id=78000,
+                return qualified_offer(78, "RTX A6000", 48, 0.40, 0.99, 40, machine_id=78000,
                                 verified=True, inet_down_mbps=600, inet_up_mbps=350,
                                 download_usd_per_gb=0, upload_usd_per_gb=0)
 
@@ -801,10 +809,10 @@ def test_offer_queries_require_host_ram_only_for_offload(tmp_path):
 
 
 @pytest.mark.parametrize("changed", [
-    GpuOffer(78, "Different GPU", 48, 0.40, 0.99, 40),
-    GpuOffer(78, "RTX A6000", 47, 0.40, 0.99, 40),
-    GpuOffer(78, "RTX A6000", 48, 0.51, 0.99, 40),
-    GpuOffer(78, "RTX A6000", 48, 0.40, 0.99, 40, verified=False),
+    qualified_offer(78, "Different GPU", 48, 0.40, 0.99, 40),
+    qualified_offer(78, "RTX A6000", 47, 0.40, 0.99, 40),
+    qualified_offer(78, "RTX A6000", 48, 0.51, 0.99, 40),
+    qualified_offer(78, "RTX A6000", 48, 0.40, 0.99, 40, verified=False),
 ])
 def test_rent_rejects_changed_gpu_vram_price_or_policy(tmp_path, changed):
     async def scenario():
@@ -836,7 +844,7 @@ def test_premium_only_offer_search_is_strict(tmp_path):
         vast = FakeVast()
         orch = Orchestrator(settings, db, vast)
         offers = await orch.offers(premium_only=True)
-        assert len(vast.search_calls) == 1
+        assert len(vast.search_calls) == 3
         assert "gpu_ram>=80" in vast.search_calls[0][0]
         assert len(offers) == 1
         assert offers[0].gpu_ram_gb == 80

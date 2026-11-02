@@ -17,7 +17,8 @@ def main_menu() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="🖌️ تعديل صور", callback_data="chat:mode:edit"),
             ],
             [InlineKeyboardButton(text="⚙️ إعدادات الصور", callback_data="imagesettings:open", style="primary")],
-            [InlineKeyboardButton(text="🎨 طريقة الاستخدام", callback_data="chat:help")],
+            [InlineKeyboardButton(text="🧹 محادثة جديدة", callback_data="chat:clear"),
+             InlineKeyboardButton(text="📖 طريقة الاستخدام", callback_data="chat:help")],
             [InlineKeyboardButton(text="🔎 البحث عن سيرفر", callback_data="servers:search", style="primary")],
             [
                 InlineKeyboardButton(text="📊 حالة السيرفر", callback_data="servers:status"),

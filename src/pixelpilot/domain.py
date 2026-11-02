@@ -34,6 +34,12 @@ class GpuOffer:
     verified: bool | None = None
     machine_id: int | None = None
     raw: dict[str, Any] | None = None
+    num_gpus: int | None = None
+    direct_port_count: int | None = None
+    cpu_ram_gb: float | None = None
+    cpu_cores: float | None = None
+    disk_bw_mbps: float | None = None
+    datacenter: bool | None = None
     download_usd_per_gb: float | None = None
     upload_usd_per_gb: float | None = None
 

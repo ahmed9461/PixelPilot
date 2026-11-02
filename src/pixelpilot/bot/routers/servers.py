@@ -285,6 +285,8 @@ async def _search_offers(
         f"+ <b>{settings.vast_cost_comparison_hours:g} ساعة</b> تشغيل.\n"
         "الترتيب يعطي أولوية للأداء والنت والموثوقية، مع تقدير رسوم التنزيل؛ السرعات معلنة وليست قياسات فعلية."
     )
+    if await orch().db.get("offers.query_failures", 0):
+        comparison += "\n⚠️ تعذر إكمال بعض استعلامات السوق؛ القائمة مبنية على الاستعلامات الناجحة فقط."
     if settings.vast_max_download_usd_per_tb is not None:
         comparison += f"\nسقف Download: <b>${settings.vast_max_download_usd_per_tb:g}/TB</b>."
     await callback.message.edit_text(
@@ -344,6 +346,12 @@ async def offer_details(callback: CallbackQuery) -> None:
         lines.append(f"⬆️ سرعة الرفع المعلنة: <b>{offer.inet_up_mbps:.0f} Mbps</b>")
     if offer.dlperf is not None:
         lines.append(f"⚡ مؤشر DLPerf المعلن: <b>{offer.dlperf:.1f}</b>")
+    if offer.cpu_ram_gb is not None:
+        lines.append(f"ذاكرة RAM: <b>{offer.cpu_ram_gb:.0f} GB</b>")
+    if offer.cpu_cores is not None:
+        lines.append(f"أنوية CPU المخصصة: <b>{offer.cpu_cores:g}</b>")
+    if offer.disk_bw_mbps is not None:
+        lines.append(f"سرعة القرص المعلنة: <b>{offer.disk_bw_mbps:g} MB/s</b>")
     if offer.location:
         lines.append(f"الموقع: <b>{escape(offer.location)}</b>")
     lines.append("")
@@ -373,14 +381,15 @@ async def _rent_and_prepare_background(
     preferred_only: bool,
     premium_only: bool = False,
 ) -> None:
-    async def progress(_text: str) -> None:
+    async def progress(progress_text: str) -> None:
         try:
             state = await orch().current_state(probe_inference=False)
             billing = state.get("billing") if isinstance(state, dict) else None
             lines = [
                 "⏳ <b>جاري تجهيز محرك الدردشة والصور...</b>",
                 "",
-                "التجهيز يعمل في الخلفية؛ تستطيع استخدام أزرار الحالة والحذف أثناء ذلك.",
+                escape(progress_text),
+                "تستطيع استخدام أزرار الحالة والحذف أثناء التجهيز.",
             ]
             lines.extend(_billing_lines(billing))
             await status_message.edit_text("\n".join(lines))
@@ -543,13 +552,13 @@ async def stop(callback: CallbackQuery) -> None:
 
 
 async def _start_background(status_message: Message) -> None:
-    async def progress(_text: str) -> None:
+    async def progress(progress_text: str) -> None:
         try:
             state = await orch().current_state(probe_inference=False)
             lines = [
                 "⏳ <b>جاري تشغيل السيرفر...</b>",
                 "",
-                "التشغيل مستمر في الخلفية.",
+                escape(progress_text),
             ]
             lines.extend(_billing_lines(state.get("billing")))
             await status_message.edit_text("\n".join(lines))

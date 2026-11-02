@@ -27,7 +27,8 @@ def test_chat_client_sends_image_bytes_and_uses_authenticated_endpoint(monkeypat
     async def scenario():
         client = StubClient("http://example.test", "secret", "Qwen/Qwen-Image-2.1")
         reply = await client.chat(
-            "اشرح الصورة", history=[{"role": "user", "content": "سلام"}],
+            "اشرح الصورة", history=[{"role": "user", "content": "سلام"},
+                                    {"role": "assistant", "content": "أهلًا"}],
             images=(ReferenceImage(b"abc"),),
         )
         assert reply == "أرى أرنبًا صغيرًا"
