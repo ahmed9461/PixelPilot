@@ -30,6 +30,7 @@ def build_offer_query(
     datacenter_only: bool = False,
     min_direct_ports: int = 2,
     min_inet_down_mbps: float = 0,
+    min_inet_up_mbps: float = 0,
     min_cpu_ram_gb: int = 0,
 ) -> str:
     # Vast's CLI/SDK query language expresses gpu_ram in GiB-like user units
@@ -54,6 +55,8 @@ def build_offer_query(
         terms.append(f"direct_port_count>={int(min_direct_ports)}")
     if min_inet_down_mbps > 0:
         terms.append(f"inet_down>={float(min_inet_down_mbps):.0f}")
+    if min_inet_up_mbps > 0:
+        terms.append(f"inet_up>={float(min_inet_up_mbps):.0f}")
     return " ".join(terms)
 
 
@@ -78,7 +81,12 @@ def normalize_offer(raw: dict[str, Any]) -> GpuOffer:
     verified_raw = raw.get("verified")
     verified: bool | None = None
     if verified_raw is not None:
-        verified = bool(verified_raw)
+        if isinstance(verified_raw, bool):
+            verified = verified_raw
+        elif isinstance(verified_raw, (int, float)):
+            verified = verified_raw == 1
+        else:
+            verified = str(verified_raw).strip().lower() in {"true", "1", "yes", "verified"}
     elif raw.get("verification") is not None:
         verified = str(raw.get("verification")).lower() in {"verified", "true", "1"}
     machine_id: int | None = None
@@ -96,6 +104,7 @@ def normalize_offer(raw: dict[str, Any]) -> GpuOffer:
         dlperf=_num(raw, "dlperf", default=0.0) or None,
         location=raw.get("geolocation") or raw.get("location"),
         inet_down_mbps=_num(raw, "inet_down", default=0.0) or None,
+        inet_up_mbps=_num(raw, "inet_up", default=0.0) or None,
         disk_space_gb=_num(raw, "disk_space", default=0.0) or None,
         verified=verified,
         machine_id=machine_id,

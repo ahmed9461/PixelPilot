@@ -8,6 +8,14 @@ from pixelpilot.domain import GpuOffer
 def main_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🧠 دردشة", callback_data="chat:mode:chat", style="primary"),
+                InlineKeyboardButton(text="👁️ فهم الصور", callback_data="chat:mode:vision"),
+            ],
+            [
+                InlineKeyboardButton(text="🎨 إنشاء صور", callback_data="chat:mode:generate"),
+                InlineKeyboardButton(text="🖌️ تعديل صور", callback_data="chat:mode:edit"),
+            ],
             [InlineKeyboardButton(text="⚙️ إعدادات الصور", callback_data="imagesettings:open", style="primary")],
             [InlineKeyboardButton(text="🎨 طريقة الاستخدام", callback_data="chat:help")],
             [InlineKeyboardButton(text="🔎 البحث عن سيرفر", callback_data="servers:search", style="primary")],
@@ -28,18 +36,19 @@ def offers_keyboard(
     offers: list[GpuOffer],
     *,
     preferred_only: bool = False,
+    premium_only: bool = False,
 ) -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(
                 text=f"🔍 {offer.display_name} • #{offer.offer_id}",
-                callback_data=f"servers:offer:{offer.offer_id}:{'p' if preferred_only else 'a'}",
+                callback_data=f"servers:offer:{offer.offer_id}:{'h' if premium_only else ('p' if preferred_only else 'a')}",
                 style="primary",
             )
         ]
         for offer in offers
     ]
-    refresh_callback = "servers:search48" if preferred_only else "servers:search"
+    refresh_callback = "servers:search80" if premium_only else ("servers:search48" if preferred_only else "servers:search")
     rows.append([
         InlineKeyboardButton(
             text="🔄 تحديث العروض",
@@ -47,7 +56,11 @@ def offers_keyboard(
             style="primary",
         )
     ])
-    if preferred_only:
+    if premium_only:
+        rows.append([InlineKeyboardButton(text="🔥 عروض 48GB+", callback_data="servers:search48")])
+        rows.append([InlineKeyboardButton(text="🌐 كل العروض", callback_data="servers:search")])
+    elif preferred_only:
+        rows.append([InlineKeyboardButton(text="🚀 عروض 80GB+", callback_data="servers:search80")])
         rows.append([
             InlineKeyboardButton(
                 text="🌐 عرض كل العروض",
@@ -55,6 +68,7 @@ def offers_keyboard(
             )
         ])
     else:
+        rows.append([InlineKeyboardButton(text="🚀 عروض 80GB+", callback_data="servers:search80")])
         rows.append([
             InlineKeyboardButton(
                 text="🔥 48GB+ فقط",
@@ -70,14 +84,15 @@ def offer_confirm_keyboard(
     offer_id: int,
     *,
     preferred_only: bool = False,
+    premium_only: bool = False,
 ) -> InlineKeyboardMarkup:
-    back_callback = "servers:search48" if preferred_only else "servers:search"
+    back_callback = "servers:search80" if premium_only else ("servers:search48" if preferred_only else "servers:search")
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="🚀 استئجار وتجهيز",
-                    callback_data=f"servers:rent:{offer_id}:{'p' if preferred_only else 'a'}",
+                    callback_data=f"servers:rent:{offer_id}:{'h' if premium_only else ('p' if preferred_only else 'a')}",
                     style="success",
                 )
             ],

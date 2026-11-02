@@ -19,6 +19,9 @@ class FakeImage:
 def isolated_enhancer_state(monkeypatch):
     monkeypatch.setattr(gateway, "enhancer_ready", set())
     monkeypatch.setattr(gateway, "enhancer_downloads", {})
+    # These tests isolate prompt-enhancer semantics; model loading is exercised separately.
+    monkeypatch.setattr(gateway, "_switch_to_chat", lambda: None)
+    monkeypatch.setattr(gateway, "_switch_to_image", lambda: None)
 
 
 def request_kwargs(*, editing=False):

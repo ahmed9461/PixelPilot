@@ -1,111 +1,69 @@
-# PixelPilot
+# PixelPilot — Personal multimodal Telegram assistant
 
-PixelPilot is an owner-only Telegram image studio that rents a temporary Vast.ai GPU and runs **Qwen/Qwen-Image-2.1** for image generation and image editing.
+PixelPilot is an **owner-only** Telegram bot for **chat, image understanding, image creation and image editing**. A VPS runs the Telegram controller and stores recent **text** history. An on-demand Vast.ai GPU hosts both neural engines behind a bearer-token protected endpoint.
 
-## What it does
+## Models
 
-- Text → image generation.
-- Image + instruction → image editing, including Telegram albums with up to 10 references.
-- PNG output preserving full quality and alpha/transparency when produced.
-- Aspect ratio, Standard/2K quality, inference-step and explicit prompt-mode controls.
-- Live Vast offer search, transfer-aware cost comparison, rent/provision/stop/start/destroy, running-time estimate, recovery and preflight.
-- Owner-only Telegram access.
+| Job | Default | Notes |
+| --- | --- | --- |
+| Chat / image understanding | [Qwen3.5-9B](https://huggingface.co/Qwen/Qwen3.5-9B) | Image + text and Arabic; configurable via `CHAT_MODEL_ID` |
+| Image generation / image editing | [Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1) | Up to 10 references, original/optional enhancement, PNG and transparency when supported |
 
-PixelPilot does **not** inject a hidden personality, emotion, tone or chat history. The owner chooses **Original Prompt** (sent unchanged) or the official **Qwen Prompt Enhancer**, which uses its checkpoint's official rewrite instructions.
+Both models run locally **on the rented GPU**, not via a paid LLM API. To avoid requiring two models in VRAM simultaneously, the worker **loads chat first**, unloads it when an image generation/edit is requested, then reloads chat when needed. Model switching can take time; weights remain cached on the Vast storage until the instance is destroyed.
 
-## Runtime
+Advanced (optional): `CHAT_MODEL_ID=Qwen/Qwen3.5-27B` for larger GPUs; increase instance disk and select sufficient VRAM. The default 9B is less costly to provision and works on more offers.
 
-```text
-Telegram
-  -> PixelPilot controller
-     -> SQLite lifecycle/settings/running-time estimate
-     -> authenticated temporary Vast endpoint :8190
-        -> QwenImage21Pipeline
-```
+## Telegram commands and modes
 
-The GPU instance loads the Diffusers `QwenImage21Pipeline` directly. vLLM, Qwen3-VL and Whisper are not part of the image runtime.
+- Send ordinary text for **chat** with recent text context.
+- Send a picture or image document with a question for **visual understanding**. Sending without caption asks the bot to describe it.
+- `/image a bird on a wooden bridge` creates an image without changing the mode.
+- Caption a photo with `/edit change the background to a beach`, or reply to a photo with `/edit ...`, to **edit it**.
+- Menu buttons: **Chat**, **Understand Images**, **Create Images**, **Edit Images**; image generation mode also accepts direct text prompts.
+- `/clear` deletes the recent text history. Images themselves are not saved in history.
+- Image settings preserve aspect ratio, Standard/2K presets, steps, and the optional Qwen prompt enhancer.
 
-## GPU / VRAM policy
+A maximum of 3 images can be submitted at once to visual chat; the image editor accepts up to 10 references. Chat context is intentionally bounded to avoid VRAM exhaustion. The vision model's prior image pixels are **not** retained between messages, so follow-up questions rely on its previous text explanation, not the original pixels.
 
-The BF16 Qwen-Image-2.1 checkpoint is roughly 33 GB before runtime overhead.
+## Vast.ai offers and safeguards
 
-- **24 GB VRAM**: CPU offload + VAE tiling/slicing, with a **48 GB host RAM** search floor. Start with Standard resolution; large edits or enhancement may need more RAM.
-- **48 GB+ VRAM**: preferred execution tier; the pipeline stays on GPU in `auto` mode for better speed and 2K work. Full-GPU offers have no unconditional host-RAM filter.
-- Default disk: **100 GB**. Hard hourly rental ceiling: **$0.50/hour**, not an all-in spending limit.
+**Hard upper limit: $0.60 per GPU hour**, verified at discovery **and again before renting**. This is an hourly rental price ceiling, **not an entire-session bill limit**. Internet egress/ingress, continued storage charges while stopped, and additional downloads may cost extra.
 
-Discovery scans a wider live pool than the 8 rows shown in Telegram. Normal search queries 48 GB+ and 24 GB+ fallback candidates, deduplicates them and compares their download-inclusive estimated cost. Known quotes rank before unknown rates; hardware preference breaks equal-cost ties. A separate `48GB+ only` view remains available.
+The bot queries 80GB+, 48GB+ and 24GB+ GPU pools (and offers 80GB+ and 48GB+ shortlist buttons), deduplicates asks, and ranks by advertised `dlperf`, GPU VRAM, download/upload speed, host reliability, rental price, and transfer-aware cost. An expensive but powerful GPU may rank above a cheap/slow GPU while remaining under the cap.
 
-Before rent, PixelPilot re-reads the machine from the discovery snapshot and accepts only the exact original Offer ID. This works around Vast's observed `/bundles/` `id` lookup mismatch without substituting another ask. Changes in GPU/VRAM, hourly price, Download or Upload quotes require refreshed confirmation. A timeout or server error retains a pending label and blocks another rent until reconciliation. `cancel_unavail=true` remains required.
+Default selection rules:
 
-## Transfer-aware selection
+- Verified offers, reliability >= 98%.
+- One GPU, minimum 24GB VRAM, preferred 48GB+, with 80GB+ premium searches.
+- At least 150 Mbps **advertised** download and 80 Mbps **advertised** upload; preferred 500/200 Mbps.
+- Explicit Offer ID confirmation, revalidation of GPU/price/bandwidth/transfer terms before creating the instance, pending-instance reconciliation, and `cancel_unavail=true`.
+- Live marketplace quote prices and bandwidth values are **not speed tests** and must not be treated as guaranteed.
+- Optional inbound rate ceiling via `VAST_MAX_DOWNLOAD_USD_PER_TB`; unknown transfer prices never count as free.
 
-The offer list displays **Download $/TB**, and details show both transfer directions before confirmation. Native `inet_down_cost` / `inet_up_cost` are precise USD/GB rates; the explicit display convention is **1 TB = 1000 GB**. Unknown, invalid or missing rates are not treated as free.
+When the market has no acceptable offer, the bot returns none; it **does not** bypass the hourly cap or rent a weaker unverified instance.
 
-```text
-Comparison estimate = billed hours × hourly dph_total
-                    + assumed download GB × inbound USD/GB
-```
+## Deploy
 
-Defaults are configurable:
-
-```dotenv
-VAST_ESTIMATED_DOWNLOAD_GB=70
-VAST_COST_COMPARISON_HOURS=1
-# Optional, owner-selected inbound rate ceiling; absent by default:
-# VAST_MAX_DOWNLOAD_USD_PER_TB=5
-```
-
-70 GB is a comparison allowance, not a measured model filesize or download promise. Billed time includes setup; actual time may exceed the comparison period. Allocated storage is already included in `dph_total` and is not added twice. Upload, optional enhancer downloads, extra transfers/retries and storage while stopped can add costs. The running-time meter is **not the total or final Vast invoice**.
-
-A configured Download ceiling is checked in discovery, local filtering and again before creation; unknown rates are excluded when that ceiling is enabled. Zero accepts genuinely free inbound quotes only. No arbitrary additional rate ceiling is imposed by default, and a rate ceiling does not guarantee a final spending total.
-
-## Image presets
-
-Standard presets:
-
-| Ratio | Size |
-|---|---:|
-| 1:1 | 1024×1024 |
-| 4:3 | 1152×896 |
-| 3:4 | 896×1152 |
-| 3:2 | 1216×832 |
-| 2:3 | 832×1216 |
-| 16:9 | 1344×768 |
-| 9:16 | 768×1344 |
-
-2K uses the model-card aspect-ratio sizes, including 2048×2048 for 1:1 and 2752×1536 for 16:9. Default steps: **40**.
-
-## Configuration and deployment
-
-For a new installation, copy `.env.example` to `.env` or use:
+Requires Python 3.11+, controller credentials `TELEGRAM_BOT_TOKEN`, `OWNER_TELEGRAM_ID`, `VAST_API_KEY`, and `PIXELPILOT_REPO_URL` or `VAST_TEMPLATE_HASH`. Copy `.env.example` to `.env` and fill in secrets **outside Git**. `HF_TOKEN` is optional.
 
 ```bash
-python scripts/configure_secrets.py
+python -m pip install -e .
 python scripts/preflight.py
+python -m pixelpilot.main
 ```
 
-Required controller values: `TELEGRAM_BOT_TOKEN`, `OWNER_TELEGRAM_ID`, `VAST_API_KEY`, and `PIXELPILOT_REPO_URL` or `VAST_TEMPLATE_HASH`. `HF_TOKEN` is optional.
+For the GPU worker, `scripts/bootstrap_vast.sh` installs Diffusers/Transformers and launches `pixelpilot.inference_gateway:app` on the mapped port. The worker starts the Qwen3.5 chat model and lazily switches to the image pipeline when requested.
 
-For an existing installation, preserve its `.env` and SQLite. Follow [the runbook](docs/RUNBOOK.md) and deploy from the stable `main` baseline. Keep the controller checkout and worker `PIXELPILOT_REPO_REF` aligned to `main`; a repository push does not update an existing VPS or worker automatically. See [the completed cost-awareness plan](docs/DOWNLOAD_COST_PLAN.md) for the implementation and validation history.
+**Existing VPS configurations:** old `.env` values override new code defaults, so explicitly change `VAST_MAX_PRICE_USD_HOUR=0.50` to `0.60` if desired, add the chat model settings, and deploy the same Git branch/ref to both controller and new worker. Pushing a commit does not restart a running VPS or upgrade an already rented worker.
 
-## Vast bootstrap
+See [Runbook](docs/RUNBOOK.md), [Security](docs/SECURITY.md), and [the multimodal migration notes](docs/MULTIMODAL.md).
 
-A rented instance clones the configured repository/ref and runs `scripts/bootstrap_vast.sh`. It reuses the CUDA-enabled PyTorch environment, installs the required Transformers/Accelerate/Pillow/Diffusers dependencies, loads `QwenImage21Pipeline`, selects full-GPU or CPU offload, enables VAE tiling/slicing, and exposes an authenticated FastAPI image endpoint.
+## Data, safety and licenses
 
-## Telegram usage
+- The Telegram bot is restricted to the owner ID. Vast credentials remain in the controller, not on the GPU. Worker requests require a per-instance bearer token.
+- **Text chat history** resides in the controller's SQLite DB. Images are processed in memory, not written into SQLite. Telegram and the hosting provider still have their respective data-handling policies.
+- The public worker endpoint currently uses HTTP by default unless HTTPS is configured; bearer authentication is **not encryption**. Use a private tunnel/reverse proxy with TLS for sensitive images. Never publish secrets in Git.
+- No automatic server destruction unless explicitly enabled in the cost guard; monitor real Vast billing.
+- Qwen3.5-9B: [Apache 2.0](https://huggingface.co/Qwen/Qwen3.5-9B). Qwen-Image-2.1: [Qwen Research License](https://huggingface.co/Qwen/Qwen-Image-2.1) — review terms, especially for commercial use.
 
-- Send text to generate an image, one image with a caption to edit, or an album of up to 10 references with instructions in its caption.
-- Open **⚙️ إعدادات الصور** to select quality, aspect ratio, steps and prompt mode.
-- **Original** is the default and starts no optional enhancer downloads. The first explicit **Qwen Enhance** request starts only the needed T2I or I2I checkpoint download. Until cached, or on enhancement failure, that image uses the original prompt and reports fallback. Subsequent requests can use the cached enhancer. Optional checkpoint downloads may add transfer charges.
-
-There is no conversation memory; each image request is independent.
-
-## Security
-
-Vast credentials stay on the controller. Each temporary image endpoint has a random bearer token and requires authentication. Generated/reference images are not persisted in SQLite. Automatic deletion is opt-in; trial cleanup must never delete unrelated existing instances.
-
-## Model license
-
-Qwen-Image-2.1 is distributed under the **Qwen Research License**. Review the upstream license before non-personal/commercial deployment.
-
-Official model card: https://huggingface.co/Qwen/Qwen-Image-2.1
+This is a code-level migration; performance and model-loading latency must still be validated against a rented GPU before declaring production readiness.

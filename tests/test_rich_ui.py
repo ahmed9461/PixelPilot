@@ -4,7 +4,8 @@ from pixelpilot.bot.rich_ui import home_card, settings_card
 def test_home_rich_message_is_rtl_and_image_focused():
     card = home_card()
     assert card.is_rtl is True
-    assert "<h2>🎨 PixelPilot</h2>" in (card.html or "")
+    assert "<h2>🧠 PixelPilot</h2>" in (card.html or "")
+    assert "فهم الصور" in (card.html or "")
     assert "توليد صورة" in (card.html or "")
     assert "صوت" not in (card.html or "")
 

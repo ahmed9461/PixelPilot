@@ -95,3 +95,47 @@ def offer_cost_lines(offer: GpuOffer, *, download_gb: float, billed_hours: float
     lines.append("التقدير ليس فاتورة: الحجم افتراضي، والساعة تشمل القرص؛ الرفع والتنزيلات اللاحقة غير مشمولة. 1 TB = 1000 GB.")
     lines.append("نماذج Qwen Enhance تُنزّل عند طلب التحسين فقط، وقد تضيف رسوم تنزيل.")
     return lines
+
+
+def offer_quality_rank(
+    offer: GpuOffer,
+    *,
+    hourly_cap: float,
+    download_gb: float,
+    billed_hours: float,
+    preferred_down_mbps: float,
+    preferred_up_mbps: float,
+) -> tuple[float, ...]:
+    """Performance-first offer selection inside a separately enforced hourly cap.
+
+    Vast's dlperf is a published estimate, not a benchmark performed by the
+    bot. Speeds are advertised host values, not measured throughput. Unknown
+    data rates receive a penalty and never silently count as free.
+    """
+    download = max(0.0, offer.inet_down_mbps or 0.0)
+    upload = max(0.0, offer.inet_up_mbps or 0.0)
+    perf = max(0.0, offer.dlperf or 0.0)
+    reliability = max(0.0, min(1.0, offer.reliability or 0.0))
+    vram = max(0.0, offer.gpu_ram_gb)
+    estimate = session_estimate(offer, download_gb, billed_hours)
+    cost_penalty = 8.0 if estimate is None else min(15.0, max(0.0, estimate - offer.price_per_hour * billed_hours) * 20.0)
+
+    quality = (
+        25.0 * min(perf / 50.0, 1.0)
+        + 20.0 * min(vram / 80.0, 1.0)
+        + 22.0 * min(download / max(preferred_down_mbps, 1.0), 1.0)
+        + 12.0 * min(upload / max(preferred_up_mbps, 1.0), 1.0)
+        + 11.0 * max(0.0, (reliability - 0.97) / 0.03)
+        + 10.0 * max(0.0, (hourly_cap - offer.price_per_hour) / hourly_cap)
+        + (5.0 if (offer.raw or {}).get("datacenter") is True else 0.0)
+        - cost_penalty
+    )
+    # Quality first, then prefer known cheaper transfer-inclusive estimates.
+    return (
+        -quality,
+        1.0 if estimate is None else 0.0,
+        float("inf") if estimate is None else estimate,
+        offer.price_per_hour,
+        -download,
+        -perf,
+    )

@@ -81,6 +81,35 @@ class InferenceClient:
         except Exception:
             return False
 
+    async def chat(
+        self,
+        prompt: str,
+        *,
+        history: list[dict[str, str]] | None = None,
+        images: tuple[ReferenceImage, ...] = (),
+        max_new_tokens: int = 384,
+    ) -> str:
+        if not prompt.strip():
+            raise InferenceError("Chat prompt cannot be empty")
+        response = await self._request(
+            "POST",
+            "/v1/chat/completions",
+            json={
+                "prompt": prompt,
+                "history": history or [],
+                "images": [base64.b64encode(image.data).decode("ascii") for image in images],
+                "max_new_tokens": max_new_tokens,
+            },
+        )
+        payload = response.json()
+        try:
+            content = payload["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise InferenceError("Chat endpoint returned an invalid response") from exc
+        if not isinstance(content, str) or not content.strip():
+            raise InferenceError("Chat endpoint returned an empty response")
+        return content.strip()
+
     async def generate(
         self,
         prompt: str,

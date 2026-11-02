@@ -15,12 +15,15 @@ from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from pixelpilot.services.prompt_enhancer import PromptEnhancement, enhance_i2i, enhance_t2i
+from pixelpilot.services.vision_runtime import load_chat_model, run_chat
 
 
 logger = logging.getLogger(__name__)
 
 TOKEN = os.environ.get("PIXELPILOT_INFERENCE_TOKEN", "")
 MODEL_ID = os.environ.get("MODEL_ID", "Qwen/Qwen-Image-2.1")
+CHAT_MODEL_ID = os.environ.get("CHAT_MODEL_ID", "Qwen/Qwen3.5-9B")
+CHAT_MAX_IMAGES = int(os.environ.get("CHAT_MAX_IMAGES", "3"))
 MODEL_DTYPE = os.environ.get("MODEL_DTYPE", "bfloat16").strip().lower()
 MEMORY_MODE = os.environ.get("IMAGE_MEMORY_MODE", "auto").strip().lower()
 FULL_GPU_MIN_VRAM_GB = int(os.environ.get("IMAGE_FULL_GPU_MIN_VRAM_GB", "48"))
@@ -43,9 +46,19 @@ class GenerationRequest(BaseModel):
     enhance_prompt: bool = False
 
 
+class ChatRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=12000)
+    history: list[dict[str, str]] = Field(default_factory=list, max_length=20)
+    images: list[str] = Field(default_factory=list, max_length=3)
+    max_new_tokens: int = Field(default=384, ge=32, le=1024)
+
+
 @dataclass(slots=True)
 class RuntimeState:
     pipe: Any | None = None
+    chat_model: Any | None = None
+    chat_processor: Any | None = None
+    active_model: str = "none"
     torch: Any | None = None
     device: str = "unknown"
     memory_mode: str = "unknown"
@@ -171,6 +184,7 @@ def _load_pipeline() -> None:
         pass
 
     state.pipe = pipe
+    state.active_model = "image"
     state.device = "cuda"
     state.memory_mode = active_memory_mode
     logger.info(
@@ -180,12 +194,45 @@ def _load_pipeline() -> None:
     )
 
 
+def _release_gpu() -> None:
+    gc.collect()
+    if state.torch is not None:
+        state.torch.cuda.empty_cache()
+
+
+def _switch_to_chat() -> None:
+    if state.chat_model is not None:
+        return
+    state.pipe = None
+    state.active_model = "loading-chat"
+    _release_gpu()
+    import torch
+    model, processor = load_chat_model(CHAT_MODEL_ID)
+    state.torch = torch
+    state.chat_model = model
+    state.chat_processor = processor
+    state.active_model = "chat"
+    state.device = "cuda"
+    state.gpu_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+
+
+def _switch_to_image() -> None:
+    if state.pipe is not None:
+        return
+    state.chat_model = None
+    state.chat_processor = None
+    state.active_model = "loading-image"
+    _release_gpu()
+    _load_pipeline()
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     if not TOKEN:
         raise RuntimeError("PIXELPILOT_INFERENCE_TOKEN is required")
-    await asyncio.to_thread(_load_pipeline)
-    # Original readiness must not trigger either optional checkpoint download.
+    # Chat is immediately available. The (much larger) image pipeline only
+    # loads after the first image request, avoiding duplicate model residency.
+    await asyncio.to_thread(_switch_to_chat)
     try:
         yield
     finally:
@@ -195,14 +242,13 @@ async def lifespan(_app: FastAPI):
         await asyncio.gather(*tasks, return_exceptions=True)
         enhancer_downloads.clear()
         state.pipe = None
-        if state.torch is not None:
-            try:
-                state.torch.cuda.empty_cache()
-            except Exception:
-                pass
+        state.chat_model = None
+        state.chat_processor = None
+        state.active_model = "none"
+        _release_gpu()
 
 
-app = FastAPI(title="PixelPilot Qwen-Image Gateway", lifespan=lifespan)
+app = FastAPI(title="PixelPilot Multimodal Gateway", lifespan=lifespan)
 
 
 def _generator(seed: int) -> Any:
@@ -366,6 +412,11 @@ async def _generate_response(
     enhancer_fallback = False
 
     async with generation_lock:
+        try:
+            await asyncio.to_thread(_switch_to_image)
+        except Exception as exc:
+            logger.exception("Image model could not load")
+            raise HTTPException(status_code=503, detail="Image model failed to load: " + str(exc)[:300]) from exc
         if enhance_prompt:
             try:
                 needed_model = PE_I2I_ID if reference_images else PE_T2I_ID
@@ -433,11 +484,12 @@ async def _generate_response(
 @app.get("/health")
 async def health(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     _check_auth(authorization)
-    if state.pipe is None:
-        raise HTTPException(status_code=503, detail="Image model is loading")
+    if state.pipe is None and state.chat_model is None:
+        raise HTTPException(status_code=503, detail="Multimodal model is loading")
     return {
         "status": "ok",
-        "model": MODEL_ID,
+        "model": CHAT_MODEL_ID if state.active_model == "chat" else MODEL_ID,
+        "active_model": state.active_model,
         "device": state.device,
         "memory_mode": state.memory_mode,
         "gpu_vram_gb": round(state.gpu_vram_gb, 2),
@@ -459,9 +511,12 @@ async def health(authorization: str | None = Header(default=None)) -> dict[str, 
 @app.get("/v1/models")
 async def models(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     _check_auth(authorization)
-    if state.pipe is None:
-        raise HTTPException(status_code=503, detail="Image model is loading")
-    return {"object": "list", "data": [{"id": MODEL_ID, "object": "model"}]}
+    if state.pipe is None and state.chat_model is None:
+        raise HTTPException(status_code=503, detail="Multimodal model is loading")
+    return {"object": "list", "data": [
+        {"id": CHAT_MODEL_ID, "object": "model"},
+        {"id": MODEL_ID, "object": "model"},
+    ]}
 
 
 @app.post("/v1/images/generations")
@@ -523,3 +578,52 @@ async def image_edits(
         negative_prompt=negative_prompt,
         enhance_prompt=enhance_prompt,
     )
+
+
+@app.post("/v1/chat/completions")
+async def chat_completions(
+    request: ChatRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _check_auth(authorization)
+    if len(request.images) > CHAT_MAX_IMAGES:
+        raise HTTPException(status_code=422, detail=f"At most {CHAT_MAX_IMAGES} images supported")
+    if sum(len(str(turn.get("content", ""))) for turn in request.history) > 16000:
+        raise HTTPException(status_code=413, detail="Chat history too long")
+
+    images: list[Any] = []
+    for encoded in request.images:
+        if len(encoded) > MAX_UPLOAD_BYTES * 4 // 3 + 100:
+            raise HTTPException(status_code=413, detail="Image too large")
+        try:
+            blob = base64.b64decode(encoded, validate=True)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Invalid base64 image") from exc
+        img = _decode_uploaded_image(blob)
+        if img.width * img.height > 25_000_000:
+            raise HTTPException(status_code=413, detail="Image pixel dimensions too large")
+        img.thumbnail((1600, 1600))
+        images.append(img.convert("RGB"))
+
+    async with generation_lock:
+        try:
+            await asyncio.to_thread(_switch_to_chat)
+            reply = await asyncio.to_thread(
+                run_chat,
+                state.chat_model,
+                state.chat_processor,
+                history=request.history,
+                prompt=request.prompt,
+                images=images,
+                max_new_tokens=request.max_new_tokens,
+            )
+        except Exception as exc:
+            logger.exception("Multimodal chat request failed")
+            raise HTTPException(status_code=500, detail="Chat inference failed: " + str(exc)[:250]) from exc
+
+    return {
+        "id": "pixelpilot-chat",
+        "object": "chat.completion",
+        "model": CHAT_MODEL_ID,
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}],
+    }

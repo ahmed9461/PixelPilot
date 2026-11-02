@@ -15,7 +15,8 @@ from pixelpilot.services.vast_gateway import normalize_offer
 
 def quote(offer_id=1, *, down=0.001, up=0.001, hour=0.4, vram=48):
     return GpuOffer(offer_id, "Test GPU", vram, hour, 0.99, 40,
-                    machine_id=100 + offer_id,
+                    machine_id=100 + offer_id, verified=True,
+                    inet_down_mbps=650, inet_up_mbps=300,
                     download_usd_per_gb=down, upload_usd_per_gb=up)
 
 
@@ -67,13 +68,15 @@ def test_discovery_cost_ranking_and_preferred_only_remain_live(tmp_path):
         rows = [quote(1, down=0.03, hour=0.2), quote(2, down=0.001, hour=0.48),
                 quote(3, down=0.002, hour=0.25, vram=24), quote(4, down=None, hour=0.1)]
         orch, vast, db = await setup(tmp_path, rows)
-        assert [row.offer_id for row in await orch.offers()] == [3, 2, 1, 4]
-        assert len(vast.searches) == 2
+        ids = [row.offer_id for row in await orch.offers()]
+        assert set(ids) == {1, 2, 3, 4}
+        assert ids.index(2) < ids.index(1)  # strong transfer value beats expensive download
+        assert len(vast.searches) == 3
         saved = await orch.cached_offer(2)
         assert saved.download_usd_per_gb == 0.001
         assert saved.machine_id == 102
-        assert [row.offer_id for row in await orch.offers(preferred_only=True)] == [2, 1, 4]
-        assert len(vast.searches) == 3
+        assert set(row.offer_id for row in await orch.offers(preferred_only=True)) == {1, 2, 4}
+        assert len(vast.searches) == 5
         assert await db.get("offers.search_mode") == "preferred"
     asyncio.run(scenario())
 

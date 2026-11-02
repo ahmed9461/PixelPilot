@@ -1,25 +1,29 @@
+"""Owner-only Telegram chat, image understanding and image editing router."""
 from __future__ import annotations
 
 import asyncio
 import logging
+from html import escape
 from io import BytesIO
 
 from aiogram import F, Router
+from aiogram.filters import Command
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
-from pixelpilot.bot.callbacks import safe_callback_answer, safe_edit_text
+from pixelpilot.bot.callbacks import safe_callback_answer
 from pixelpilot.bot.keyboards import main_menu
 from pixelpilot.domain import InstancePhase, ReferenceImage
 from pixelpilot.services.image_settings import get_state
 from pixelpilot.services.orchestrator import Orchestrator
 
 
-router = Router(name="images")
+router = Router(name="multimodal")
 logger = logging.getLogger(__name__)
 _orchestrator: Orchestrator | None = None
-
 _album_messages: dict[str, list[Message]] = {}
 _album_tasks: dict[str, asyncio.Task[None]] = {}
+
+MODES = {"chat", "generate", "edit", "vision"}
 
 
 def configure(orchestrator: Orchestrator) -> None:
@@ -29,13 +33,17 @@ def configure(orchestrator: Orchestrator) -> None:
 
 def orch() -> Orchestrator:
     if _orchestrator is None:
-        raise RuntimeError("Image router not configured")
+        raise RuntimeError("Multimodal router not configured")
     return _orchestrator
 
 
+async def _mode() -> str:
+    value = await orch().db.get("chat.mode", "chat")
+    return value if value in MODES else "chat"
+
+
 async def _ensure_ready(message: Message) -> bool:
-    phase = await orch().db.get("instance.phase", InstancePhase.NONE.value)
-    if phase == InstancePhase.READY.value:
+    if await orch().db.get("instance.phase", InstancePhase.NONE.value) == InstancePhase.READY.value:
         return True
     await message.answer(
         "السيرفر غير جاهز الآن. استأجر سيرفر أو شغّل السيرفر الحالي أولًا.",
@@ -44,153 +52,214 @@ async def _ensure_ready(message: Message) -> bool:
     return False
 
 
-def _check_declared_size(file_size: int | None) -> None:
-    if not file_size:
-        return
-    max_bytes = orch().settings.image_max_upload_mb * 1024 * 1024
-    if int(file_size) > max_bytes:
-        raise ValueError(
-            f"حجم الصورة أكبر من الحد المسموح ({orch().settings.image_max_upload_mb} MB)."
-        )
+def _size_ok(size: int | None) -> None:
+    maximum = orch().settings.image_max_upload_mb * 1024 * 1024
+    if size and size > maximum:
+        raise ValueError(f"حجم الصورة يتجاوز {orch().settings.image_max_upload_mb} MB")
 
 
-def _check_media_size(data: bytes) -> None:
-    max_bytes = orch().settings.image_max_upload_mb * 1024 * 1024
-    if len(data) > max_bytes:
-        raise ValueError(
-            f"حجم الصورة أكبر من الحد المسموح ({orch().settings.image_max_upload_mb} MB)."
-        )
-
-
-async def _download_telegram_file(message: Message, file_id: str) -> bytes:
+async def _download(message: Message, file_id: str) -> bytes:
     buffer = BytesIO()
     await message.bot.download(file_id, destination=buffer)
     data = buffer.getvalue()
-    _check_media_size(data)
+    _size_ok(len(data))
     return data
 
 
-async def _generate(
-    message: Message,
-    *,
-    prompt: str,
-    references: tuple[ReferenceImage, ...] = (),
+async def _photo_ref(message: Message) -> ReferenceImage:
+    photo = message.photo[-1]
+    _size_ok(photo.file_size)
+    return ReferenceImage(data=await _download(message, photo.file_id), mime_type="image/jpeg")
+
+
+async def _file_ref(message: Message) -> ReferenceImage:
+    doc = message.document
+    _size_ok(doc.file_size)
+    return ReferenceImage(
+        data=await _download(message, doc.file_id),
+        mime_type=doc.mime_type or "image/png",
+    )
+
+
+async def _create_image(
+    message: Message, prompt: str, references: tuple[ReferenceImage, ...] = (),
 ) -> None:
     if not await _ensure_ready(message):
         return
     if not prompt.strip():
-        await message.answer("اكتب وصف الصورة أو تعليمات التعديل مع الصورة.")
+        await message.answer("أرسل وصفًا لإنشاء صورة، أو تعليمات تعديل مع الصورة.")
         return
 
-    image_settings = await get_state(orch().db)
-    if image_settings.enhance_prompt:
-        status_text = (
-            "✨ جاري تحسين تعليمات التعديل بواسطة Qwen الرسمي..."
-            if references
-            else "✨ جاري تحسين البرومت بواسطة Qwen الرسمي..."
-        )
-    else:
-        status_text = (
-            "🎨 جاري تعديل الصورة..."
-            if references
-            else "🎨 جاري إنشاء الصورة..."
-        )
-    status = await message.answer(status_text)
-
+    settings = await get_state(orch().db)
+    status = await message.answer("🎨 جاري تعديل الصورة..." if references else "🎨 جاري إنشاء الصورة...")
     try:
         result = await orch().generate_image(
             prompt,
-            width=image_settings.width,
-            height=image_settings.height,
-            steps=image_settings.steps,
+            width=settings.width,
+            height=settings.height,
+            steps=settings.steps,
             reference_images=references,
-            enhance_prompt=image_settings.enhance_prompt,
+            enhance_prompt=settings.enhance_prompt,
         )
-    except Exception as exc:
-        logger.exception("Image request failed")
-        await status.edit_text(f"❌ تعذر إنشاء الصورة:\n{exc}")
+    except Exception:
+        logger.exception("Image generation/editing failed")
+        await status.edit_text(
+            "❌ تعذر تنفيذ طلب الصورة. تأكد من جاهزية السيرفر والذاكرة ثم جرّب مرة أخرى."
+        )
         return
-
     try:
         await status.delete()
     except Exception:
         pass
-
-    if result.prompt_enhanced:
-        enhancer_line = "\n✨ تحسين Qwen الرسمي: <b>تم</b>"
-    elif result.enhancer_fallback:
-        enhancer_line = "\n⚠️ تعذر تحسين Qwen؛ تم استخدام البرومت الأصلي"
-    else:
-        enhancer_line = ""
-    caption = (
-        f"✅ تم — {result.width}×{result.height}\n"
-        f"🎲 Seed: <code>{result.seed}</code>"
-        f"{enhancer_line}"
+    note = "✨ تم تحسين البرومت" if result.prompt_enhanced else (
+        "⚠️ استخدم البرومت الأصلي لتعذر التحسين" if result.enhancer_fallback else ""
     )
     await message.answer_document(
         BufferedInputFile(result.data, filename=f"pixelpilot-{result.seed}.png"),
-        caption=caption,
+        caption=f"✅ تم — {result.width}×{result.height}\nSeed: <code>{result.seed}</code>\n{note}",
         reply_markup=main_menu(),
     )
 
 
-async def _photo_to_reference(message: Message) -> ReferenceImage:
-    photo = message.photo[-1]
-    _check_declared_size(photo.file_size)
-    data = await _download_telegram_file(message, photo.file_id)
-    return ReferenceImage(data=data, mime_type="image/jpeg")
+async def _reply(message: Message, prompt: str, images: tuple[ReferenceImage, ...] = ()) -> None:
+    if not await _ensure_ready(message):
+        return
+    if len(images) > orch().settings.chat_max_images:
+        await message.answer(
+            f"يمكن تحليل {orch().settings.chat_max_images} صور كحد أقصى في رسالة واحدة."
+        )
+        return
+    status = await message.answer("👁️ جاري فهم الصورة..." if images else "🧠 جاري التفكير...")
+    try:
+        answer = await orch().chat(prompt, reference_images=images)
+    except Exception:
+        logger.exception("Multimodal chat failed")
+        await status.edit_text(
+            "❌ تعذر الرد الآن. تأكد أن محرك الدردشة جاهز، ثم أعد المحاولة."
+        )
+        return
+    try:
+        await status.delete()
+    except Exception:
+        pass
+    # Telegram text is limited to 4096 characters; escape untrusted model output.
+    for start in range(0, len(answer), 3500):
+        await message.answer(escape(answer[start:start + 3500]))
 
 
-async def _flush_album(media_group_id: str) -> None:
+def _edit_caption(caption: str | None) -> str | None:
+    raw = (caption or "").strip()
+    if raw == "/edit":
+        return ""
+    if raw.startswith("/edit "):
+        return raw[6:].strip()
+    return None
+
+
+async def _handle_images(
+    message: Message, caption: str | None, images: tuple[ReferenceImage, ...],
+) -> None:
+    explicit_edit = _edit_caption(caption)
+    mode = await _mode()
+    if explicit_edit is not None or mode == "edit":
+        prompt = explicit_edit if explicit_edit is not None else (caption or "").strip()
+        if not prompt:
+            await message.answer("اكتب تعليمات التعديل في وصف الصورة، مثل: غيّر الخلفية إلى حديقة.")
+            return
+        await _create_image(message, prompt, images)
+        return
+    await _reply(message, (caption or "").strip() or "اشرح لي ما الذي يظهر في الصورة بالتفصيل.", images)
+
+
+async def _flush_album(group_id: str) -> None:
     try:
         await asyncio.sleep(0.9)
-        messages = _album_messages.pop(media_group_id, [])
+        messages = sorted(_album_messages.pop(group_id, []), key=lambda x: x.message_id)
         if not messages:
             return
-        messages.sort(key=lambda item: item.message_id)
         anchor = messages[0]
         max_refs = orch().settings.image_max_reference_images
         if len(messages) > max_refs:
-            await anchor.answer(f"الحد الأقصى للصور المرجعية هو {max_refs}.")
+            await anchor.answer(f"الحد الأقصى لألبوم الصور هو {max_refs}.")
             return
-
-        prompt = next(
-            (item.caption for item in messages if item.caption is not None and item.caption.strip()),
-            None,
-        )
-        if prompt is None:
-            await anchor.answer(
-                "أرسل الصور كألبوم مع كتابة تعليمات التعديل في وصف إحدى الصور."
-            )
+        caption = next((m.caption for m in messages if m.caption and m.caption.strip()), None)
+        edit_mode = _edit_caption(caption) is not None or await _mode() == "edit"
+        limit = max_refs if edit_mode else orch().settings.chat_max_images
+        if len(messages) > limit:
+            await anchor.answer(f"هذا الوضع يدعم حتى {limit} صور في المرة الواحدة.")
             return
-
-        references: list[ReferenceImage] = []
         try:
-            for item in messages:
-                references.append(await _photo_to_reference(item))
-        except Exception as exc:
-            await anchor.answer(f"❌ تعذر قراءة إحدى الصور: {exc}")
+            references = tuple([await _photo_ref(m) for m in messages])
+        except Exception:
+            logger.exception("Telegram album download failed")
+            await anchor.answer("❌ تعذر تحميل الصور المرجعية.")
             return
-
-        await _generate(anchor, prompt=prompt, references=tuple(references))
+        await _handle_images(anchor, caption, references)
     finally:
-        _album_tasks.pop(media_group_id, None)
+        _album_tasks.pop(group_id, None)
+
+
+@router.callback_query(lambda q: q.data and q.data.startswith("chat:mode:"))
+async def set_mode(callback: CallbackQuery) -> None:
+    value = callback.data.rsplit(":", 1)[-1]
+    if value not in MODES:
+        await safe_callback_answer(callback, "وضع غير صالح", show_alert=True)
+        return
+    await orch().db.set("chat.mode", value)
+    await safe_callback_answer(callback, "تم اختيار الوضع")
+    help_text = {
+        "chat": "🧠 وضع الدردشة: أرسل أي سؤال، ويمكنك إرسال صورة لتحليلها.",
+        "vision": "👁️ وضع فهم الصور: أرسل صورة مع سؤالك، أو أرسلها دون وصف لشرحها.",
+        "generate": "🎨 وضع إنشاء الصور: أرسل وصفًا نصيًا وسيُنشئ صورة جديدة.",
+        "edit": "🖌️ وضع تعديل الصور: أرسل الصورة مع وصف التعديل المطلوب.",
+    }
+    await callback.message.answer(help_text[value], reply_markup=main_menu())
 
 
 @router.callback_query(lambda q: q.data == "chat:help")
 async def chat_help(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback)
-    await safe_edit_text(
-        callback.message,
-        "🎨 <b>طريقة الاستخدام</b>\n\n"
-        "• لإنشاء صورة: أرسل وصفك كنص عادي.\n"
-        "• لتعديل صورة: أرسل الصورة واكتب تعليمات التعديل في الوصف.\n"
-        "• يمكنك إرسال ألبوم يصل إلى 10 صور مرجعية مع تعليماتك.\n"
-        "• من «إعدادات الصور» تستطيع تغيير النسبة والجودة وعدد خطوات التوليد.\n"
-        "• يمكنك الاختيار بين البرومت الأصلي أو «تحسين Qwen» الرسمي.\n\n"
-        "لا توجد شخصية أو مشاعر أو طبقة برومت مخفية؛ تحسين Qwen يعمل فقط عندما تختاره بنفسك.",
+    await callback.message.answer(
+        "🧠 <b>طريقة الاستخدام</b>\n\n"
+        "• أرسل نصًا للدردشة أو أرسل صورة لفهمها.\n"
+        "• /image وصف — إنشاء صورة جديدة دون تغيير وضع الدردشة.\n"
+        "• أرسل صورة ووصفها يبدأ بـ /edit لتعديلها.\n"
+        "• يمكنك اختيار وضع تعديل الصور من القائمة.\n"
+        "• /clear يمسح ذاكرة الدردشة النصية.\n"
+        "• إعدادات الصور تتيح التحكم بالجودة والنسبة والخطوات.\n\n"
+        "الصور لا تُحفظ في سجل المحادثة؛ يحفظ البوت نصوص آخر الرسائل فقط.",
         reply_markup=main_menu(),
     )
+
+
+@router.message(F.text, Command("clear"))
+async def clear_chat(message: Message) -> None:
+    await orch().clear_chat_history()
+    await message.answer("🧹 تم مسح ذاكرة الدردشة النصية.", reply_markup=main_menu())
+
+
+@router.message(F.text, Command("image"))
+async def image_command(message: Message) -> None:
+    prompt = (message.text or "").partition(" ")[2].strip()
+    await _create_image(message, prompt)
+
+
+@router.message(F.text, Command("edit"))
+async def edit_command(message: Message) -> None:
+    prompt = (message.text or "").partition(" ")[2].strip()
+    replied = message.reply_to_message
+    if not replied or not (replied.photo or (replied.document and (replied.document.mime_type or "").startswith("image/"))):
+        await message.answer("ارسل الصورة مع وصف يبدأ بـ /edit أو رد على الصورة بأمر /edit التعليمات.")
+        return
+    if not prompt:
+        await message.answer("اكتب تعليمات التعديل بعد /edit.")
+        return
+    try:
+        reference = await (_photo_ref(replied) if replied.photo else _file_ref(replied))
+    except Exception:
+        await message.answer("تعذر قراءة الصورة التي تريد تعديلها.")
+        return
+    await _create_image(message, prompt, (reference,))
 
 
 @router.message(F.photo)
@@ -200,55 +269,37 @@ async def receive_photo(message: Message) -> None:
         _album_messages.setdefault(group_id, []).append(message)
         if group_id not in _album_tasks:
             _album_tasks[group_id] = asyncio.create_task(
-                _flush_album(group_id),
-                name=f"pixelpilot-album-{group_id}",
+                _flush_album(group_id), name=f"pixelpilot-album-{group_id}"
             )
         return
-
-    if not await _ensure_ready(message):
-        return
-    if message.caption is None or not message.caption.strip():
-        await message.answer(
-            "أرسل الصورة مع تعليمات التعديل في وصف الصورة."
-        )
-        return
     try:
-        reference = await _photo_to_reference(message)
-    except Exception as exc:
-        await message.answer(f"❌ تعذر قراءة الصورة: {exc}")
+        reference = await _photo_ref(message)
+    except Exception:
+        logger.exception("Telegram photo download failed")
+        await message.answer("❌ تعذر قراءة الصورة أو أنها أكبر من الحد المسموح.")
         return
-    await _generate(message, prompt=message.caption, references=(reference,))
+    await _handle_images(message, message.caption, (reference,))
 
 
 @router.message(F.document)
 async def receive_document(message: Message) -> None:
-    mime = (message.document.mime_type or "").lower()
-    if not mime.startswith("image/"):
-        return
-    if not await _ensure_ready(message):
-        return
-    if message.caption is None or not message.caption.strip():
-        await message.answer(
-            "أرسل ملف الصورة مع تعليمات التعديل في وصف الملف."
-        )
+    if not (message.document.mime_type or "").startswith("image/"):
         return
     try:
-        _check_declared_size(message.document.file_size)
-        data = await _download_telegram_file(message, message.document.file_id)
-    except Exception as exc:
-        await message.answer(f"❌ تعذر قراءة الصورة: {exc}")
+        reference = await _file_ref(message)
+    except Exception:
+        logger.exception("Telegram document download failed")
+        await message.answer("❌ تعذر قراءة ملف الصورة.")
         return
-
-    await _generate(
-        message,
-        prompt=message.caption,
-        references=(ReferenceImage(data=data, mime_type=mime or "image/png"),),
-    )
+    await _handle_images(message, message.caption, (reference,))
 
 
 @router.message(F.text)
 async def receive_text(message: Message) -> None:
-    prompt = message.text
+    prompt = (message.text or "").strip()
     if not prompt or prompt.startswith("/"):
         return
-    await _generate(message, prompt=prompt)
+    if await _mode() == "generate":
+        await _create_image(message, prompt)
+    else:
+        await _reply(message, prompt)

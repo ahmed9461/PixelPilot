@@ -41,7 +41,7 @@ def test_rapid_rent_taps_reserve_one_background_slot(monkeypatch):
         starts = 0
         answers = []
 
-        async def fake_rent(callback, offer_id, preferred_only):
+        async def fake_rent(callback, offer_id, preferred_only, premium_only=False):
             nonlocal starts
             starts += 1
             await gate.wait()

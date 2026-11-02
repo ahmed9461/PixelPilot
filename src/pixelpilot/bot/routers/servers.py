@@ -40,9 +40,10 @@ def _lifecycle_busy() -> bool:
     return _lifecycle_task is not None and not _lifecycle_task.done()
 
 
-def _selected_offer(data: str) -> tuple[int, bool]:
+def _selected_offer(data: str) -> tuple[int, bool, bool]:
     parts = data.split(":")
-    return int(parts[2]), len(parts) > 3 and parts[3] == "p"
+    suffix = parts[3] if len(parts) > 3 else "a"
+    return int(parts[2]), suffix == "p", suffix == "h"
 
 
 def _track_lifecycle(coro: Any, *, name: str) -> None:
@@ -109,6 +110,7 @@ def _offer_signature(item: Any) -> tuple[Any, ...]:
             round(float(item.get("price_per_hour") or 0.0), 6),
             round(float(item.get("reliability") or 0.0), 6),
             round(float(item.get("inet_down_mbps") or 0.0), 3),
+            round(float(item.get("inet_up_mbps") or 0.0), 3),
             str(item.get("gpu_name") or ""),
             item.get("download_usd_per_gb"),
             item.get("upload_usd_per_gb"),
@@ -118,6 +120,7 @@ def _offer_signature(item: Any) -> tuple[Any, ...]:
         round(float(item.price_per_hour), 6),
         round(float(item.reliability or 0.0), 6),
         round(float(item.inet_down_mbps or 0.0), 3),
+        round(float(item.inet_up_mbps or 0.0), 3),
         str(item.gpu_name),
         getattr(item, "download_usd_per_gb", None),
         getattr(item, "upload_usd_per_gb", None),
@@ -206,13 +209,17 @@ async def preflight(callback: CallbackQuery) -> None:
     )
 
 
-async def _search_offers(callback: CallbackQuery, *, preferred_only: bool) -> None:
-    mode = "preferred" if preferred_only else "all"
+async def _search_offers(
+    callback: CallbackQuery, *, preferred_only: bool, premium_only: bool = False,
+) -> None:
+    mode = "premium" if premium_only else ("preferred" if preferred_only else "all")
     await safe_callback_answer(callback, "جاري التحديث...")
     loading = (
-        "🔥 أبحث عن سيرفرات 48GB+ المتاحة..."
-        if preferred_only
-        else "🔎 أبحث عن أفضل السيرفرات المتاحة..."
+        "🚀 أبحث عن أفضل سيرفرات 80GB+..."
+        if premium_only else (
+            "🔥 أبحث عن سيرفرات 48GB+ المتاحة..."
+            if preferred_only else "🔎 أقارن قوة الكروت وسرعة الشبكة حتى $0.60/ساعة..."
+        )
     )
     await safe_edit_text(callback.message, loading)
 
@@ -222,7 +229,7 @@ async def _search_offers(callback: CallbackQuery, *, preferred_only: bool) -> No
         previous = []
 
     try:
-        offers = await orch().offers(preferred_only=preferred_only)
+        offers = await orch().offers(preferred_only=preferred_only, premium_only=premium_only)
     except Exception:
         logger.exception("Server offer search failed")
         await callback.message.edit_text(
@@ -238,37 +245,45 @@ async def _search_offers(callback: CallbackQuery, *, preferred_only: bool) -> No
     preferred_count = int(
         await orch().db.get("offers.preferred_candidate_count", 0) or 0
     )
+    premium_count = int(await orch().db.get("offers.premium_candidate_count", 0) or 0)
 
     if not offers:
         scope = (
-            "لا توجد حاليًا عروض 48GB+ مطابقة للفلاتر وسقوف الأسعار."
-            if preferred_only
-            else "لا توجد عروض مناسبة حاليًا ضمن الفلاتر وسقوف الأسعار المحددة."
+            "لا توجد عروض 80GB+ تحت سقف $0.60 حاليًا."
+            if premium_only else (
+                "لا توجد عروض 48GB+ مطابقة للفلاتر والسقف."
+                if preferred_only else "لا توجد عروض مناسبة ضمن الميزانية وجودة الشبكة المحددة."
+            )
         )
         await callback.message.edit_text(
             f"🔄 <b>تحديث السوق #{refresh_no}</b>\n\n{scope}",
-            reply_markup=offers_keyboard([], preferred_only=preferred_only),
+            reply_markup=offers_keyboard([], preferred_only=preferred_only, premium_only=premium_only),
         )
         return
 
     note = _refresh_note(previous, offers, refresh_no)
     await orch().db.set("offers.last_refresh_note", note)
 
-    if preferred_only:
+    if premium_only:
+        title = "🚀 <b>عروض 80GB+ ضمن الميزانية</b>"
+        discovery = f"المرشحون المطابقون: <b>{candidate_count}</b>"
+    elif preferred_only:
         title = "🔥 <b>عروض 48GB+ المتاحة</b>"
         discovery = f"المرشحون المطابقون: <b>{candidate_count}</b>"
     else:
-        title = "🧾 <b>العروض حسب التكلفة المقدرة</b>"
+        title = "⚡ <b>أفضل السيرفرات حسب القوة والشبكة والتكلفة</b>"
         discovery = (
             f"المرشحون المطابقون: <b>{candidate_count}</b> "
-            f"— منها 48GB+: <b>{preferred_count}</b>"
+            f"— 48GB+: <b>{preferred_count}</b> — 80GB+: <b>{premium_count}</b>"
         )
 
     settings = orch().settings
     comparison = (
+        f"سقف الإيجار الصارم: <b>${settings.vast_max_price_usd_hour:.2f}/ساعة</b>. "
+        f"نت مطلوب ↓{settings.vast_min_inet_down_mbps:g}/↑{settings.vast_min_inet_up_mbps:g} Mbps.\n"
         f"المقارنة بين المرشحين: تنزيل مفترض <b>{settings.vast_estimated_download_gb:g} GB</b> "
         f"+ <b>{settings.vast_cost_comparison_hours:g} ساعة</b> تشغيل.\n"
-        "الرسوم المجهولة تأتي أخيرًا؛ التفاصيل تقديرية وليست فاتورة."
+        "الترتيب يعطي أولوية للأداء والنت والموثوقية، مع تقدير رسوم التنزيل؛ السرعات معلنة وليست قياسات فعلية."
     )
     if settings.vast_max_download_usd_per_tb is not None:
         comparison += f"\nسقف Download: <b>${settings.vast_max_download_usd_per_tb:g}/TB</b>."
@@ -278,13 +293,18 @@ async def _search_offers(callback: CallbackQuery, *, preferred_only: bool) -> No
         f"المعروض لك الآن: <b>{len(offers)}</b>\n\n"
         f"{comparison}\n\n"
         "اختر عرضًا لمراجعة السعر ورسوم البيانات والمواصفات:",
-        reply_markup=offers_keyboard(offers, preferred_only=preferred_only),
+        reply_markup=offers_keyboard(offers, preferred_only=preferred_only, premium_only=premium_only),
     )
 
 
 @router.callback_query(lambda q: q.data == "servers:search")
 async def search(callback: CallbackQuery) -> None:
     await _search_offers(callback, preferred_only=False)
+
+
+@router.callback_query(lambda q: q.data == "servers:search80")
+async def search_premium(callback: CallbackQuery) -> None:
+    await _search_offers(callback, preferred_only=False, premium_only=True)
 
 
 @router.callback_query(lambda q: q.data == "servers:search48")
@@ -294,7 +314,7 @@ async def search_preferred(callback: CallbackQuery) -> None:
 
 @router.callback_query(lambda q: q.data and q.data.startswith("servers:offer:"))
 async def offer_details(callback: CallbackQuery) -> None:
-    offer_id, preferred_only = _selected_offer(callback.data)
+    offer_id, preferred_only, premium_only = _selected_offer(callback.data)
     offer = await orch().cached_offer(offer_id)
     await safe_callback_answer(callback)
     if offer is None:
@@ -319,7 +339,11 @@ async def offer_details(callback: CallbackQuery) -> None:
     )
     lines.append(f"ملف التشغيل: <b>{profile}</b>")
     if offer.inet_down_mbps:
-        lines.append(f"سرعة التنزيل: <b>{offer.inet_down_mbps:.0f} Mbps</b>")
+        lines.append(f"⬇️ سرعة التنزيل المعلنة: <b>{offer.inet_down_mbps:.0f} Mbps</b>")
+    if offer.inet_up_mbps:
+        lines.append(f"⬆️ سرعة الرفع المعلنة: <b>{offer.inet_up_mbps:.0f} Mbps</b>")
+    if offer.dlperf is not None:
+        lines.append(f"⚡ مؤشر DLPerf المعلن: <b>{offer.dlperf:.1f}</b>")
     if offer.location:
         lines.append(f"الموقع: <b>{escape(offer.location)}</b>")
     lines.append("")
@@ -337,6 +361,7 @@ async def offer_details(callback: CallbackQuery) -> None:
         reply_markup=offer_confirm_keyboard(
             offer_id,
             preferred_only=preferred_only,
+            premium_only=premium_only,
         ),
     )
 
@@ -346,13 +371,14 @@ async def _rent_and_prepare_background(
     status_message: Message,
     *,
     preferred_only: bool,
+    premium_only: bool = False,
 ) -> None:
     async def progress(_text: str) -> None:
         try:
             state = await orch().current_state(probe_inference=False)
             billing = state.get("billing") if isinstance(state, dict) else None
             lines = [
-                "⏳ <b>جاري تجهيز محرك الصور...</b>",
+                "⏳ <b>جاري تجهيز محرك الدردشة والصور...</b>",
                 "",
                 "التجهيز يعمل في الخلفية؛ تستطيع استخدام أزرار الحالة والحذف أثناء ذلك.",
             ]
@@ -374,6 +400,7 @@ async def _rent_and_prepare_background(
                 reply_markup=offers_keyboard(
                     [],
                     preferred_only=preferred_only,
+                    premium_only=premium_only,
                 ),
             )
         except Exception:
@@ -412,7 +439,7 @@ async def _rent_and_prepare_background(
         lines = [
             "✅ <b>السيرفر جاهز</b>",
             "",
-            "أرسل وصفًا لإنشاء صورة، أو صورة مع تعليمات لتعديلها.",
+            "أرسل سؤالًا للدردشة، أو صورة لفهمها؛ اختر وضع الصور لإنشائها أو تعديلها.",
         ]
         lines.extend(_billing_lines(state.get("billing")))
         await status_message.edit_text("\n".join(lines), reply_markup=main_menu())
@@ -430,14 +457,14 @@ async def rent(callback: CallbackQuery) -> None:
         )
         return
 
-    offer_id, preferred_only = _selected_offer(callback.data)
+    offer_id, preferred_only, premium_only = _selected_offer(callback.data)
     # Claim the lifecycle slot synchronously, before any Telegram/SQLite await.
     _track_lifecycle(
-        _rent_from_callback(callback, offer_id, preferred_only), name="pixelpilot-rent-and-prepare"
+        _rent_from_callback(callback, offer_id, preferred_only, premium_only), name="pixelpilot-rent-and-prepare"
     )
 
 
-async def _rent_from_callback(callback: CallbackQuery, offer_id: int, preferred_only: bool) -> None:
+async def _rent_from_callback(callback: CallbackQuery, offer_id: int, preferred_only: bool, premium_only: bool = False) -> None:
     await safe_callback_answer(callback, "أتحقق من العرض ثم أبدأ التجهيز")
     await callback.message.edit_text(
         "🔎 <b>جاري التحقق من العرض وبدء الاستئجار</b>\n\n"
@@ -448,7 +475,7 @@ async def _rent_from_callback(callback: CallbackQuery, offer_id: int, preferred_
         "⏳ <b>جاري بدء التجهيز...</b>"
     )
     await _rent_and_prepare_background(
-        offer_id, status_message, preferred_only=preferred_only
+        offer_id, status_message, preferred_only=preferred_only, premium_only=premium_only
     )
 
 

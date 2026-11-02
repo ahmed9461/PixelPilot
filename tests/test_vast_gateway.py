@@ -16,6 +16,7 @@ def test_build_query_contains_cost_ram_and_safety_filters():
         verified_only=True,
         min_direct_ports=2,
         min_inet_down_mbps=100,
+        min_inet_up_mbps=80,
         min_cpu_ram_gb=48,
     )
     assert "gpu_ram>=48" in q
@@ -27,6 +28,7 @@ def test_build_query_contains_cost_ram_and_safety_filters():
     assert "verified=true" in q
     assert "direct_port_count>=2" in q
     assert "inet_down>=100" in q
+    assert "inet_up>=80" in q
     assert "cpu_ram>=48" in q
 
 
@@ -439,3 +441,11 @@ def test_http_408_and_429_are_ambiguous():
 
     for status in (408, 429):
         asyncio.run(scenario(status))
+
+
+def test_false_string_is_not_treated_as_a_verified_host():
+    raw = {"id": 1, "gpu_name": "A6000", "gpu_ram": 48000,
+           "dph_total": 0.4, "verified": "false"}
+    assert normalize_offer(raw).verified is False
+    raw["verified"] = "true"
+    assert normalize_offer(raw).verified is True
