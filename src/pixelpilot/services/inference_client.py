@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import ssl
 from typing import Any
 
 import httpx
@@ -21,12 +22,14 @@ class InferenceClient:
         token: str,
         model_id: str,
         *,
-        verify_tls: bool = False,
+        verify_tls: bool | ssl.SSLContext = True,
+        ready_model_id: str | None = None,
         timeout_seconds: float = 3600.0,
     ):
         self.base_url = base_url.rstrip("/")
         self.token = token
         self.model_id = model_id
+        self.ready_model_id = ready_model_id or model_id
         self.verify_tls = verify_tls
         self.timeout_seconds = timeout_seconds
 
@@ -37,7 +40,7 @@ class InferenceClient:
         async with httpx.AsyncClient(
             verify=self.verify_tls,
             timeout=self.timeout_seconds,
-            follow_redirects=True,
+            follow_redirects=False,
         ) as client:
             response = await client.request(
                 method,
@@ -53,6 +56,9 @@ class InferenceClient:
                     f"Inference API returned HTTP {response.status_code}: {detail}"
                 ) from exc
             return response
+
+    async def status(self) -> dict[str, Any]:
+        return (await self._request("GET", "/health")).json()
 
     async def health(self) -> bool:
         try:
@@ -77,7 +83,7 @@ class InferenceClient:
         if not await self.health():
             return False
         try:
-            return self.model_id in await self.models()
+            return self.ready_model_id in await self.models()
         except Exception:
             return False
 

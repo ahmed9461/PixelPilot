@@ -12,3 +12,7 @@
 - Image requests do not use assistant personality, tone, emotion, chat history or prompt-rewrite layers.
 - The prompt sent to the image worker is the prompt supplied by the owner after non-empty validation.
 - Destroy temporary GPU instances when finished to stop active instance billing and remove remote runtime/cache state according to provider behavior.
+
+## Multimodal TLS deployment (2026-11-03)
+
+New workers require per-instance verified TLS; public plaintext fallback is refused. The controller pins its issued certificate while keeping existing API credentials. Root-private SQLite holds owner-scoped bounded chat text; images remain ephemeral. See [DEPLOYMENT_20261103.md](DEPLOYMENT_20261103.md) for trust, backups and limitations.

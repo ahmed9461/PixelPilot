@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import ssl
 import secrets
 import shlex
 from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable
 
+from pixelpilot.services.offer_policy import eligible, quote_fingerprint
+from pixelpilot.services.transport import issue_certificate, trusted_context
 from pixelpilot.config import Settings
 from pixelpilot.db import Database
 from pixelpilot.domain import GeneratedImage, GpuOffer, InstancePhase, ReferenceImage
@@ -56,7 +60,7 @@ class Orchestrator:
         self.vast = vast
         self._inference_factory = inference_factory or self._default_inference_factory
         self._inference_lock = asyncio.Lock()
-        self._chat_lock = asyncio.Lock()
+        self._chat_lock = self._inference_lock
         self._offers_lock = asyncio.Lock()
         self._rent_lock = asyncio.Lock()
         self._control_lock = asyncio.Lock()
@@ -67,6 +71,7 @@ class Orchestrator:
             url,
             token,
             self.settings.model_id,
+            ready_model_id=self.settings.chat_model_id,
             verify_tls=self.settings.inference_verify_tls,
             timeout_seconds=self.settings.inference_request_timeout_seconds,
         )
@@ -110,78 +115,51 @@ class Orchestrator:
             return await self._offers_locked(preferred_only=preferred_only, premium_only=premium_only)
 
     async def _offers_locked(self, *, preferred_only: bool, premium_only: bool = False) -> list[GpuOffer]:
-        # Explore 80GB+, 48GB+ and 24GB+ pools, then rank actual performance,
-        # not simply GPU memory or the cheapest hourly ask.
-        floors = (self.settings.vast_premium_gpu_ram_gb,) if premium_only else (
-            self.settings.vast_premium_gpu_ram_gb,
-            self.settings.vast_preferred_gpu_ram_gb,
-        ) if preferred_only else (
-            self.settings.vast_premium_gpu_ram_gb,
-            self.settings.vast_preferred_gpu_ram_gb,
-            self.settings.vast_min_gpu_ram_gb,
-        )
+        floors = [self.settings.vast_premium_gpu_ram_gb]
+        if not premium_only: floors.append(self.settings.vast_preferred_gpu_ram_gb)
+        if not preferred_only and not premium_only: floors.extend([32, self.settings.vast_min_gpu_ram_gb])
         floors = sorted(set(max(self.settings.vast_min_gpu_ram_gb, n) for n in floors), reverse=True)
-        queries = [self._offer_query_for(n) for n in floors]
-        results = await asyncio.gather(
-            *(
-                self.vast.search_offers(
-                    query,
-                    self.settings.vast_search_pool_limit,
-                    storage_gb=float(self.settings.vast_disk_gb),
-                )
-                for query in queries
-            ),
-            return_exceptions=True,
-        )
-        failures = [item for item in results if isinstance(item, BaseException)]
-        if len(failures) == len(results):
-            raise OrchestratorError("تعذر البحث في Vast الآن") from failures[0]
-
+        queries, failures, stages = [], [], []
         deduped: dict[int, GpuOffer] = {}
-        for result in results:
-            if isinstance(result, BaseException):
-                continue
-            for offer in result:
-                deduped[offer.offer_id] = offer
-
-        candidates = [
-            offer for offer in deduped.values()
-            if 0 < offer.price_per_hour <= self.settings.vast_max_price_usd_hour
-            and offer.gpu_ram_gb >= (
-                self.settings.vast_premium_gpu_ram_gb if premium_only
-                else (self.settings.vast_preferred_gpu_ram_gb if preferred_only
-                else self.settings.vast_min_gpu_ram_gb)
-            )
-            and (offer.inet_down_mbps or 0) >= self.settings.vast_min_inet_down_mbps
-            and (offer.inet_up_mbps or 0) >= self.settings.vast_min_inet_up_mbps
-            and (offer.reliability or 0) >= self.settings.vast_min_reliability
-            and (not self.settings.vast_verified_only or offer.verified is True)
-            and download_rate_allowed(offer, self.settings.vast_max_download_usd_per_tb)
-        ]
-        candidates.sort(
-            key=lambda offer: offer_quality_rank(
-                offer,
-                hourly_cap=self.settings.vast_max_price_usd_hour,
-                download_gb=self.settings.vast_estimated_download_gb,
-                billed_hours=self.settings.vast_cost_comparison_hours,
-                preferred_down_mbps=self.settings.vast_preferred_inet_down_mbps,
-                preferred_up_mbps=self.settings.vast_preferred_inet_up_mbps,
-            )
-        )
+        # Each tier is queried before proceeding to the next. Independent VRAM
+        # pools prevent cheap 24GB asks from hiding faster 48/80GB hardware.
+        levels = [(3000, 1000), (self.settings.vast_preferred_inet_down_mbps, self.settings.vast_preferred_inet_up_mbps), (self.settings.vast_min_inet_down_mbps, self.settings.vast_min_inet_up_mbps)]
+        for down, up in dict.fromkeys(levels):
+            stage_queries = [self._offer_query_for(n, down=down, up=up) for n in floors]
+            queries.extend(stage_queries)
+            results = await asyncio.gather(*(self.vast.search_offers(q, self.settings.vast_search_pool_limit, storage_gb=float(self.settings.vast_disk_gb), order="inet_down-") for q in stage_queries), return_exceptions=True)
+            count = 0
+            for result in results:
+                if isinstance(result, BaseException): failures.append(result); continue
+                for offer in result:
+                    if eligible(offer, self.settings):
+                        deduped[offer.offer_id] = offer; count += 1
+            stages.append({"down_mbps": down, "up_mbps": up, "matches": count})
+        if len(failures) == len(queries):
+            raise OrchestratorError("تعذر البحث في Vast الآن") from failures[0]
+        floor = self.settings.vast_premium_gpu_ram_gb if premium_only else self.settings.vast_preferred_gpu_ram_gb if preferred_only else self.settings.vast_min_gpu_ram_gb
+        candidates = [x for x in deduped.values() if x.gpu_ram_gb >= floor]
+        rank = lambda offer: offer_quality_rank(offer, hourly_cap=self.settings.vast_max_price_usd_hour, download_gb=self.settings.vast_estimated_download_gb, billed_hours=self.settings.vast_cost_comparison_hours, preferred_down_mbps=self.settings.vast_preferred_inet_down_mbps, preferred_up_mbps=self.settings.vast_preferred_inet_up_mbps)
+        candidates.sort(key=rank)
+        fallback = []
+        if not candidates:
+            for n in floors:
+                query = self._offer_query_for(n, down=0, up=0)
+                queries.append(query)
+                try: result = await self.vast.search_offers(query, self.settings.vast_search_pool_limit, storage_gb=float(self.settings.vast_disk_gb), order="inet_down-")
+                except Exception as exc: failures.append(exc); continue
+                fallback.extend(x for x in result if x.gpu_ram_gb >= floor and eligible(x, self.settings, network=False) and not eligible(x, self.settings))
+            fallback = sorted({x.offer_id:x for x in fallback}.values(), key=rank)[:self.settings.vast_default_limit]
         rows = candidates[:self.settings.vast_default_limit]
         await self.db.set_many({
             "offers.last": [offer.public_dict() for offer in rows],
+            "offers.fallback": [offer.public_dict() for offer in fallback],
+            "offers.stages": stages,
             "offers.last_refreshed_at": datetime.now(UTC).isoformat(),
             "offers.search_mode": "premium" if premium_only else ("preferred" if preferred_only else "all"),
             "offers.candidate_count": len(candidates),
-            "offers.preferred_candidate_count": sum(
-                offer.gpu_ram_gb >= self.settings.vast_preferred_gpu_ram_gb
-                for offer in candidates
-            ),
-            "offers.premium_candidate_count": sum(
-                offer.gpu_ram_gb >= self.settings.vast_premium_gpu_ram_gb
-                for offer in candidates
-            ),
+            "offers.preferred_candidate_count": sum(x.gpu_ram_gb >= self.settings.vast_preferred_gpu_ram_gb for x in candidates),
+            "offers.premium_candidate_count": sum(x.gpu_ram_gb >= self.settings.vast_premium_gpu_ram_gb for x in candidates),
         })
         await self.db.event("offers.search", {
             "mode": "premium" if premium_only else ("preferred" if preferred_only else "all"),
@@ -202,7 +180,7 @@ class Orchestrator:
         return None
 
 
-    def _offer_query_for(self, min_vram_gb: int) -> str:
+    def _offer_query_for(self, min_vram_gb: int, *, down: float | None = None, up: float | None = None) -> str:
         query = build_offer_query(
             min_vram_gb,
             self.settings.vast_min_reliability,
@@ -211,8 +189,8 @@ class Orchestrator:
             verified_only=self.settings.vast_verified_only,
             datacenter_only=self.settings.vast_datacenter_only,
             min_direct_ports=self.settings.vast_min_direct_ports,
-            min_inet_down_mbps=self.settings.vast_min_inet_down_mbps,
-            min_inet_up_mbps=self.settings.vast_min_inet_up_mbps,
+            min_inet_down_mbps=self.settings.vast_min_inet_down_mbps if down is None else down,
+            min_inet_up_mbps=self.settings.vast_min_inet_up_mbps if up is None else up,
             min_cpu_ram_gb=(
                 self.settings.vast_min_cpu_ram_gb
                 if min_vram_gb < self.settings.image_full_gpu_min_vram_gb
@@ -223,6 +201,8 @@ class Orchestrator:
         cap = self.settings.vast_max_download_usd_per_tb
         if cap is not None:
             query += f" inet_down_cost<={cap / GB_PER_TB:.12g}"
+        query += " gpu_arch=nvidia cpu_arch=amd64"
+        query += " compute_cap>=800" if self.settings.model_dtype == "bfloat16" else " compute_cap>=700"
         return query
 
     async def live_offer(self, snapshot: GpuOffer) -> GpuOffer | None:
@@ -246,11 +226,11 @@ class Orchestrator:
             or old.reliability != new.reliability
         )
 
-    async def rent(self, offer_id: int) -> dict[str, Any]:
+    async def rent(self, offer_id: int, *, expected_quote: str | None = None) -> dict[str, Any]:
         async with self._rent_lock:
-            return await self._rent_locked(offer_id)
+            return await self._rent_locked(offer_id, expected_quote=expected_quote)
 
-    async def _rent_locked(self, offer_id: int) -> dict[str, Any]:
+    async def _rent_locked(self, offer_id: int, *, expected_quote: str | None = None) -> dict[str, Any]:
         self.settings.validate_rent_ready()
         current = await self.db.get("instance.id")
         if current:
@@ -272,11 +252,15 @@ class Orchestrator:
             raise OrchestratorError(f"Instance lifecycle is already busy: {phase}")
 
         offer = await self.cached_offer(offer_id)
+        if expected_quote and offer and quote_fingerprint(offer) != expected_quote:
+            raise OfferChangedError("هذا الزر يخص تفاصيل قديمة. افتح تفاصيل العرض الحالية وأعد التأكيد.")
         if offer is None:
             raise OfferUnavailableError(
                 "هذا العرض لم يعد موجودًا في آخر قائمة. حدّث العروض وأعد الاختيار."
             )
-        if offer.price_per_hour > self.settings.vast_max_price_usd_hour:
+        if not download_rate_allowed(offer, self.settings.vast_max_download_usd_per_tb):
+            raise OfferChangedError("سعر Download مجهول أو يتجاوز سقف التنزيل المحدد. حدّث العروض.")
+        if not eligible(offer, self.settings):
             raise OfferChangedError(
                 "سعر العرض تجاوز السقف المحدد. حدّث العروض وأعد التأكيد."
             )
@@ -341,6 +325,8 @@ class Orchestrator:
                 and float(cpu_ram_mb) / 1000 < self.settings.vast_min_cpu_ram_gb)
         ):
             raise OfferChangedError("العرض لم يعد يطابق متطلبات التشغيل. حدّث القائمة وأعد التأكيد.")
+        if not eligible(live_offer, self.settings):
+            raise OfferChangedError("العرض لا يطابق سياسة السعر أو الشبكة أو الموارد. حدّث العروض.")
         offer = live_offer
 
         inference_token = secrets.token_urlsafe(32)
@@ -351,7 +337,12 @@ class Orchestrator:
         await self.db.set("inference.token", inference_token)
         await self.db.set("inference.url", None)
 
-        env = self._build_vast_env(inference_token)
+        tls_values = {}
+        if self.settings.inference_use_https:
+            certificate, private_key = issue_certificate()
+            await self.db.set("inference.tls_ca", certificate)
+            tls_values = {"PIXELPILOT_TLS_CERT_B64": base64.b64encode(certificate.encode()).decode(), "PIXELPILOT_TLS_KEY_B64": private_key}
+        env = self._build_vast_env(inference_token, tls_values=tls_values)
         onstart_cmd = self._build_onstart_cmd()
         result: dict[str, Any] | None = None
         create_error: Exception | None = None
@@ -443,8 +434,10 @@ class Orchestrator:
         self,
         offer_id: int,
         progress: ProgressCallback | None = None,
+        *,
+        expected_quote: str | None = None,
     ) -> dict[str, Any]:
-        result = await self.rent(offer_id)
+        result = await self.rent(offer_id, expected_quote=expected_quote)
         try:
             await self.wait_until_ready(result["instance_id"], progress=progress)
             return result
@@ -527,7 +520,7 @@ class Orchestrator:
                 url = self._inference_url(ref.public_ip, ref.mapped_port)
                 await self.db.set("inference.url", url)
                 token = await self.db.get("inference.token")
-                inference = self._inference_factory(url, str(token or ""))
+                inference = await self._current_inference()
                 if await self._probe_inference_ready(inference):
                     await self.db.set("instance.phase", InstancePhase.READY.value)
                     await self._touch_activity()
@@ -540,9 +533,20 @@ class Orchestrator:
                         },
                     )
                     if progress:
-                        await progress("✅ محرك الصور جاهز.")
+                        await progress("✅ محرك الدردشة وفهم الصور جاهز؛ محرك الصور يُحمّل عند الطلب.")
                     return
-                notice = "السيرفر يعمل؛ جاري تحميل محرك إنشاء الصور..."
+                notice = "السيرفر يعمل؛ جاري تجهيز محرك الدردشة وفهم الصور..."
+                if isinstance(inference, InferenceClient):
+                    try:
+                        info = await asyncio.wait_for(inference.status(), timeout=self.settings.inference_probe_timeout_seconds)
+                        p = info.get("progress", {})
+                        notice = f"النموذج: {p.get('model') or self.settings.chat_model_id} — المرحلة: {p.get('stage', 'starting')}"
+                        if p.get('percent') is not None: notice += f" — {p['percent']}%"
+                        if p.get('downloaded_bytes') is not None: notice += f" — {p['downloaded_bytes']/1e9:.2f} GB"
+                        if p.get('total_bytes'): notice += f" / {p['total_bytes']/1e9:.2f} GB"
+                        if p.get('mbps') is not None: notice += f" — {p['mbps']} Mbps مقاسة من نمو الكاش"
+                        if p.get('error'): notice += f" — {p['error']}"
+                    except Exception: pass
 
             if progress and notice != last_notice:
                 await progress(notice)
@@ -652,9 +656,13 @@ class Orchestrator:
         if probe_inference:
             try:
                 inference = await self._current_inference()
-                state_data["inference_ready"] = await self._probe_inference_ready(
-                    inference
-                )
+                if isinstance(inference, InferenceClient):
+                    info = await self.inference_progress()
+                    state_data["inference_ready"] = info.get("status") == "ok"
+                    state_data["capabilities"] = info.get("capabilities", {})
+                    state_data["progress"] = info.get("progress", {})
+                else:
+                    state_data["inference_ready"] = await self._probe_inference_ready(inference)
             except Exception:
                 state_data["inference_ready"] = False
         return state_data
@@ -749,6 +757,8 @@ class Orchestrator:
     ) -> str:
         if not prompt.strip():
             raise OrchestratorError("اكتب رسالة أو سؤالًا عن الصورة")
+        if len(prompt) > 12000:
+            raise OrchestratorError("الرسالة طويلة جدًا؛ الحد 12000 حرف. قسّمها إلى رسالتين.")
         if len(reference_images) > self.settings.chat_max_images:
             raise OrchestratorError(
                 f"الحد الأقصى لفهم الصور هو {self.settings.chat_max_images}"
@@ -758,7 +768,8 @@ class Orchestrator:
             instance_id = await self.db.get("instance.id")
             if phase != InstancePhase.READY.value or not instance_id:
                 raise OrchestratorError("شغّل السيرفر قبل بدء الدردشة")
-            stored = await self.db.get("chat.history", [])
+            history_key = f"chat.history.{self.settings.owner_telegram_id}"
+            stored = await self.db.get(history_key, [])
             turns = [
                 {"role": row["role"], "content": row["content"][:4000]}
                 for row in stored if isinstance(row, dict)
@@ -766,6 +777,9 @@ class Orchestrator:
                 and isinstance(row.get("content"), str)
             ] if isinstance(stored, list) else []
             history = turns[-self.settings.chat_context_turns * 2:]
+            # Bound the payload before the worker applies its exact token cap.
+            while history and sum(len(x["content"]) for x in history) > 12000:
+                history = history[2:]
             await self.db.set("inference.active", True)
             await self._touch_activity()
             try:
@@ -780,7 +794,7 @@ class Orchestrator:
                 # are persisted to SQLite on the always-on controller.
                 user_text = prompt + (" [تم إرفاق صورة]" if reference_images else "")
                 await self.db.set(
-                    "chat.history",
+                    history_key,
                     (history + [
                         {"role": "user", "content": user_text[:4000]},
                         {"role": "assistant", "content": answer[:4000]},
@@ -799,7 +813,7 @@ class Orchestrator:
 
     async def clear_chat_history(self) -> None:
         async with self._chat_lock:
-            await self.db.set("chat.history", [])
+            await self.db.set_many({f"chat.history.{self.settings.owner_telegram_id}": [], "chat.history": []})
             await self.db.event("chat.cleared", {})
 
     async def recover_current(self) -> None:
@@ -882,18 +896,27 @@ class Orchestrator:
         await self.db.set("cost_guard.warned_instance", None)
         await self.db.set("cost_guard.warned_activity_at", None)
 
+    async def inference_progress(self) -> dict[str, Any]:
+        inference = await self._current_inference()
+        return await asyncio.wait_for(inference.status(), timeout=self.settings.inference_probe_timeout_seconds)
+
     async def _current_inference(self) -> InferenceClient:
         url = await self.db.get("inference.url")
         token = await self.db.get("inference.token")
         if not url or not token:
             raise OrchestratorError("Inference endpoint is not available")
-        return self._inference_factory(str(url), str(token))
+        if self.settings.inference_use_https and not str(url).startswith("https://"):
+            raise OrchestratorError("اتصال GPU القديم غير مشفر؛ يلزم تحديث العامل إلى TLS قبل إرسال بيانات.")
+        client = self._inference_factory(str(url), str(token))
+        ca = await self.db.get("inference.tls_ca")
+        if ca and isinstance(client, InferenceClient): client.verify_tls = trusted_context(str(ca))
+        return client
 
     def _inference_url(self, public_ip: str, mapped_port: int) -> str:
         scheme = "https" if self.settings.inference_use_https else "http"
         return f"{scheme}://{public_ip}:{mapped_port}"
 
-    def _build_vast_env(self, inference_token: str) -> str:
+    def _build_vast_env(self, inference_token: str, *, tls_values: dict[str, str] | None = None) -> str:
         values = {
             "HF_TOKEN": self.settings.hf_token,
             "PIXELPILOT_INFERENCE_TOKEN": inference_token,
@@ -901,6 +924,9 @@ class Orchestrator:
             "MODEL_ID": self.settings.model_id,
             "CHAT_MODEL_ID": self.settings.chat_model_id,
             "CHAT_MAX_IMAGES": str(self.settings.chat_max_images),
+            "CHAT_MAX_INPUT_TOKENS": str(self.settings.chat_max_input_tokens),
+            "CHAT_IMAGE_MAX_PIXELS": str(self.settings.chat_image_max_pixels),
+            "HF_DOWNLOAD_WORKERS": str(self.settings.hf_download_workers),
             "MODEL_DTYPE": self.settings.model_dtype,
             "IMAGE_MEMORY_MODE": self.settings.image_memory_mode,
             "IMAGE_FULL_GPU_MIN_VRAM_GB": str(self.settings.image_full_gpu_min_vram_gb),
@@ -913,6 +939,7 @@ class Orchestrator:
             "HF_HOME": "/workspace/hf-cache",
             "DATA_DIRECTORY": "/workspace",
         }
+        values.update(tls_values or {})
         if self.settings.pixelpilot_repo_url:
             values["PIXELPILOT_REPO_URL"] = self.settings.pixelpilot_repo_url
             values["PIXELPILOT_REPO_REF"] = self.settings.pixelpilot_repo_ref
@@ -931,10 +958,16 @@ class Orchestrator:
         root = "/workspace/PixelPilot"
         repo = shlex.quote(self.settings.pixelpilot_repo_url)
         ref = shlex.quote(self.settings.pixelpilot_repo_ref)
+        pin = self.settings.pixelpilot_worker_commit
+        if pin:
+            import re
+            if not re.fullmatch(r"[0-9a-f]{40}", pin): raise OrchestratorError("Worker commit must be a full Git SHA")
+        pin_command = f"git -C {root} fetch origin {pin} && git -C {root} checkout --detach {pin} && " if pin else ""
         return (
             f"if [ ! -d {root}/.git ]; then "
             f"git clone --depth 1 --branch {ref} {repo} {root}; "
-            f"else git -C {root} fetch --depth 1 origin {ref} && git -C {root} reset --hard FETCH_HEAD; fi; "
+            f"else git -C {root} fetch --depth 1 origin {ref} && git -C {root} merge --ff-only FETCH_HEAD; fi && "
+            + pin_command +
             f"nohup bash {root}/scripts/bootstrap_vast.sh > /workspace/pixelpilot-bootstrap.log 2>&1 &"
         )
 

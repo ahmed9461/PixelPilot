@@ -19,8 +19,8 @@ This makes 48GB and 80GB GPUs useful for faster image loading while allowing 24G
 ## Search and rental rules
 
 - Strict price <= `VAST_MAX_PRICE_USD_HOUR=0.60` in discovery and revalidation; changing that variable above $0.60 fails configuration validation.
-- One GPU, verified offers, min reliability 0.98 and min 150 Mbps advertised download + 80 Mbps advertised upload.
-- Search pools: 80GB+, 48GB+, 24GB+; premium-only 80GB and preferred-only 48GB buttons available.
+- One GPU, verified offers, min reliability 0.98 and min 1000 Mbps advertised download + 500 Mbps advertised upload, with 3000/1000 then 2000/1000 searches first.
+- Search pools: 80GB+, 48GB+, 32GB+, 24GB+; premium-only 80GB and preferred-only 48GB buttons available.
 - Results ranked by published DLPerf, GPU VRAM, download/upload speeds, reliability, datacenter flag and price, with a nonzero penalty for unknown inbound transfer cost.
 - Rental must match original Offer ID and its live price, GPU, VRAM, speeds and quoted transfer rates. Changed offers require refreshed user confirmation. Unknown upload/download prices are not automatically treated as free.
 
@@ -29,12 +29,12 @@ Storage and traffic may result in extra charges, and speed is not measured by th
 ## Deployment checklist
 
 1. Back up SQLite and your private `.env`. Never commit keys.
-2. **Do not deploy this branch to the existing production bot until tests and a real GPU smoke test pass.**
+2. Run all CPU/controller tests before controller deployment. The owner authorized this deployment without a new paid rental; record GPU acceptance as pending until a specific offer is approved.
 3. Install controller update. Check `OWNER_TELEGRAM_ID`, `VAST_API_KEY`, `TELEGRAM_BOT_TOKEN`.
-4. Edit an existing `.env`: `VAST_MAX_PRICE_USD_HOUR=0.60`, `CHAT_MODEL_ID=Qwen/Qwen3.5-9B`, `CHAT_MAX_IMAGES=3`, `VAST_MIN_INET_DOWN_MBPS=150`, `VAST_MIN_INET_UP_MBPS=80`.
-5. Set `PIXELPILOT_REPO_REF` to the same tested branch as your controller checkout; or merge into `main` and deploy both from `main`.
+4. Edit an existing `.env`: `VAST_MAX_PRICE_USD_HOUR=0.60`, `CHAT_MODEL_ID=Qwen/Qwen3.5-9B`, `CHAT_MAX_IMAGES=3`, `VAST_MIN_INET_DOWN_MBPS=1000`, `VAST_MIN_INET_UP_MBPS=500`.
+5. Keep `PIXELPILOT_REPO_REF=main`; while a reviewed repair PR is pending, pin `PIXELPILOT_WORKER_COMMIT` to its tested full SHA.
 6. Run `pytest` and `python -m compileall -q src` on the controller.
-7. Rent a verified GPU with adequate disk and known transfer fees; verify: `/start`, normal chat, image recognition, `/image ...`, and photo caption `/edit ...`.
+7. Only after explicit owner approval of the specific offer, rent a verified GPU with adequate disk and known transfer fees; verify: `/start`, normal chat, image recognition, `/image ...`, and photo caption `/edit ...`.
 8. Observe worker logs, GPU OOM, loading time, memory, and Vast billing. Destroy temporary instances explicitly when finished.
 
 ## Limitations
@@ -43,4 +43,4 @@ Storage and traffic may result in extra charges, and speed is not measured by th
 - Model switching is synchronous to the worker's inference lock; a second request queues while the first runs.
 - No Web search or speech transcription is added by this migration.
 - No live Vast rental, billing or real GPU test was run through the GitHub connector alone.
-- HTTP worker transport without TLS remains an existing security limitation; route sensitive media through TLS or private networking in production.
+- New workers use per-instance verified TLS; the controller refuses the old public HTTP path. See [DEPLOYMENT_20261103.md](DEPLOYMENT_20261103.md).

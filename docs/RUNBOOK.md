@@ -1,8 +1,10 @@
 # Runbook
 
+Current deployment procedure and TLS/network policy: [DEPLOYMENT_20261103.md](DEPLOYMENT_20261103.md). `main` contains PR #23. The dated repair supersedes the older image-only startup and cost-first ranking notes below. A pending repair can be pinned with `PIXELPILOT_WORKER_COMMIT` while `PIXELPILOT_REPO_REF=main` remains configured.
+
 ## Current deployment target
 
-The stable repository baseline is now `main` after PR #22 merged the validated Vast rental and download-cost work. The persistent controller is `/opt/pixelpilot` and its service is `pixelpilot.service`; verify these locally before changing anything.
+The stable repository baseline is `main`, including PR #23. Previously, PR #22 merged the validated Vast rental and download-cost work. The persistent controller is `/opt/pixelpilot` and its service is `pixelpilot.service`; verify these locally before changing anything.
 
 The owner deployed and validated the pre-merge build live and reported the bot working correctly. After the merge, existing controllers/workers remain on whatever ref is already configured until explicitly updated; future deployments should use `main` for both controller and worker.
 

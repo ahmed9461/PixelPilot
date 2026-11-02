@@ -36,6 +36,9 @@ def build_offer_query(
     # Vast's CLI/SDK query language expresses gpu_ram in GiB-like user units
     # (for example: gpu_ram>=48), even though raw offer payloads expose
     # gpu_ram in MB. Do not multiply the query threshold by 1000 here.
+    from math import isfinite
+    if not isfinite(max_price_usd_hour) or not 0 < max_price_usd_hour <= 0.60:
+        raise ValueError("Hourly rental cap must be > 0 and <= $0.60")
     min_ram_gb = int(min_gpu_ram_gb)
     terms = [
         "num_gpus=1",
@@ -108,6 +111,9 @@ def normalize_offer(raw: dict[str, Any]) -> GpuOffer:
         disk_space_gb=_num(raw, "disk_space", default=0.0) or None,
         verified=verified,
         machine_id=machine_id,
+        compute_cap=_num(raw, "compute_cap") or None,
+        total_flops=_num(raw, "total_flops") or None,
+        gpu_mem_bw=_num(raw, "gpu_mem_bw") or None,
         raw=raw,
     )
 
@@ -281,6 +287,7 @@ class VastSdkGateway:
         *,
         storage_gb: float = 5.0,
         no_default: bool = False,
+        order: str = "dph_total",
     ) -> list[GpuOffer]:
         """Run a fresh marketplace request and return the cheapest matches.
 
@@ -292,12 +299,12 @@ class VastSdkGateway:
         """
         client = self._get_client()
         display_limit = max(1, int(limit))
-        backend_limit = max(32, min(200, display_limit * 8))
+        backend_limit = max(32, min(200, display_limit))
         try:
             result = await asyncio.to_thread(
                 client.search_offers,
                 query=query,
-                order="dph_total",
+                order=order,
                 limit=backend_limit,
                 storage=float(storage_gb),
                 no_default=no_default,
@@ -312,7 +319,8 @@ class VastSdkGateway:
         rows = result if isinstance(result, list) else result.get("offers", []) if isinstance(result, dict) else []
         offers = [normalize_offer(row) for row in rows if isinstance(row, dict)]
         offers = [x for x in offers if x.offer_id > 0]
-        offers.sort(key=lambda x: (x.price_per_hour, -(x.dlperf or 0)))
+        if order == "dph_total":
+            offers.sort(key=lambda x: (x.price_per_hour, -(x.dlperf or 0)))
         return offers[:display_limit]
 
     async def lookup_offer(

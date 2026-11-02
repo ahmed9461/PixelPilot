@@ -8,25 +8,25 @@ Active model: `Qwen/Qwen-Image-2.1`.
 
 Supported flows: text-to-image, single-image editing and multi-reference editing with Telegram albums, up to 10 reference images. Output is PNG with seed and dimensions shown to the owner.
 
-Current stable baseline: `main`. PR #22 merged the validated Vast rental recovery and download-cost-aware work from `fix/vast-download-cost-awareness`. The owner deployed the pre-merge build and reported the live bot working correctly. Future work should branch from current `main`, and controller/worker refs must remain aligned when deploying.
+Current baseline: `main` includes merged PR #23 (multimodal chat/vision). The 2026-11-03 deployment repair is documented in [DEPLOYMENT_20261103.md](DEPLOYMENT_20261103.md), which supersedes older operational details below. PR #22 previously merged the validated Vast rental recovery and download-cost-aware work from `fix/vast-download-cost-awareness`. The owner deployed the pre-merge build and reported the live bot working correctly. Future work should branch from current `main`, and controller/worker refs must remain aligned when deploying.
 
 ## Non-negotiable behavior
 
 1. No assistant personality, emotion, tone, role or chat-style profile is part of image generation.
 2. Original mode sends the user's prompt unchanged.
 3. Official Qwen Prompt Enhancer is an explicit owner-controlled mode, never a hidden layer. Use only the configured official T2I/I2I models and their shipped `system_prompt.txt`.
-4. Do not maintain conversational context or chat history. Each image request is independent.
+4. Chat has bounded per-owner persistent text history and `/clear`; image generation requests remain independent from that chat history.
 5. User-facing controls are aspect ratio, resolution quality, inference steps and prompt mode.
 6. Support up to 10 user-supplied reference images.
 7. Preserve PNG output so alpha/transparency is not destroyed.
 8. Keep generated/reference image bytes ephemeral; do not persist them in SQLite.
 9. Keep Vast lifecycle owner-controlled; automatic deletion is opt-in.
 10. `VAST_API_KEY` stays on the controller.
-11. The hard rental ceiling remains `$0.50/hour`; it is not an all-in invoice ceiling.
+11. The hard rental ceiling remains `$0.60/hour`; it is not an all-in invoice ceiling.
 12. Every offer refresh queries the live marketplace.
 13. The running-time estimate is separate from transfer charges and stopped-instance storage. Never label it the total/final Vast invoice.
-14. The public runtime port is an authenticated PixelPilot image gateway.
-15. Load Qwen-Image directly with Diffusers. Do not restore vLLM, Whisper or chat-completions runtime.
+14. The runtime port is an authenticated PixelPilot multimodal gateway over per-instance verified TLS.
+15. Load Qwen-Image directly with Diffusers. Chat/vision uses Qwen3.5 through the authenticated gateway; vLLM and Whisper remain removed.
 16. Preserve the exact selected Offer ID, `cancel_unavail=true`, duplicate-rent guards and ambiguous-create reconciliation. Never substitute a similar offer automatically.
 
 ## Hardware policy
@@ -78,11 +78,11 @@ Telegram owner
 
 ## Persistence
 
-SQLite stores lifecycle state, latest offer snapshots and refresh metadata, running-time/cost-guard state, image UI settings and operational metadata events. Offer snapshots include exact Offer ID, `machine_id` and precise download/upload quotes, but are never a substitute for the live rent check. SQLite does not store generated/reference image bytes, chat history or prompt bodies.
+SQLite stores lifecycle state, latest offer snapshots and refresh metadata, running-time/cost-guard state, image UI settings and operational metadata events. Offer snapshots include exact Offer ID, `machine_id` and precise download/upload quotes, but are never a substitute for the live rent check. SQLite stores bounded chat text under an owner-specific key, but no generated/reference image bytes or image prompt bodies.
 
 ## Removed from active project
 
-Qwen3-VL, Qwen2.5-Omni, Whisper, vLLM, audio/video understanding, assistant personalities, emotion/tone/reasoning/language profiles, custom chat prompts, chat context/history and response streaming remain removed.
+Qwen3-VL, Qwen2.5-Omni, Whisper, vLLM, audio/video understanding, assistant personalities, emotion/tone/reasoning/language profiles, custom chat prompts and response streaming remain removed. Qwen3.5 chat and bounded text context were restored by PR #23.
 
 ## Official prompt enhancer
 
@@ -98,10 +98,10 @@ Qwen3-VL, Qwen2.5-Omni, Whisper, vLLM, audio/video understanding, assistant pers
 ## Vast offer discovery and transfer costs
 
 - Telegram displays at most the best 8 discovered candidates. Discovery scans a wider live pool, with dedicated 48 GB+ and 24 GB+ fallback queries, then deduplicates.
-- Rank known quotes by `hourly dph_total × comparison hours + inbound USD/GB × assumed download GB`. Defaults: `VAST_COST_COMPARISON_HOURS=1`, `VAST_ESTIMATED_DOWNLOAD_GB=70`. These are editable comparison assumptions, not measured usage or a final bill. The billed period includes setup time; actual usage can be longer.
+- Historical PR #22 ranking (superseded by the network/performance score in DEPLOYMENT_20261103.md): ranked known quotes by `hourly dph_total × comparison hours + inbound USD/GB × assumed download GB`. Defaults: `VAST_COST_COMPARISON_HOURS=1`, `VAST_ESTIMATED_DOWNLOAD_GB=70`. These are editable comparison assumptions, not measured usage or a final bill. The billed period includes setup time; actual usage can be longer.
 - `dph_total` already includes the requested disk. Do not add allocated storage twice. Upload, extra downloads, retries and stopped-instance storage are not part of this simple comparison.
 - Native `inet_down_cost` / `inet_up_cost` are preserved as precise USD/GB quotes. Display USD/TB using the explicit decimal convention `1 TB = 1000 GB`. Do not round before calculating.
-- Missing, malformed, negative or non-finite rates are unknown, never zero. Genuine zero is free. Known quotes rank before unknown quotes; 48 GB+ is a tie-breaker among equal known costs. Among unknown quotes, retain hardware/hourly ordering.
+- Missing, malformed, negative or non-finite rates are unknown, never zero. Genuine zero is free. Current ranking penalizes unknown/expensive transfers while weighting download, upload, compute, VRAM and reliability.
 - An owner-controlled “48 GB+ only” search remains available. Do not promise the globally cheapest server beyond the discovered candidate pool.
 - `VAST_MAX_DOWNLOAD_USD_PER_TB` is optional and unset by default. A configured ceiling is applied to marketplace discovery, local filtering and live pre-create validation; unknown rates then fail closed. Zero accepts free inbound quotes only. It is a rate ceiling, not a total-spend cap.
 - Offer cards show the actual Offer ID and Download $/TB. Details show both transfer directions and the assumed cold-start comparison before confirmation. A changed download or upload quote requires a refresh and new confirmation, as do changed hourly price/GPU/VRAM.

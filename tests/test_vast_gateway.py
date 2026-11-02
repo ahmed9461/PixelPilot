@@ -11,7 +11,7 @@ def test_build_query_contains_cost_ram_and_safety_filters():
     q = build_offer_query(
         48,
         0.98,
-        1.5,
+        0.60,
         disk_gb=100,
         verified_only=True,
         min_direct_ports=2,
@@ -22,7 +22,7 @@ def test_build_query_contains_cost_ram_and_safety_filters():
     assert "gpu_ram>=48" in q
     assert "gpu_ram>=48000" not in q
     assert "reliability>=0.9800" in q
-    assert "dph_total<=1.5000" in q
+    assert "dph_total<=0.6000" in q
     assert "num_gpus=1" in q
     assert "disk_space>=100" in q
     assert "verified=true" in q

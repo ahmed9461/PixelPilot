@@ -36,6 +36,9 @@ class GpuOffer:
     raw: dict[str, Any] | None = None
     download_usd_per_gb: float | None = None
     upload_usd_per_gb: float | None = None
+    compute_cap: float | None = None
+    total_flops: float | None = None
+    gpu_mem_bw: float | None = None
 
     def __post_init__(self) -> None:
         # Normalize live raw rates once and preserve them in public snapshots.
@@ -51,9 +54,10 @@ class GpuOffer:
         rel = "?" if self.reliability is None else f"{self.reliability * 100:.1f}%"
         down = "?" if self.download_usd_per_gb is None else f"${self.download_usd_per_gb * GB_PER_TB:.6g}"
         down_mbps = "?" if self.inet_down_mbps is None else f"{self.inet_down_mbps:.0f}"
+        up_mbps = "?" if self.inet_up_mbps is None else f"{self.inet_up_mbps:.0f}"
         return (
             f"{self.gpu_name} • {self.gpu_ram_gb:.0f}GB • "
-            + f"$ {self.price_per_hour:.3f}/h • ↓ {down}/TB • {down_mbps}Mbps • R {rel}"
+            + f"$ {self.price_per_hour:.3f}/h • ↓ {down}/TB • {down_mbps}/↑{up_mbps}Mbps • R {rel}"
         )
 
     def public_dict(self) -> dict[str, Any]:
