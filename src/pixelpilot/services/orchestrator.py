@@ -9,7 +9,7 @@ from typing import Any, Awaitable, Callable
 from pixelpilot.config import Settings
 from pixelpilot.db import Database
 from pixelpilot.domain import GeneratedImage, GpuOffer, InstancePhase, ReferenceImage
-from pixelpilot.pricing import GB_PER_TB, download_rate_allowed, offer_cost_rank
+from pixelpilot.pricing import GB_PER_TB, download_rate_allowed, offer_quality_rank
 from pixelpilot.services.billing import (
     begin_billing,
     billing_snapshot,
@@ -56,6 +56,7 @@ class Orchestrator:
         self.vast = vast
         self._inference_factory = inference_factory or self._default_inference_factory
         self._inference_lock = asyncio.Lock()
+        self._chat_lock = asyncio.Lock()
         self._offers_lock = asyncio.Lock()
         self._rent_lock = asyncio.Lock()
         self._control_lock = asyncio.Lock()
@@ -109,76 +110,87 @@ class Orchestrator:
             return await self._offers_locked(preferred_only=preferred_only)
 
     async def _offers_locked(self, *, preferred_only: bool) -> list[GpuOffer]:
-        preferred_query = self._offer_query_for(
-            max(self.settings.vast_min_gpu_ram_gb, self.settings.vast_preferred_gpu_ram_gb)
+        # Explore 80GB+, 48GB+ and 24GB+ pools, then rank actual performance,
+        # not simply GPU memory or the cheapest hourly ask.
+        floors = (
+            self.settings.vast_premium_gpu_ram_gb,
+            self.settings.vast_preferred_gpu_ram_gb,
+        ) if preferred_only else (
+            self.settings.vast_premium_gpu_ram_gb,
+            self.settings.vast_preferred_gpu_ram_gb,
+            self.settings.vast_min_gpu_ram_gb,
         )
-        preferred_rows = await self.vast.search_offers(
-            preferred_query,
-            self.settings.vast_search_pool_limit,
-            storage_gb=float(self.settings.vast_disk_gb),
+        floors = sorted(set(max(self.settings.vast_min_gpu_ram_gb, n) for n in floors), reverse=True)
+        queries = [self._offer_query_for(n) for n in floors]
+        results = await asyncio.gather(
+            *(
+                self.vast.search_offers(
+                    query,
+                    self.settings.vast_search_pool_limit,
+                    storage_gb=float(self.settings.vast_disk_gb),
+                )
+                for query in queries
+            ),
+            return_exceptions=True,
         )
-
-        fallback_query: str | None = None
-        fallback_rows: list[GpuOffer] = []
-        if (
-            not preferred_only
-            and self.settings.vast_min_gpu_ram_gb
-            < self.settings.vast_preferred_gpu_ram_gb
-        ):
-            fallback_query = self._offer_query_for(
-                self.settings.vast_min_gpu_ram_gb
-            )
-            fallback_rows = await self.vast.search_offers(
-                fallback_query,
-                self.settings.vast_search_pool_limit,
-                storage_gb=float(self.settings.vast_disk_gb),
-            )
+        failures = [item for item in results if isinstance(item, BaseException)]
+        if len(failures) == len(results):
+            raise OrchestratorError("تعذر البحث في Vast الآن") from failures[0]
 
         deduped: dict[int, GpuOffer] = {}
-        for row in (*preferred_rows, *fallback_rows):
-            deduped[row.offer_id] = row
+        for result in results:
+            if isinstance(result, BaseException):
+                continue
+            for offer in result:
+                deduped[offer.offer_id] = offer
 
         candidates = [
-            row
-            for row in deduped.values()
-            if 0 < row.price_per_hour <= self.settings.vast_max_price_usd_hour
-            and download_rate_allowed(row, self.settings.vast_max_download_usd_per_tb)
+            offer for offer in deduped.values()
+            if 0 < offer.price_per_hour <= self.settings.vast_max_price_usd_hour
+            and offer.gpu_ram_gb >= (
+                self.settings.vast_preferred_gpu_ram_gb if preferred_only
+                else self.settings.vast_min_gpu_ram_gb
+            )
+            and (offer.inet_down_mbps or 0) >= self.settings.vast_min_inet_down_mbps
+            and (offer.inet_up_mbps or 0) >= self.settings.vast_min_inet_up_mbps
+            and (offer.reliability or 0) >= self.settings.vast_min_reliability
+            and (not self.settings.vast_verified_only or offer.verified is True)
+            and download_rate_allowed(offer, self.settings.vast_max_download_usd_per_tb)
         ]
         candidates.sort(
-            key=lambda row: offer_cost_rank(
-                row,
+            key=lambda offer: offer_quality_rank(
+                offer,
+                hourly_cap=self.settings.vast_max_price_usd_hour,
                 download_gb=self.settings.vast_estimated_download_gb,
                 billed_hours=self.settings.vast_cost_comparison_hours,
-                preferred_vram_gb=self.settings.vast_preferred_gpu_ram_gb,
+                preferred_down_mbps=self.settings.vast_preferred_inet_down_mbps,
+                preferred_up_mbps=self.settings.vast_preferred_inet_up_mbps,
             )
         )
-        rows = candidates[: self.settings.vast_default_limit]
-        mode = "preferred" if preferred_only else "all"
-
-        await self.db.set_many(
-            {
-                "offers.last": [row.public_dict() for row in rows],
-                "offers.last_refreshed_at": datetime.now(UTC).isoformat(),
-                "offers.search_mode": mode,
-                "offers.candidate_count": len(candidates),
-                "offers.preferred_candidate_count": sum(
-                    row.gpu_ram_gb >= self.settings.vast_preferred_gpu_ram_gb
-                    for row in candidates
-                ),
-            }
-        )
-        await self.db.event(
-            "offers.search",
-            {
-                "mode": mode,
-                "preferred_query": preferred_query,
-                "fallback_query": fallback_query,
-                "candidate_count": len(candidates),
-                "display_count": len(rows),
-                "estimated_download_gb": self.settings.vast_estimated_download_gb,
-                "comparison_hours": self.settings.vast_cost_comparison_hours,
-            },
-        )
+        rows = candidates[:self.settings.vast_default_limit]
+        await self.db.set_many({
+            "offers.last": [offer.public_dict() for offer in rows],
+            "offers.last_refreshed_at": datetime.now(UTC).isoformat(),
+            "offers.search_mode": "preferred" if preferred_only else "all",
+            "offers.candidate_count": len(candidates),
+            "offers.preferred_candidate_count": sum(
+                offer.gpu_ram_gb >= self.settings.vast_preferred_gpu_ram_gb
+                for offer in candidates
+            ),
+            "offers.premium_candidate_count": sum(
+                offer.gpu_ram_gb >= self.settings.vast_premium_gpu_ram_gb
+                for offer in candidates
+            ),
+        })
+        await self.db.event("offers.search", {
+            "mode": "preferred" if preferred_only else "all",
+            "queries": queries,
+            "query_failures": len(failures),
+            "candidate_count": len(candidates),
+            "display_count": len(rows),
+            "estimated_download_gb": self.settings.vast_estimated_download_gb,
+            "comparison_hours": self.settings.vast_cost_comparison_hours,
+        })
         return rows
 
     async def cached_offer(self, offer_id: int) -> GpuOffer | None:
@@ -199,6 +211,7 @@ class Orchestrator:
             datacenter_only=self.settings.vast_datacenter_only,
             min_direct_ports=self.settings.vast_min_direct_ports,
             min_inet_down_mbps=self.settings.vast_min_inet_down_mbps,
+            min_inet_up_mbps=self.settings.vast_min_inet_up_mbps,
             min_cpu_ram_gb=(
                 self.settings.vast_min_cpu_ram_gb
                 if min_vram_gb < self.settings.image_full_gpu_min_vram_gb
@@ -226,6 +239,10 @@ class Orchestrator:
             or abs(old.price_per_hour - new.price_per_hour) > 1e-9
             or old.download_usd_per_gb != new.download_usd_per_gb
             or old.upload_usd_per_gb != new.upload_usd_per_gb
+            or old.inet_down_mbps != new.inet_down_mbps
+            or old.inet_up_mbps != new.inet_up_mbps
+            or old.dlperf != new.dlperf
+            or old.reliability != new.reliability
         )
 
     async def rent(self, offer_id: int) -> dict[str, Any]:
@@ -311,10 +328,11 @@ class Orchestrator:
                          or self.settings.image_memory_mode == "offload")
         cpu_ram_mb = raw.get("cpu_ram")
         if (
-            (self.settings.vast_verified_only and live_offer.verified is False)
-            or (live_offer.reliability is not None and live_offer.reliability < self.settings.vast_min_reliability)
+            (self.settings.vast_verified_only and live_offer.verified is not True)
+            or (live_offer.reliability is None or live_offer.reliability < self.settings.vast_min_reliability)
             or (live_offer.disk_space_gb is not None and live_offer.disk_space_gb < self.settings.vast_disk_gb)
-            or (live_offer.inet_down_mbps is not None and live_offer.inet_down_mbps < self.settings.vast_min_inet_down_mbps)
+            or (live_offer.inet_down_mbps is None or live_offer.inet_down_mbps < self.settings.vast_min_inet_down_mbps)
+            or (live_offer.inet_up_mbps is None or live_offer.inet_up_mbps < self.settings.vast_min_inet_up_mbps)
             or (raw.get("num_gpus") is not None and int(raw["num_gpus"]) != 1)
             or (raw.get("direct_port_count") is not None and int(raw["direct_port_count"]) < self.settings.vast_min_direct_ports)
             or (self.settings.vast_datacenter_only and raw.get("datacenter") is False)
@@ -603,6 +621,7 @@ class Orchestrator:
             "phase": phase,
             "offer": offer,
             "model_id": self.settings.model_id,
+            "chat_model_id": self.settings.chat_model_id,
             "pending_label": await self.db.get("instance.pending_label"),
         }
         if not instance_id:
@@ -818,6 +837,8 @@ class Orchestrator:
             "PIXELPILOT_INFERENCE_TOKEN": inference_token,
             "INFERENCE_PORT": str(self.settings.inference_port),
             "MODEL_ID": self.settings.model_id,
+            "CHAT_MODEL_ID": self.settings.chat_model_id,
+            "CHAT_MAX_IMAGES": str(self.settings.chat_max_images),
             "MODEL_DTYPE": self.settings.model_dtype,
             "IMAGE_MEMORY_MODE": self.settings.image_memory_mode,
             "IMAGE_FULL_GPU_MIN_VRAM_GB": str(self.settings.image_full_gpu_min_vram_gb),
