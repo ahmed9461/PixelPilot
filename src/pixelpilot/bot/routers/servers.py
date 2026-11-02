@@ -457,7 +457,7 @@ async def rent(callback: CallbackQuery) -> None:
         )
         return
 
-    offer_id, preferred_only = _selected_offer(callback.data)
+    offer_id, preferred_only, premium_only = _selected_offer(callback.data)
     # Claim the lifecycle slot synchronously, before any Telegram/SQLite await.
     _track_lifecycle(
         _rent_from_callback(callback, offer_id, preferred_only, premium_only), name="pixelpilot-rent-and-prepare"
