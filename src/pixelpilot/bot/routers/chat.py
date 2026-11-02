@@ -232,19 +232,19 @@ async def chat_help(callback: CallbackQuery) -> None:
     )
 
 
-@router.message(Command("clear"))
+@router.message(F.text, Command("clear"))
 async def clear_chat(message: Message) -> None:
     await orch().clear_chat_history()
     await message.answer("🧹 تم مسح ذاكرة الدردشة النصية.", reply_markup=main_menu())
 
 
-@router.message(Command("image"))
+@router.message(F.text, Command("image"))
 async def image_command(message: Message) -> None:
     prompt = (message.text or "").partition(" ")[2].strip()
     await _create_image(message, prompt)
 
 
-@router.message(Command("edit"))
+@router.message(F.text, Command("edit"))
 async def edit_command(message: Message) -> None:
     prompt = (message.text or "").partition(" ")[2].strip()
     replied = message.reply_to_message
