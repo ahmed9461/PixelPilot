@@ -740,6 +740,67 @@ class Orchestrator:
                 )
                 await self._touch_activity()
 
+    async def chat(
+        self,
+        prompt: str,
+        *,
+        reference_images: tuple[ReferenceImage, ...] = (),
+    ) -> str:
+        if not prompt.strip():
+            raise OrchestratorError("اكتب رسالة أو سؤالًا عن الصورة")
+        if len(reference_images) > self.settings.chat_max_images:
+            raise OrchestratorError(
+                f"الحد الأقصى لفهم الصور هو {self.settings.chat_max_images}"
+            )
+        async with self._chat_lock:
+            phase = await self.db.get("instance.phase", InstancePhase.NONE.value)
+            instance_id = await self.db.get("instance.id")
+            if phase != InstancePhase.READY.value or not instance_id:
+                raise OrchestratorError("شغّل السيرفر قبل بدء الدردشة")
+            stored = await self.db.get("chat.history", [])
+            turns = [
+                {"role": row["role"], "content": row["content"][:4000]}
+                for row in stored if isinstance(row, dict)
+                and row.get("role") in {"user", "assistant"}
+                and isinstance(row.get("content"), str)
+            ] if isinstance(stored, list) else []
+            history = turns[-self.settings.chat_context_turns * 2:]
+            await self.db.set("inference.active", True)
+            await self._touch_activity()
+            try:
+                inference = await self._current_inference()
+                answer = await inference.chat(
+                    prompt,
+                    history=history,
+                    images=reference_images,
+                    max_new_tokens=self.settings.chat_max_new_tokens,
+                )
+                # Images remain ephemeral: only texts and generated explanations
+                # are persisted to SQLite on the always-on controller.
+                user_text = prompt + (" [تم إرفاق صورة]" if reference_images else "")
+                await self.db.set(
+                    "chat.history",
+                    (history + [
+                        {"role": "user", "content": user_text[:4000]},
+                        {"role": "assistant", "content": answer[:4000]},
+                    ])[-self.settings.chat_context_turns * 2:],
+                )
+                await self.db.event("chat.completed", {
+                    "instance_id": int(instance_id),
+                    "images": len(reference_images),
+                    "prompt_chars": len(prompt),
+                    "response_chars": len(answer),
+                })
+                return answer
+            finally:
+                await self.db.set("inference.active", False)
+                await self._touch_activity()
+
+    async def clear_chat_history(self) -> None:
+        async with self._chat_lock:
+            await self.db.set("chat.history", [])
+            await self.db.event("chat.cleared", {})
+
     async def recover_current(self) -> None:
         await self.db.set_many({"inference.active": False, "generation.active": False})
 
