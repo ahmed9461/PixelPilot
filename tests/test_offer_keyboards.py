@@ -20,6 +20,7 @@ def test_normal_offer_keyboard_can_switch_to_48gb_only():
     assert "servers:offer:1:a" in callbacks
     assert "servers:search" in callbacks
     assert "servers:search48" in callbacks
+    assert "servers:search80" in callbacks
 
 
 def test_identical_offer_specs_show_distinct_ids():
@@ -51,3 +52,13 @@ def test_offer_details_back_button_preserves_search_mode():
     assert normal[-1] == "servers:search"
     assert preferred[-1] == "servers:search48"
     assert "servers:rent:1:p" in preferred
+
+
+def test_premium_offer_mode_roundtrips_to_80gb_search():
+    offers = offers_keyboard([GpuOffer(3, "H100", 80, 0.59, 0.99, 70)], premium_only=True)
+    callbacks = _callbacks(offers)
+    assert "servers:offer:3:h" in callbacks
+    assert "servers:search80" in callbacks
+    confirm = _callbacks(offer_confirm_keyboard(3, premium_only=True))
+    assert "servers:rent:3:h" in confirm
+    assert confirm[-1] == "servers:search80"
