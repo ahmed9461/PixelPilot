@@ -10,7 +10,7 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
-from pixelpilot.bot.callbacks import safe_callback_answer
+from pixelpilot.bot.callbacks import safe_callback_answer, safe_edit_text
 from pixelpilot.bot.keyboards import main_menu
 from pixelpilot.domain import InstancePhase, ReferenceImage
 from pixelpilot.services.image_settings import get_state
@@ -24,6 +24,17 @@ _album_messages: dict[str, list[Message]] = {}
 _album_tasks: dict[str, asyncio.Task[None]] = {}
 
 MODES = {"chat", "generate", "edit", "vision"}
+
+def _error_text(exc: Exception) -> str:
+    raw = str(exc).lower()
+    if "out of memory" in raw: return "نفدت ذاكرة GPU. استخدم الجودة القياسية أو صورًا مرجعية أقل أو GPU أكبر."
+    if "context" in raw or "too long" in raw: return "تجاوز الطلب حد السياق الآمن. قلّل النص أو عدد الصور."
+    if "12000" in raw: return "حد الرسالة 12000 حرف؛ قسّمها إلى رسالتين."
+    if "tls" in raw or "مشفر" in raw: return "تعذر التحقق من الاتصال المشفر بخادم GPU."
+    if "failed to load" in raw or "model startup" in raw: return "فشل تحميل النموذج؛ افحص مساحة القرص والتنزيل واعتمادات العامل."
+    if "timeout" in raw: return "انتهت مهلة المعالجة؛ قد يستمر العمل على GPU. افحص الحالة قبل إعادة الطلب."
+    return "فشل الاتصال أو الاستدلال؛ افحص حالة السيرفر وسجلات العامل ثم أعد المحاولة."
+
 
 
 def configure(orchestrator: Orchestrator) -> None:
@@ -50,6 +61,26 @@ async def _ensure_ready(message: Message) -> bool:
         reply_markup=main_menu(),
     )
     return False
+
+
+async def _show_progress(status: Message) -> None:
+    try:
+        while True:
+            await asyncio.sleep(5)
+            try:
+                info = await orch().inference_progress()
+                p = info.get("progress", {})
+                text = f"⏳ النموذج: {p.get('model') or 'Qwen'}\nالمرحلة: {p.get('stage', 'processing')}"
+                if p.get('percent') is not None: text += f" — {p['percent']}%"
+                if p.get('downloaded_bytes') is not None: text += f"\nالكاش: {p['downloaded_bytes']/1e9:.2f} GB"
+                if p.get('total_bytes'): text += f" / {p['total_bytes']/1e9:.2f} GB"
+                if p.get('mbps') is not None: text += f"\nسرعة نمو الكاش المقاسة: {p['mbps']} Mbps"
+                if p.get('step') is not None: text += f"\nخطوة التوليد: {p['step']}/{p.get('steps', '?')}"
+                await safe_edit_text(status, text, parse_mode=None)
+            except Exception:
+                pass
+    except asyncio.CancelledError:
+        return
 
 
 def _size_ok(size: int | None) -> None:
@@ -92,6 +123,7 @@ async def _create_image(
 
     settings = await get_state(orch().db)
     status = await message.answer("🎨 جاري تعديل الصورة..." if references else "🎨 جاري إنشاء الصورة...")
+    progress_task = asyncio.create_task(_show_progress(status))
     try:
         result = await orch().generate_image(
             prompt,
@@ -101,12 +133,17 @@ async def _create_image(
             reference_images=references,
             enhance_prompt=settings.enhance_prompt,
         )
-    except Exception:
+    except Exception as exc:
+        progress_task.cancel()
+        await asyncio.gather(progress_task, return_exceptions=True)
         logger.exception("Image generation/editing failed")
-        await status.edit_text(
-            "❌ تعذر تنفيذ طلب الصورة. تأكد من جاهزية السيرفر والذاكرة ثم جرّب مرة أخرى."
+        await safe_edit_text(status,
+            "❌ تعذر تنفيذ طلب الصورة. " + _error_text(exc)
         )
         return
+    finally:
+        progress_task.cancel()
+        await asyncio.gather(progress_task, return_exceptions=True)
     try:
         await status.delete()
     except Exception:
@@ -132,10 +169,10 @@ async def _reply(message: Message, prompt: str, images: tuple[ReferenceImage, ..
     status = await message.answer("👁️ جاري فهم الصورة..." if images else "🧠 جاري التفكير...")
     try:
         answer = await orch().chat(prompt, reference_images=images)
-    except Exception:
+    except Exception as exc:
         logger.exception("Multimodal chat failed")
-        await status.edit_text(
-            "❌ تعذر الرد الآن. تأكد أن محرك الدردشة جاهز، ثم أعد المحاولة."
+        await safe_edit_text(status,
+            "❌ تعذر الرد الآن. " + _error_text(exc)
         )
         return
     try:
@@ -144,15 +181,15 @@ async def _reply(message: Message, prompt: str, images: tuple[ReferenceImage, ..
         pass
     # Telegram text is limited to 4096 characters; escape untrusted model output.
     for start in range(0, len(answer), 3500):
-        await message.answer(escape(answer[start:start + 3500]))
+        await message.answer(answer[start:start + 3500], parse_mode=None)
 
 
 def _edit_caption(caption: str | None) -> str | None:
     raw = (caption or "").strip()
     if raw == "/edit":
         return ""
-    if raw.startswith("/edit "):
-        return raw[6:].strip()
+    if raw.split(" ", 1)[0].split("@", 1)[0] == "/edit":
+        return raw.partition(" ")[2].strip()
     return None
 
 
@@ -189,7 +226,7 @@ async def _flush_album(group_id: str) -> None:
             await anchor.answer(f"هذا الوضع يدعم حتى {limit} صور في المرة الواحدة.")
             return
         try:
-            references = tuple([await _photo_ref(m) for m in messages])
+            references = tuple([await (_photo_ref(m) if m.photo else _file_ref(m)) for m in messages])
         except Exception:
             logger.exception("Telegram album download failed")
             await anchor.answer("❌ تعذر تحميل الصور المرجعية.")
@@ -265,7 +302,7 @@ async def edit_command(message: Message) -> None:
 @router.message(F.photo)
 async def receive_photo(message: Message) -> None:
     if message.media_group_id:
-        group_id = str(message.media_group_id)
+        group_id = f"{message.chat.id}:{message.media_group_id}"
         _album_messages.setdefault(group_id, []).append(message)
         if group_id not in _album_tasks:
             _album_tasks[group_id] = asyncio.create_task(
@@ -284,6 +321,12 @@ async def receive_photo(message: Message) -> None:
 @router.message(F.document)
 async def receive_document(message: Message) -> None:
     if not (message.document.mime_type or "").startswith("image/"):
+        return
+    if message.media_group_id:
+        group_id = f"{message.chat.id}:{message.media_group_id}"
+        _album_messages.setdefault(group_id, []).append(message)
+        if group_id not in _album_tasks:
+            _album_tasks[group_id] = asyncio.create_task(_flush_album(group_id), name=f"pixelpilot-album-{group_id}")
         return
     try:
         reference = await _file_ref(message)

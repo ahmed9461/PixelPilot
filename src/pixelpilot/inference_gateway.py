@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from pixelpilot.services.prompt_enhancer import PromptEnhancement, enhance_i2i, enhance_t2i
 from pixelpilot.services.vision_runtime import load_chat_model, run_chat
+from pixelpilot.services.model_cache import prepare_model, phase, status as cache_status
 
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,16 @@ class RuntimeState:
 
 state = RuntimeState()
 generation_lock = asyncio.Lock()
+
+async def _blocking(function, *args, **kwargs):
+    # Cancelling an HTTP coroutine cannot stop a CUDA/download thread. Keep
+    # the model-switch lock held until that thread actually finishes.
+    task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    try: return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await asyncio.gather(task, return_exceptions=True)
+        raise
+
 enhancer_ready: set[str] = set()
 enhancer_downloads: dict[str, asyncio.Task[None]] = {}
 
@@ -76,7 +87,7 @@ async def _download_enhancer(model_id: str) -> None:
     # Downloading weights does not load the model onto the GPU.
     try:
         from huggingface_hub import snapshot_download
-        await asyncio.to_thread(snapshot_download, model_id)
+        await _blocking(snapshot_download, model_id)
     except Exception:
         logger.exception("Could not download requested prompt enhancer %s", model_id)
     else:
@@ -147,7 +158,7 @@ def _load_pipeline() -> None:
         MEMORY_MODE,
     )
     pipe = QwenImage21Pipeline.from_pretrained(
-        MODEL_ID,
+        prepare_model(MODEL_ID),
         torch_dtype=_dtype(torch),
     )
     pipe.set_progress_bar_config(disable=True)
@@ -187,6 +198,7 @@ def _load_pipeline() -> None:
     state.active_model = "image"
     state.device = "cuda"
     state.memory_mode = active_memory_mode
+    phase("ready", MODEL_ID, error=None)
     logger.info(
         "Qwen-Image runtime ready: mode=%s gpu_vram=%.1fGiB",
         active_memory_mode,
@@ -214,6 +226,7 @@ def _switch_to_chat() -> None:
     state.active_model = "chat"
     state.device = "cuda"
     state.gpu_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+    phase("ready", CHAT_MODEL_ID, error=None)
 
 
 def _switch_to_image() -> None:
@@ -232,11 +245,18 @@ async def lifespan(_app: FastAPI):
         raise RuntimeError("PIXELPILOT_INFERENCE_TOKEN is required")
     # Chat is immediately available. The (much larger) image pipeline only
     # loads after the first image request, avoiding duplicate model residency.
-    await asyncio.to_thread(_switch_to_chat)
+    async def warmup():
+        async with generation_lock:
+            try: await _blocking(_switch_to_chat)
+            except Exception as exc:
+                state.active_model = "failed-chat"
+                phase("failed", CHAT_MODEL_ID, error=type(exc).__name__ + ": model startup failed; cache retained")
+                logger.exception("Chat startup failed")
+    startup = asyncio.create_task(warmup(), name="pixelpilot-chat-warmup")
     try:
         yield
     finally:
-        tasks = tuple(enhancer_downloads.values())
+        tasks = (startup, *enhancer_downloads.values())
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -282,7 +302,13 @@ def _decode_uploaded_image(data: bytes) -> Any:
         raise HTTPException(status_code=413, detail="Reference image is too large")
     try:
         image = Image.open(io.BytesIO(data))
+        if image.width * image.height > 25_000_000:
+            raise HTTPException(status_code=413, detail="Image pixel dimensions too large")
+        from PIL import ImageOps
+        image = ImageOps.exif_transpose(image)
         image.load()
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Invalid reference image") from exc
 
@@ -313,6 +339,13 @@ def _restore_diffusion_after_enhancer() -> None:
         raise RuntimeError("Image model is not loaded")
     if state.memory_mode == "gpu":
         pipe.to("cuda")
+    else:
+        # Reinstall the entire offload sequence after the enhancer. Stale
+        # Accelerate hooks can otherwise mix CPU and CUDA on the next request.
+        remove = getattr(pipe, "remove_all_hooks", None)
+        if callable(remove): remove()
+        pipe.to("cpu")
+        pipe.enable_model_cpu_offload()
 
 
 def _enhance_prompt(prompt: str, reference_images: list[Any]) -> PromptEnhancement:
@@ -367,11 +400,17 @@ def _run_pipeline(
         if negative_prompt is not None:
             kwargs["negative_prompt"] = negative_prompt
 
+    def on_step(_pipe, index, timestep, callback_kwargs):
+        phase("generating", MODEL_ID, step=index+1, steps=steps)
+        return callback_kwargs
+    kwargs["callback_on_step_end"] = on_step
+    phase("generating", MODEL_ID, step=0, steps=steps)
     try:
         output = pipe(**kwargs)
         images = getattr(output, "images", None)
         if not images:
             raise RuntimeError("Pipeline returned no image")
+        phase("ready", MODEL_ID, step=steps, steps=steps)
         return images[0]
     finally:
         if state.torch is not None:
@@ -413,7 +452,7 @@ async def _generate_response(
 
     async with generation_lock:
         try:
-            await asyncio.to_thread(_switch_to_image)
+            await _blocking(_switch_to_image)
         except Exception as exc:
             logger.exception("Image model could not load")
             raise HTTPException(status_code=503, detail="Image model failed to load: " + str(exc)[:300]) from exc
@@ -423,7 +462,7 @@ async def _generate_response(
                 if needed_model not in enhancer_ready:
                     _ensure_enhancer_download(needed_model)
                     raise RuntimeError("Requested Qwen enhancer is downloading; this image uses Original")
-                enhanced = await asyncio.to_thread(
+                enhanced = await _blocking(
                     _enhance_prompt,
                     prompt,
                     reference_images,
@@ -443,7 +482,7 @@ async def _generate_response(
                 enhancer_fallback = True
 
         try:
-            image = await asyncio.to_thread(
+            image = await _blocking(
                 _run_pipeline,
                 prompt=effective_prompt,
                 width=width,
@@ -458,6 +497,10 @@ async def _generate_response(
             raise
         except Exception as exc:
             logger.exception("Image generation failed")
+            state.pipe = None
+            state.active_model = "failed-image"
+            _release_gpu()
+            phase("failed", MODEL_ID, error="Image inference failed; retry reloads the cached model")
             detail = str(exc)
             if "out of memory" in detail.lower():
                 detail = (
@@ -484,10 +527,10 @@ async def _generate_response(
 @app.get("/health")
 async def health(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     _check_auth(authorization)
-    if state.pipe is None and state.chat_model is None:
-        raise HTTPException(status_code=503, detail="Multimodal model is loading")
     return {
-        "status": "ok",
+        "status": "ok" if state.pipe is not None or state.chat_model is not None else "loading",
+        "progress": cache_status(),
+        "capabilities": {"chat": state.chat_model is not None, "vision": state.chat_model is not None, "image": state.pipe is not None},
         "model": CHAT_MODEL_ID if state.active_model == "chat" else MODEL_ID,
         "active_model": state.active_model,
         "device": state.device,
@@ -513,10 +556,11 @@ async def models(authorization: str | None = Header(default=None)) -> dict[str, 
     _check_auth(authorization)
     if state.pipe is None and state.chat_model is None:
         raise HTTPException(status_code=503, detail="Multimodal model is loading")
-    return {"object": "list", "data": [
-        {"id": CHAT_MODEL_ID, "object": "model"},
-        {"id": MODEL_ID, "object": "model"},
-    ]}
+    loaded = []
+    if state.chat_model is not None: loaded.append(CHAT_MODEL_ID)
+    if state.pipe is not None: loaded.append(MODEL_ID)
+    return {"object": "list", "data": [{"id": name, "object": "model"} for name in loaded]}
+
 
 
 @app.post("/v1/images/generations")
@@ -607,8 +651,8 @@ async def chat_completions(
 
     async with generation_lock:
         try:
-            await asyncio.to_thread(_switch_to_chat)
-            reply = await asyncio.to_thread(
+            await _blocking(_switch_to_chat)
+            reply = await _blocking(
                 run_chat,
                 state.chat_model,
                 state.chat_processor,
@@ -619,6 +663,11 @@ async def chat_completions(
             )
         except Exception as exc:
             logger.exception("Multimodal chat request failed")
+            state.chat_model = None
+            state.chat_processor = None
+            state.active_model = "failed-chat"
+            _release_gpu()
+            phase("failed", CHAT_MODEL_ID, error="Chat inference failed; retry reloads the cached model")
             raise HTTPException(status_code=500, detail="Chat inference failed: " + str(exc)[:250]) from exc
 
     return {

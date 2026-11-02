@@ -11,7 +11,9 @@ from aiogram.types import CallbackQuery, Message
 from pixelpilot.bot.callbacks import safe_callback_answer, safe_edit_text
 from pixelpilot.bot.keyboards import destroy_confirm_keyboard, main_menu, offer_confirm_keyboard, offers_keyboard
 from pixelpilot.preflight import run_external_preflight, run_local_preflight
-from pixelpilot.pricing import offer_cost_lines
+from pixelpilot.pricing import offer_cost_lines, offer_quality_rank
+from pixelpilot.domain import GpuOffer
+from pixelpilot.services.offer_policy import network_tier, NETWORK_LABELS, eligible, quote_fingerprint
 from pixelpilot.services.orchestrator import (
     OfferChangedError,
     OfferUnavailableError,
@@ -43,7 +45,11 @@ def _lifecycle_busy() -> bool:
 def _selected_offer(data: str) -> tuple[int, bool, bool]:
     parts = data.split(":")
     suffix = parts[3] if len(parts) > 3 else "a"
-    return int(parts[2]), suffix == "p", suffix == "h"
+    try:
+        offer_id = int(parts[2])
+    except (IndexError, ValueError):
+        offer_id = 0
+    return offer_id, suffix == "p", suffix == "h"
 
 
 def _track_lifecycle(coro: Any, *, name: str) -> None:
@@ -88,7 +94,7 @@ async def _prepare_manual_control(callback: CallbackQuery) -> bool:
         or "none"
     )
     if not instance_id and (_lifecycle_busy() or phase == "renting" or await orch().db.get("instance.pending_label")):
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message,
             "⏳ <b>طلب الاستئجار لم يُحسم بعد</b>\n\n"
             "لم يصل رقم الـInstance المؤكد، لذلك لن ألغي محاولة قد تترك "
             "سيرفرًا مدفوعًا بدون تتبع. افحص الحالة وانتظر ظهور رقمه ثم استخدم "
@@ -194,14 +200,14 @@ async def preflight(callback: CallbackQuery) -> None:
             for item in checks
             if not item.ok
         ]
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message,
             "❌ <b>يوجد خلل في الجاهزية</b>\n\n"
             + "\n".join(failed),
             reply_markup=main_menu(),
         )
         return
 
-    await callback.message.edit_text(
+    await safe_edit_text(callback.message,
         "✅ <b>فحص الجاهزية ناجح</b>\n\n"
         "الإعدادات ومصدر المشروع والوصول إلى Qwen سليمة. "
         "البحث عن عروض Vast أصبح منفصلًا حتى يبقى هذا الفحص سريعًا.",
@@ -232,7 +238,7 @@ async def _search_offers(
         offers = await orch().offers(preferred_only=preferred_only, premium_only=premium_only)
     except Exception:
         logger.exception("Server offer search failed")
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message,
             "❌ تعذر البحث عن السيرفرات الآن. جرّب مرة أخرى.",
             reply_markup=main_menu(),
         )
@@ -255,7 +261,13 @@ async def _search_offers(
                 if preferred_only else "لا توجد عروض مناسبة ضمن الميزانية وجودة الشبكة المحددة."
             )
         )
-        await callback.message.edit_text(
+        fallback = await orch().db.get("offers.fallback", [])
+        if fallback:
+            scope += "\n\n⚠️ عروض احتياطية أقل من الحد الافتراضي للشبكة — للعرض فقط، دون زر استئجار:\n"
+            for row in fallback:
+                x = GpuOffer(**row)
+                scope += f"\n{escape(x.gpu_name)} {x.gpu_ram_gb:.0f}GB | ${x.price_per_hour:.3f}/h | ↓{x.inet_down_mbps or 0:.0f}/↑{x.inet_up_mbps or 0:.0f} Mbps | #{x.offer_id}"
+        await safe_edit_text(callback.message,
             f"🔄 <b>تحديث السوق #{refresh_no}</b>\n\n{scope}",
             reply_markup=offers_keyboard([], preferred_only=preferred_only, premium_only=premium_only),
         )
@@ -287,12 +299,13 @@ async def _search_offers(
     )
     if settings.vast_max_download_usd_per_tb is not None:
         comparison += f"\nسقف Download: <b>${settings.vast_max_download_usd_per_tb:g}/TB</b>."
-    await callback.message.edit_text(
+    await safe_edit_text(callback.message,
         f"{title}\n{note}\n"
         f"{discovery}\n"
         f"المعروض لك الآن: <b>{len(offers)}</b>\n\n"
         f"{comparison}\n\n"
-        "اختر عرضًا لمراجعة السعر ورسوم البيانات والمواصفات:",
+        + "\n".join(f"• {escape(x.gpu_name)} {x.gpu_ram_gb:.0f}GB | ↓{x.inet_down_mbps or 0:.0f}/↑{x.inet_up_mbps or 0:.0f} Mbps | {NETWORK_LABELS[network_tier(x)]} | DLPerf {x.dlperf or 0:.1f}" for x in offers)
+        + "\n\nاختر عرضًا لمراجعة السعر ورسوم البيانات والمواصفات:",
         reply_markup=offers_keyboard(offers, preferred_only=preferred_only, premium_only=premium_only),
     )
 
@@ -317,8 +330,8 @@ async def offer_details(callback: CallbackQuery) -> None:
     offer_id, preferred_only, premium_only = _selected_offer(callback.data)
     offer = await orch().cached_offer(offer_id)
     await safe_callback_answer(callback)
-    if offer is None:
-        await callback.message.edit_text(
+    if offer is None or not eligible(offer, orch().settings):
+        await safe_edit_text(callback.message,
             "العرض لم يعد موجودًا في آخر نتائج البحث.",
             reply_markup=main_menu(),
         )
@@ -338,10 +351,19 @@ async def offer_details(callback: CallbackQuery) -> None:
         else "💡 يعمل بوضع توفير الذاكرة، ويفضّل معه القياسي"
     )
     lines.append(f"ملف التشغيل: <b>{profile}</b>")
+    lines.append(f"جودة الشبكة: <b>{NETWORK_LABELS[network_tier(offer)]}</b> (معلنة)")
+    score = -offer_quality_rank(offer, hourly_cap=0.60, download_gb=orch().settings.vast_estimated_download_gb, billed_hours=orch().settings.vast_cost_comparison_hours, preferred_down_mbps=2000, preferred_up_mbps=1000)[0]
+    lines.append(f"تقييم المقارنة التقريبي: <b>{score:.1f}</b> نقطة (ليس اختبار أداء فعليًا)")
     if offer.inet_down_mbps:
         lines.append(f"⬇️ سرعة التنزيل المعلنة: <b>{offer.inet_down_mbps:.0f} Mbps</b>")
     if offer.inet_up_mbps:
         lines.append(f"⬆️ سرعة الرفع المعلنة: <b>{offer.inet_up_mbps:.0f} Mbps</b>")
+    if offer.compute_cap is not None:
+        lines.append(f"CUDA compute capability: <b>{offer.compute_cap/100:g}</b>")
+    if offer.total_flops is not None:
+        lines.append(f"TFLOPs المعلنة: <b>{offer.total_flops:.1f}</b>")
+    if offer.gpu_mem_bw is not None:
+        lines.append(f"عرض نطاق ذاكرة GPU المعلن: <b>{offer.gpu_mem_bw:.1f} GB/s</b>")
     if offer.dlperf is not None:
         lines.append(f"⚡ مؤشر DLPerf المعلن: <b>{offer.dlperf:.1f}</b>")
     if offer.location:
@@ -356,12 +378,13 @@ async def offer_details(callback: CallbackQuery) -> None:
         "",
         "⚠️ تُحسب مدة التشغيل من الاستئجار؛ رسوم البيانات مستقلة، وقد يستمر التخزين بعد الإيقاف حتى الحذف.",
     ])
-    await callback.message.edit_text(
+    await safe_edit_text(callback.message,
         "\n".join(lines),
         reply_markup=offer_confirm_keyboard(
             offer_id,
             preferred_only=preferred_only,
             premium_only=premium_only,
+            quote=quote_fingerprint(offer),
         ),
     )
 
@@ -372,29 +395,31 @@ async def _rent_and_prepare_background(
     *,
     preferred_only: bool,
     premium_only: bool = False,
+    expected_quote: str | None = None,
 ) -> None:
     async def progress(_text: str) -> None:
         try:
             state = await orch().current_state(probe_inference=False)
             billing = state.get("billing") if isinstance(state, dict) else None
             lines = [
-                "⏳ <b>جاري تجهيز محرك الدردشة والصور...</b>",
+                "⏳ <b>جاري تجهيز محرك الدردشة...</b>",
+                escape(_text),
                 "",
                 "التجهيز يعمل في الخلفية؛ تستطيع استخدام أزرار الحالة والحذف أثناء ذلك.",
             ]
             lines.extend(_billing_lines(billing))
-            await status_message.edit_text("\n".join(lines))
+            await safe_edit_text(status_message, "\n".join(lines))
         except Exception:
             pass
 
     try:
-        await orch().rent_and_prepare(offer_id, progress=progress)
+        await orch().rent_and_prepare(offer_id, progress=progress, **({"expected_quote": expected_quote} if expected_quote else {}))
     except asyncio.CancelledError:
         raise
     except (OfferUnavailableError, OfferChangedError, RentRejectedError) as exc:
         logger.info("Vast rental did not start for offer %s: %s", offer_id, exc)
         try:
-            await status_message.edit_text(
+            await safe_edit_text(status_message,
                 "❌ <b>لم يبدأ الاستئجار</b>\n\n"
                 f"{escape(str(exc))}",
                 reply_markup=offers_keyboard(
@@ -429,7 +454,7 @@ async def _rent_and_prepare_background(
                 "لم يتم تسجيل Instance مؤكد؛ أعد تحديث العروض ثم حاول مرة أخرى."
             )
         try:
-            await status_message.edit_text(text, reply_markup=main_menu())
+            await safe_edit_text(status_message, text, reply_markup=main_menu())
         except Exception:
             pass
         return
@@ -437,12 +462,13 @@ async def _rent_and_prepare_background(
     try:
         state = await orch().current_state(probe_inference=False)
         lines = [
-            "✅ <b>السيرفر جاهز</b>",
+            "✅ <b>محرك الدردشة وفهم الصور جاهز</b>",
+            "محرك إنشاء وتعديل الصور يُحمّل عند أول طلب؛ لم يُفحص بعد على هذا السيرفر.",
             "",
             "أرسل سؤالًا للدردشة، أو صورة لفهمها؛ اختر وضع الصور لإنشائها أو تعديلها.",
         ]
         lines.extend(_billing_lines(state.get("billing")))
-        await status_message.edit_text("\n".join(lines), reply_markup=main_menu())
+        await safe_edit_text(status_message, "\n".join(lines), reply_markup=main_menu())
     except Exception:
         logger.exception("Could not render ready status")
 
@@ -465,8 +491,12 @@ async def rent(callback: CallbackQuery) -> None:
 
 
 async def _rent_from_callback(callback: CallbackQuery, offer_id: int, preferred_only: bool, premium_only: bool = False) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) != 5 or len(parts[4]) != 12:
+        await safe_callback_answer(callback, "افتح تفاصيل العرض الحالية قبل التأكيد", show_alert=True)
+        return
     await safe_callback_answer(callback, "أتحقق من العرض ثم أبدأ التجهيز")
-    await callback.message.edit_text(
+    await safe_edit_text(callback.message,
         "🔎 <b>جاري التحقق من العرض وبدء الاستئجار</b>\n\n"
         "أتحقق أولًا من نفس Offer ID في السوق الحي، ثم يبدأ التجهيز بالخلفية.",
         reply_markup=main_menu(),
@@ -475,7 +505,7 @@ async def _rent_from_callback(callback: CallbackQuery, offer_id: int, preferred_
         "⏳ <b>جاري بدء التجهيز...</b>"
     )
     await _rent_and_prepare_background(
-        offer_id, status_message, preferred_only=preferred_only, premium_only=premium_only
+        offer_id, status_message, preferred_only=preferred_only, premium_only=premium_only, expected_quote=parts[4]
     )
 
 
@@ -490,7 +520,7 @@ async def destroy_confirm(callback: CallbackQuery) -> None:
     lines = ["⚠️ سيتم حذف السيرفر نهائيًا وإيقافه."]
     lines.extend(_billing_lines(billing))
     lines.extend(["", "هل أنت متأكد؟"])
-    await callback.message.edit_text(
+    await safe_edit_text(callback.message,
         "\n".join(lines),
         reply_markup=destroy_confirm_keyboard(),
     )
@@ -505,18 +535,18 @@ async def destroy(callback: CallbackQuery) -> None:
         destroyed = await orch().destroy_current()
     except Exception:
         logger.exception("Server destroy failed")
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message,
             "❌ تعذر حذف السيرفر الآن. جرّب مرة أخرى.",
             reply_markup=main_menu(),
         )
         return
     if not destroyed:
-        await callback.message.edit_text("لا يوجد سيرفر حالي.", reply_markup=main_menu())
+        await safe_edit_text(callback.message, "لا يوجد سيرفر حالي.", reply_markup=main_menu())
         return
     billing = await orch().last_billing_snapshot()
     lines = ["🗑 تم حذف السيرفر نهائيًا."]
     lines.extend(_billing_lines(billing, final=True))
-    await callback.message.edit_text("\n".join(lines), reply_markup=main_menu())
+    await safe_edit_text(callback.message, "\n".join(lines), reply_markup=main_menu())
 
 
 @router.callback_query(lambda q: q.data == "servers:stop")
@@ -528,18 +558,18 @@ async def stop(callback: CallbackQuery) -> None:
         stopped = await orch().stop_current()
     except Exception:
         logger.exception("Server stop failed")
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message,
             "❌ تعذر إيقاف السيرفر الآن.",
             reply_markup=main_menu(),
         )
         return
     if not stopped:
-        await callback.message.edit_text("لا يوجد سيرفر حالي.", reply_markup=main_menu())
+        await safe_edit_text(callback.message, "لا يوجد سيرفر حالي.", reply_markup=main_menu())
         return
     state = await orch().current_state(probe_inference=False)
     lines = ["⏹ تم إيقاف السيرفر. قد تستمر رسوم التخزين أثناء الإيقاف."]
     lines.extend(_billing_lines(state.get("billing")))
-    await callback.message.edit_text("\n".join(lines), reply_markup=main_menu())
+    await safe_edit_text(callback.message, "\n".join(lines), reply_markup=main_menu())
 
 
 async def _start_background(status_message: Message) -> None:
@@ -552,7 +582,7 @@ async def _start_background(status_message: Message) -> None:
                 "التشغيل مستمر في الخلفية.",
             ]
             lines.extend(_billing_lines(state.get("billing")))
-            await status_message.edit_text("\n".join(lines))
+            await safe_edit_text(status_message, "\n".join(lines))
         except Exception:
             pass
 
@@ -563,7 +593,7 @@ async def _start_background(status_message: Message) -> None:
     except Exception:
         logger.exception("Server start failed")
         try:
-            await status_message.edit_text(
+            await safe_edit_text(status_message,
                 "❌ تعذر تشغيل السيرفر الآن.",
                 reply_markup=main_menu(),
             )
@@ -572,7 +602,7 @@ async def _start_background(status_message: Message) -> None:
         return
 
     if not started:
-        await status_message.edit_text(
+        await safe_edit_text(status_message,
             "لا يوجد سيرفر حالي.",
             reply_markup=main_menu(),
         )
@@ -581,7 +611,7 @@ async def _start_background(status_message: Message) -> None:
     state = await orch().current_state(probe_inference=False)
     lines = ["✅ السيرفر جاهز."]
     lines.extend(_billing_lines(state.get("billing")))
-    await status_message.edit_text("\n".join(lines), reply_markup=main_menu())
+    await safe_edit_text(status_message, "\n".join(lines), reply_markup=main_menu())
 
 
 @router.callback_query(lambda q: q.data == "servers:start")
@@ -599,7 +629,7 @@ async def start_instance(callback: CallbackQuery) -> None:
 
 async def _start_from_callback(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback, "بدأ التشغيل بالخلفية")
-    await callback.message.edit_text(
+    await safe_edit_text(callback.message,
         "▶️ <b>بدأ تشغيل السيرفر</b>\n\n"
         "يمكنك متابعة الحالة أثناء التشغيل.",
         reply_markup=main_menu(),
@@ -639,7 +669,7 @@ async def status(callback: CallbackQuery) -> None:
         state = await orch().current_state(probe_inference=True)
     except Exception:
         logger.exception("Server status check failed")
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message,
             "❌ تعذر قراءة حالة السيرفر الآن.",
             reply_markup=main_menu(),
         )
@@ -653,7 +683,7 @@ async def status(callback: CallbackQuery) -> None:
             body = "لا يوجد سيرفر حالي."
         else:
             body = _status_label(state)
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message,
             f"📊 <b>حالة السيرفر</b>\n\n{body}",
             reply_markup=main_menu(),
         )
@@ -664,8 +694,14 @@ async def status(callback: CallbackQuery) -> None:
         "",
         _status_label(state),
     ]
+    capabilities = state.get("capabilities")
+    if isinstance(capabilities, dict):
+        for key, name in [("chat", "الدردشة"), ("vision", "فهم الصور"), ("image", "إنشاء وتعديل الصور")]:
+            lines.append(f"{name}: {'محمّل' if capabilities.get(key) else 'غير محمّل؛ عند الطلب'}")
+    progress = state.get("progress")
+    if isinstance(progress, dict): lines.append(f"المرحلة: {escape(str(progress.get('stage', 'unknown')))}")
     offer = state.get("offer")
     if isinstance(offer, dict) and offer.get("price_per_hour") is not None:
         lines.append(f"السعر: <b>${float(offer['price_per_hour']):.3f}/ساعة</b>")
     lines.extend(_billing_lines(state.get("billing")))
-    await callback.message.edit_text("\n".join(lines), reply_markup=main_menu())
+    await safe_edit_text(callback.message, "\n".join(lines), reply_markup=main_menu())

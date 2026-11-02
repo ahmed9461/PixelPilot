@@ -16,7 +16,7 @@ from pixelpilot.services.vast_gateway import normalize_offer
 def quote(offer_id=1, *, down=0.001, up=0.001, hour=0.4, vram=48):
     return GpuOffer(offer_id, "Test GPU", vram, hour, 0.99, 40,
                     machine_id=100 + offer_id, verified=True,
-                    inet_down_mbps=650, inet_up_mbps=300,
+                    inet_down_mbps=2000, inet_up_mbps=1000,
                     download_usd_per_gb=down, upload_usd_per_gb=up)
 
 
@@ -71,12 +71,12 @@ def test_discovery_cost_ranking_and_preferred_only_remain_live(tmp_path):
         ids = [row.offer_id for row in await orch.offers()]
         assert set(ids) == {1, 2, 3, 4}
         assert ids.index(2) < ids.index(1)  # strong transfer value beats expensive download
-        assert len(vast.searches) == 3
+        assert len(vast.searches) == 12
         saved = await orch.cached_offer(2)
         assert saved.download_usd_per_gb == 0.001
         assert saved.machine_id == 102
         assert set(row.offer_id for row in await orch.offers(preferred_only=True)) == {1, 2, 4}
-        assert len(vast.searches) == 5
+        assert len(vast.searches) == 18
         assert await db.get("offers.search_mode") == "preferred"
     asyncio.run(scenario())
 
@@ -161,7 +161,8 @@ def test_telegram_details_disclose_transfer_before_confirmation(tmp_path, monkey
         text, kwargs = messages[0]
         assert "$26/TB" in text and "$1.8200" in text
         assert "ليس فاتورة" in text
-        assert kwargs["reply_markup"].inline_keyboard[0][0].callback_data == "servers:rent:1:a"
+        from pixelpilot.services.offer_policy import quote_fingerprint
+        assert kwargs["reply_markup"].inline_keyboard[0][0].callback_data == "servers:rent:1:a:" + quote_fingerprint(await orch.cached_offer(1))
         assert not vast.creates
     asyncio.run(scenario())
 

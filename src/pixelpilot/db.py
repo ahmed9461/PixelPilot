@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -42,6 +43,8 @@ class Database:
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.path)
+        if os.name != "nt":
+            self.path.chmod(0o600)
         conn.row_factory = sqlite3.Row
         return conn
 

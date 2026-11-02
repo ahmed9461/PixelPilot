@@ -5,12 +5,15 @@ WORKSPACE="${WORKSPACE:-/workspace}"
 PIXELPILOT_ROOT="${PIXELPILOT_ROOT:-$WORKSPACE/PixelPilot}"
 VENV_DIR="${VENV_DIR:-$WORKSPACE/pixelpilot-image-runtime}"
 RUNTIME_MARKER="$VENV_DIR/.pixelpilot-runtime-version"
-RUNTIME_VERSION="pixelpilot-multimodal-v1"
+RUNTIME_VERSION="pixelpilot-multimodal-tls-v2"
 
 INFERENCE_PORT="${INFERENCE_PORT:-8190}"
 MODEL_ID="${MODEL_ID:-Qwen/Qwen-Image-2.1}"
 CHAT_MODEL_ID="${CHAT_MODEL_ID:-Qwen/Qwen3.5-9B}"
 CHAT_MAX_IMAGES="${CHAT_MAX_IMAGES:-3}"
+CHAT_MAX_INPUT_TOKENS="${CHAT_MAX_INPUT_TOKENS:-8192}"
+CHAT_IMAGE_MAX_PIXELS="${CHAT_IMAGE_MAX_PIXELS:-1048576}"
+HF_DOWNLOAD_WORKERS="${HF_DOWNLOAD_WORKERS:-4}"
 MODEL_DTYPE="${MODEL_DTYPE:-bfloat16}"
 IMAGE_MEMORY_MODE="${IMAGE_MEMORY_MODE:-auto}"
 IMAGE_FULL_GPU_MIN_VRAM_GB="${IMAGE_FULL_GPU_MIN_VRAM_GB:-48}"
@@ -68,7 +71,7 @@ if [[ -r /proc/1/environ ]]; then
   while IFS= read -r -d '' entry; do
     key="${entry%%=*}"
     case "$key" in
-      HF_TOKEN|PIXELPILOT_INFERENCE_TOKEN|INFERENCE_PORT|MODEL_ID|CHAT_MODEL_ID|CHAT_MAX_IMAGES|MODEL_DTYPE|IMAGE_MEMORY_MODE|IMAGE_FULL_GPU_MIN_VRAM_GB|IMAGE_VAE_TILING|IMAGE_VAE_SLICING|IMAGE_MAX_REFERENCE_IMAGES|IMAGE_MAX_UPLOAD_MB|PROMPT_ENHANCER_T2I_ID|PROMPT_ENHANCER_I2I_ID|HF_HOME|DATA_DIRECTORY|PIXELPILOT_REPO_URL|PIXELPILOT_REPO_REF)
+      HF_TOKEN|PIXELPILOT_INFERENCE_TOKEN|INFERENCE_PORT|MODEL_ID|CHAT_MODEL_ID|CHAT_MAX_IMAGES|CHAT_MAX_INPUT_TOKENS|CHAT_IMAGE_MAX_PIXELS|HF_DOWNLOAD_WORKERS|PIXELPILOT_TLS_CERT_B64|PIXELPILOT_TLS_KEY_B64|MODEL_DTYPE|IMAGE_MEMORY_MODE|IMAGE_FULL_GPU_MIN_VRAM_GB|IMAGE_VAE_TILING|IMAGE_VAE_SLICING|IMAGE_MAX_REFERENCE_IMAGES|IMAGE_MAX_UPLOAD_MB|PROMPT_ENHANCER_T2I_ID|PROMPT_ENHANCER_I2I_ID|HF_HOME|DATA_DIRECTORY|PIXELPILOT_REPO_URL|PIXELPILOT_REPO_REF)
         if [[ -z "${!key:-}" ]]; then export "$entry"; fi
         ;;
     esac
@@ -100,7 +103,7 @@ if [[ -d "$VENV_DIR" ]]; then
   current_version="$(cat "$RUNTIME_MARKER" 2>/dev/null || true)"
   if [[ "$current_version" != "$RUNTIME_VERSION" ]]; then
     echo "[PixelPilot] rebuilding stale runtime venv"
-    rm -rf "$VENV_DIR"
+    mv -- "$VENV_DIR" "${VENV_DIR}.previous.$(date +%s)"
   fi
 fi
 
@@ -118,8 +121,8 @@ fi
 
 echo "[PixelPilot] installing Qwen-Image runtime..."
 "$PYTHON_BIN" -m pip install -U pip wheel setuptools
-"$PYTHON_BIN" -m pip install -U   'transformers>=5.17.0'   accelerate   pillow   fastapi   uvicorn   python-multipart   hf_xet
-"$PYTHON_BIN" -m pip install -U   'git+https://github.com/huggingface/diffusers.git'
+"$PYTHON_BIN" -m pip install -U 'transformers==5.22.1' accelerate pillow fastapi uvicorn python-multipart hf_xet 'huggingface_hub>=1,<2'
+"$PYTHON_BIN" -m pip install -U 'diffusers==0.42.1'
 
 # Reuse the CUDA-enabled torch from the Vast PyTorch image. If it is absent
 # from the image, install a current PyTorch wheel as a fallback.
@@ -128,18 +131,44 @@ if ! "$PYTHON_BIN" -c 'import torch; assert torch.cuda.is_available()' >/dev/nul
   "$PYTHON_BIN" -m pip install -U 'torch>=2.4.0'
 fi
 
-export HF_HOME MODEL_ID CHAT_MODEL_ID CHAT_MAX_IMAGES MODEL_DTYPE IMAGE_MEMORY_MODE
+if ! "$PYTHON_BIN" -c 'import torchvision' >/dev/null 2>&1; then
+  echo "[PixelPilot] installing torchvision matched to the existing CUDA PyTorch"
+  TORCH_VERSION="$("$PYTHON_BIN" -c 'import torch; print(torch.__version__.split("+")[0])')"
+  TORCH_INDEX="$("$PYTHON_BIN" -c 'import torch; print("cu" + torch.version.cuda.replace(".", "") if torch.version.cuda else "cpu")')"
+  "$PYTHON_BIN" -m pip install "torch==$TORCH_VERSION" torchvision --index-url "https://download.pytorch.org/whl/$TORCH_INDEX"
+fi
+"$PYTHON_BIN" -c 'from transformers import Qwen3_5ForConditionalGeneration, AutoProcessor; from diffusers import QwenImage21Pipeline; import torchvision'
+"$PYTHON_BIN" -m pip check
+
+export HF_HOME MODEL_ID CHAT_MODEL_ID CHAT_MAX_IMAGES CHAT_MAX_INPUT_TOKENS CHAT_IMAGE_MAX_PIXELS HF_DOWNLOAD_WORKERS MODEL_DTYPE IMAGE_MEMORY_MODE
+export HF_HUB_DOWNLOAD_TIMEOUT=60 HF_HUB_ETAG_TIMEOUT=30
+# hf_xet is auto-selected by the official Hub client. Do not force high-performance
+# Xet mode on shared disks or spawn a second downloader over the same snapshot.
 export IMAGE_FULL_GPU_MIN_VRAM_GB IMAGE_VAE_TILING IMAGE_VAE_SLICING
 export IMAGE_MAX_REFERENCE_IMAGES IMAGE_MAX_UPLOAD_MB PIXELPILOT_INFERENCE_TOKEN
 export PROMPT_ENHANCER_T2I_ID PROMPT_ENHANCER_I2I_ID
 if [[ -n "${HF_TOKEN:-}" ]]; then export HF_TOKEN; fi
 
-pkill -f "pixelpilot.inference_gateway" 2>/dev/null || true
-sleep 1
+# TLS keys are issued for this instance by the controller. No plaintext
+# fallback is permitted on a public inference port.
+TLS_DIR="$WORKSPACE/pixelpilot-tls"
+mkdir -p "$TLS_DIR"
+chmod 700 "$TLS_DIR"
+export TLS_DIR
+"$PYTHON_BIN" - <<'PY'
+import base64, os
+from pathlib import Path
+for variable, name in [('PIXELPILOT_TLS_CERT_B64','cert.pem'),('PIXELPILOT_TLS_KEY_B64','key.pem')]:
+    value = os.environ.get(variable)
+    if not value: raise SystemExit('Missing per-instance TLS configuration; refusing public HTTP')
+    target = Path(os.environ['TLS_DIR']) / name
+    target.write_bytes(base64.b64decode(value, validate=True)); target.chmod(0o600)
+PY
+unset PIXELPILOT_TLS_KEY_B64 PIXELPILOT_TLS_CERT_B64
 
 echo "[PixelPilot] launching chat + image gateway (chat first, image on demand)"
 export PYTHONPATH="$PIXELPILOT_ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
-"$PYTHON_BIN" -m uvicorn pixelpilot.inference_gateway:app   --app-dir "$PIXELPILOT_ROOT/src"   --host 0.0.0.0   --port "$INFERENCE_PORT"   --log-level info   >"$GATEWAY_LOG" 2>&1 &
+"$PYTHON_BIN" -m uvicorn pixelpilot.inference_gateway:app   --app-dir "$PIXELPILOT_ROOT/src"   --host 0.0.0.0   --port "$INFERENCE_PORT"   --ssl-keyfile "$TLS_DIR/key.pem" --ssl-certfile "$TLS_DIR/cert.pem"   --log-level info   >"$GATEWAY_LOG" 2>&1 &
 GATEWAY_PID=$!
 
 set +e

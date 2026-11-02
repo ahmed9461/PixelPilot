@@ -37,7 +37,7 @@ class FakeVast:
         self.search_calls.append((query, limit, kwargs))
         preferred = GpuOffer(
             78, "RTX A6000", 48, 0.40, 0.99, 40, machine_id=78000,
-            inet_down_mbps=600, inet_up_mbps=350, verified=True,
+            inet_down_mbps=2000, inet_up_mbps=1000, verified=True,
             download_usd_per_gb=0, upload_usd_per_gb=0,
         )
         premium = GpuOffer(
@@ -51,7 +51,7 @@ class FakeVast:
             return [preferred]
         return [
             GpuOffer(77, "RTX 4090", 24, 0.25, 0.99, 60, machine_id=77000,
-                     inet_down_mbps=500, inet_up_mbps=250, verified=True,
+                     inet_down_mbps=1000, inet_up_mbps=500, verified=True,
                      download_usd_per_gb=0),
             preferred,
         ]
@@ -127,10 +127,14 @@ def test_orchestrator_full_fake_lifecycle(tmp_path):
 
         offers = await orch.offers()
         assert offers[0].gpu_ram_gb == 80
-        assert len(vast.search_calls) == 3
+        assert len(vast.search_calls) == 12
         assert "gpu_ram>=80" in vast.search_calls[0][0]
         assert "gpu_ram>=48" in vast.search_calls[1][0]
-        assert "gpu_ram>=24" in vast.search_calls[2][0]
+        assert "gpu_ram>=32" in vast.search_calls[2][0]
+        assert "gpu_ram>=24" in vast.search_calls[3][0]
+        assert "inet_down>=3000" in vast.search_calls[0][0]
+        assert "inet_down>=2000" in vast.search_calls[4][0]
+        assert "inet_down>=1000" in vast.search_calls[8][0]
         assert vast.search_calls[0][1] == settings.vast_search_pool_limit
         await orch.rent_and_prepare(78)
         assert vast.lookup_calls == [(78, 78000, 100.0)]
@@ -158,9 +162,9 @@ def test_orchestrator_full_fake_lifecycle(tmp_path):
         reply = await orch.chat("ماذا ترى؟", reference_images=(ReferenceImage(b"x"),))
         assert "شجرة" in reply
         assert inference.chat_request[1]["images"][0].data == b"x"
-        assert await db.get("chat.history")
+        assert await db.get("chat.history.1")
         await orch.clear_chat_history()
-        assert await db.get("chat.history") == []
+        assert await db.get("chat.history.1") == []
         assert inference.request[0] == prompt
         assert inference.request[1]["enhance_prompt"] is True
 
@@ -250,7 +254,7 @@ def test_preferred_only_offer_search_skips_fallback_pool(tmp_path):
         )
 
         offers = await orch.offers(preferred_only=True)
-        assert len(vast.search_calls) == 2
+        assert len(vast.search_calls) == 6
         assert "gpu_ram>=80" in vast.search_calls[0][0]
         assert "gpu_ram>=48" in vast.search_calls[1][0]
         assert offers
@@ -377,6 +381,7 @@ def test_wait_until_ready_preserves_stopped_state(tmp_path):
         db = Database(settings.database_path)
         await db.init()
         await db.set("instance.id", 55)
+        await db.set("inference.token", "test-worker-token")
         await db.set("instance.phase", "provisioning")
 
         class StoppedVast(FakeVast):
@@ -418,11 +423,11 @@ def test_offer_search_hides_rows_above_final_price_ceiling(tmp_path):
             async def search_offers(self, query, limit, **kwargs):
                 if "gpu_ram>=48" in query:
                     return [
-                        GpuOffer(1, "RTX A6000", 48, 0.49, 0.99, 40, verified=True, inet_down_mbps=600, inet_up_mbps=250, download_usd_per_gb=0),
-                        GpuOffer(2, "RTX A6000", 48, 0.53, 0.99, 42, verified=True, inet_down_mbps=600, inet_up_mbps=250, download_usd_per_gb=0),
+                        GpuOffer(1, "RTX A6000", 48, 0.49, 0.99, 40, verified=True, inet_down_mbps=2000, inet_up_mbps=500, download_usd_per_gb=0),
+                        GpuOffer(2, "RTX A6000", 48, 0.53, 0.99, 42, verified=True, inet_down_mbps=2000, inet_up_mbps=500, download_usd_per_gb=0),
                     ]
                 return [
-                    GpuOffer(3, "RTX 3090", 24, 0.25, 0.99, 60, verified=True, inet_down_mbps=600, inet_up_mbps=250, download_usd_per_gb=0),
+                    GpuOffer(3, "RTX 3090", 24, 0.25, 0.99, 60, verified=True, inet_down_mbps=2000, inet_up_mbps=500, download_usd_per_gb=0),
                 ]
 
         orch = Orchestrator(
@@ -527,7 +532,7 @@ def test_rent_revalidates_exact_offer_and_rejects_stale_id(tmp_path):
                 if self.live:
                     preferred = GpuOffer(
                         78, "RTX A6000", 48, 0.40, 0.99, 40, verified=True,
-                        inet_down_mbps=600, inet_up_mbps=350,
+                        inet_down_mbps=2000, inet_up_mbps=1000,
                         download_usd_per_gb=0, upload_usd_per_gb=0,
                     )
                     if "gpu_ram>=48" in query:
@@ -580,7 +585,7 @@ def test_rent_requires_reconfirmation_when_price_changes(tmp_path):
                 self.search_calls.append((query, limit, kwargs))
                 offer = GpuOffer(
                     78, "RTX A6000", 48, self.price, 0.99, 40, verified=True,
-                    inet_down_mbps=600, inet_up_mbps=350,
+                    inet_down_mbps=2000, inet_up_mbps=1000,
                     download_usd_per_gb=0, upload_usd_per_gb=0,
                 )
                 return [offer]
@@ -662,7 +667,7 @@ def test_rent_exact_id_survives_ranked_market_churn(tmp_path):
                 # Search result has fallen outside the top 64, but the exact ID is live.
                 assert offer_id == 78
                 return GpuOffer(78, "RTX A6000", 48, 0.40, 0.99, 40, machine_id=78000,
-                                verified=True, inet_down_mbps=600, inet_up_mbps=350,
+                                verified=True, inet_down_mbps=2000, inet_up_mbps=1000,
                                 download_usd_per_gb=0, upload_usd_per_gb=0)
 
         vast = ChurnVast()
@@ -759,6 +764,8 @@ def test_single_status_timeout_is_retried_during_provisioning(tmp_path):
         await db.init()
         await db.set("instance.id", 55)
 
+        await db.set("inference.token", "test-worker-token")
+
         class SlowOnceVast(FakeVast):
             def __init__(self):
                 super().__init__()
@@ -836,7 +843,7 @@ def test_premium_only_offer_search_is_strict(tmp_path):
         vast = FakeVast()
         orch = Orchestrator(settings, db, vast)
         offers = await orch.offers(premium_only=True)
-        assert len(vast.search_calls) == 1
+        assert len(vast.search_calls) == 3
         assert "gpu_ram>=80" in vast.search_calls[0][0]
         assert len(offers) == 1
         assert offers[0].gpu_ram_gb == 80

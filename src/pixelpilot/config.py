@@ -36,10 +36,10 @@ class Settings(BaseSettings):
     vast_verified_only: bool = True
     vast_datacenter_only: bool = False
     vast_min_direct_ports: int = 1
-    vast_min_inet_down_mbps: float = 150.0
-    vast_min_inet_up_mbps: float = 80.0
-    vast_preferred_inet_down_mbps: float = 500.0
-    vast_preferred_inet_up_mbps: float = 200.0
+    vast_min_inet_down_mbps: float = 1000.0
+    vast_min_inet_up_mbps: float = 500.0
+    vast_preferred_inet_down_mbps: float = 2000.0
+    vast_preferred_inet_up_mbps: float = 1000.0
     vast_cancel_unavailable: bool = True
     vast_auto_destroy_on_provision_failure: bool = False
     # Comparison assumptions, not measurements or a promised final invoice.
@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     # Runtime bundle source copied/cloned into ephemeral GPU instances.
     pixelpilot_repo_url: str = ""
     pixelpilot_repo_ref: str = "main"
+    pixelpilot_worker_commit: str = ""
 
     # Optional Hugging Face read token. Qwen-Image-2.1 is public, but an
     # authenticated token can improve Hub download reliability/rate limits.
@@ -64,6 +65,9 @@ class Settings(BaseSettings):
     chat_max_images: int = 3
     chat_max_new_tokens: int = 384
     chat_context_turns: int = 8
+    chat_max_input_tokens: int = 8192
+    chat_image_max_pixels: int = 1048576
+    hf_download_workers: int = 4
     model_dtype: str = "bfloat16"
     image_memory_mode: str = "auto"  # auto | gpu | offload
     image_full_gpu_min_vram_gb: int = 48
@@ -77,8 +81,8 @@ class Settings(BaseSettings):
 
     # Public authenticated image inference endpoint.
     inference_port: int = 8190
-    inference_use_https: bool = False
-    inference_verify_tls: bool = False
+    inference_use_https: bool = True
+    inference_verify_tls: bool = True
     inference_request_timeout_seconds: int = 3600
     inference_probe_timeout_seconds: float = 5.0
     vast_status_timeout_seconds: float = 8.0
@@ -134,6 +138,9 @@ class Settings(BaseSettings):
         "chat_max_images",
         "chat_max_new_tokens",
         "chat_context_turns",
+        "chat_max_input_tokens",
+        "chat_image_max_pixels",
+        "hf_download_workers",
         "vast_min_cpu_ram_gb",
         "image_full_gpu_min_vram_gb",
         "image_default_steps",
@@ -264,6 +271,8 @@ class Settings(BaseSettings):
 
     def validate_rent_ready(self) -> None:
         missing: list[str] = []
+        if not self.inference_use_https or not self.inference_verify_tls:
+            missing.append("INFERENCE_USE_HTTPS=true and INFERENCE_VERIFY_TLS=true (private TLS required)")
         if not self.pixelpilot_repo_url and not self.vast_template_hash:
             missing.append("PIXELPILOT_REPO_URL or VAST_TEMPLATE_HASH")
         if not self.model_id:

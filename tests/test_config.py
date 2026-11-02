@@ -35,7 +35,7 @@ def test_qwen_image_profile_defaults():
     assert settings.vast_status_timeout_seconds == 8.0
     assert settings.vast_max_price_usd_hour == 0.60
     assert settings.vast_premium_gpu_ram_gb == 80
-    assert settings.vast_min_inet_up_mbps == 80
+    assert settings.vast_min_inet_up_mbps == 500
     assert settings.chat_model_id == "Qwen/Qwen3.5-9B"
     assert settings.model_dtype == "bfloat16"
     assert settings.image_memory_mode == "auto"
