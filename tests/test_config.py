@@ -11,7 +11,7 @@ def test_reliability_validation():
 
 def test_hard_rental_cap_and_cancel_unavailable():
     with pytest.raises(ValidationError):
-        Settings(_env_file=None, vast_max_price_usd_hour=0.61)
+        Settings(_env_file=None, vast_max_price_usd_hour=0.71)
     with pytest.raises(RuntimeError):
         Settings(_env_file=None, vast_cancel_unavailable=False).validate_rent_ready()
 
@@ -33,7 +33,7 @@ def test_qwen_image_profile_defaults():
     assert settings.vast_search_pool_limit == 100
     assert settings.inference_probe_timeout_seconds == 5.0
     assert settings.vast_status_timeout_seconds == 8.0
-    assert settings.vast_max_price_usd_hour == 0.60
+    assert settings.vast_max_price_usd_hour == 0.70
     assert settings.vast_premium_gpu_ram_gb == 80
     assert settings.vast_min_inet_up_mbps == 500
     assert settings.chat_model_id == "Qwen/Qwen3.5-9B"
@@ -83,8 +83,8 @@ def test_runtime_timeouts_must_be_positive():
         Settings(_env_file=None, vast_status_timeout_seconds=0)
 
 
-def test_hourly_ceiling_accepts_exactly_sixty_cents():
-    assert Settings(_env_file=None, vast_max_price_usd_hour=0.60).vast_max_price_usd_hour == 0.60
+def test_hourly_ceiling_accepts_exactly_seventy_cents():
+    assert Settings(_env_file=None, vast_max_price_usd_hour=0.70).vast_max_price_usd_hour == 0.70
 
 
 def test_vision_bounds_validation():

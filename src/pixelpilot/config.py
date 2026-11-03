@@ -4,6 +4,8 @@ from functools import lru_cache
 from math import isfinite
 from pathlib import Path
 
+from pixelpilot.pricing import MAX_VAST_HOURLY_USD
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -30,7 +32,7 @@ class Settings(BaseSettings):
     # CPU offload keeps large model components in host memory on 24 GB GPUs.
     vast_min_cpu_ram_gb: int = 48
     vast_min_reliability: float = 0.98
-    vast_max_price_usd_hour: float = 0.60
+    vast_max_price_usd_hour: float = MAX_VAST_HOURLY_USD
     vast_default_limit: int = 8
     vast_search_pool_limit: int = 100
     vast_verified_only: bool = True
@@ -125,8 +127,8 @@ class Settings(BaseSettings):
     @field_validator("vast_max_price_usd_hour")
     @classmethod
     def positive_price_cap(cls, value: float) -> float:
-        if not isfinite(value) or not 0 < value <= 0.60:
-            raise ValueError("VAST_MAX_PRICE_USD_HOUR must be > 0 and <= $0.60")
+        if not isfinite(value) or not 0 < value <= MAX_VAST_HOURLY_USD:
+            raise ValueError(f"VAST_MAX_PRICE_USD_HOUR must be > 0 and <= ${MAX_VAST_HOURLY_USD:.2f}")
         return value
 
     @field_validator(
