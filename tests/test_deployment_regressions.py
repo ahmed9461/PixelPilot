@@ -27,7 +27,7 @@ def offer(**kw):
         raw={'num_gpus':1, 'direct_port_count':4, 'cpu_ram':128000}), **kw)
 
 @pytest.mark.parametrize('field,value', [
-    ('price_per_hour',.6000001), ('price_per_hour',float('nan')),
+    ('price_per_hour',.7000001), ('price_per_hour',float('nan')),
     ('price_per_hour',float('inf')), ('price_per_hour',0),
     ('inet_down_mbps',999), ('inet_up_mbps',499),
     ('inet_down_mbps',float('nan')), ('reliability',.97),
@@ -45,6 +45,27 @@ def test_gpu_memory_does_not_outweigh_compute_and_network():
     rank=lambda x:offer_quality_rank(x,hourly_cap=.60,download_gb=70,billed_hours=1,preferred_down_mbps=2000,preferred_up_mbps=1000)
     assert rank(offer()) < rank(offer(gpu_name='A6000',gpu_ram_gb=48,dlperf=35,compute_cap=860,inet_down_mbps=2000,inet_up_mbps=1000))
     assert rank(offer(inet_down_mbps=5000)) < rank(offer(inet_down_mbps=3000))
+
+def test_rank_favors_reliable_hosts_and_accounts_for_full_download_fee():
+    def rank(candidate):
+        return offer_quality_rank(
+            candidate, hourly_cap=.70, download_gb=70, billed_hours=1,
+            preferred_down_mbps=2000, preferred_up_mbps=1000,
+        )
+
+    baseline = offer(reliability=.999, datacenter=True, inet_down_mbps=2000)
+    costly = replace(baseline, inet_down_mbps=6000, download_usd_per_gb=.0390625)
+    less_reliable = replace(baseline, reliability=.981, datacenter=False)
+    assert rank(baseline) < rank(costly)
+    assert rank(baseline) < rank(less_reliable)
+    assert rank(baseline) < rank(replace(baseline, download_usd_per_gb=None))
+    assert eligible(replace(baseline, price_per_hour=.70), Settings(_env_file=None))
+
+def test_offer_without_total_hourly_quote_is_ineligible():
+    from pixelpilot.services.vast_gateway import normalize_offer
+
+    candidate = normalize_offer({"id": 1, "dph_base": .40})
+    assert candidate.price_per_hour == 0
 
 def test_low_network_results_are_separate_and_never_rentable(tmp_path):
     class Vast:
@@ -64,7 +85,7 @@ def test_low_network_results_are_separate_and_never_rentable(tmp_path):
         assert not v.creates
     asyncio.run(scenario())
 
-@pytest.mark.parametrize('value',[.61,1.5,float('nan'),float('inf')])
+@pytest.mark.parametrize('value',[.71,1.5,float('nan'),float('inf')])
 def test_query_builder_cannot_relax_hard_ceiling(value):
     with pytest.raises(ValueError): build_offer_query(24,.98,value)
 

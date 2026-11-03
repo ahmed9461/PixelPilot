@@ -22,7 +22,7 @@ Current baseline: `main` includes merged PR #23 (multimodal chat/vision). The 20
 8. Keep generated/reference image bytes ephemeral; do not persist them in SQLite.
 9. Keep Vast lifecycle owner-controlled; automatic deletion is opt-in.
 10. `VAST_API_KEY` stays on the controller.
-11. The hard rental ceiling remains `$0.60/hour`; it is not an all-in invoice ceiling.
+11. The hard rental ceiling remains `$0.70/hour`; it is not an all-in invoice ceiling.
 12. Every offer refresh queries the live marketplace.
 13. The running-time estimate is separate from transfer charges and stopped-instance storage. Never label it the total/final Vast invoice.
 14. The runtime port is an authenticated PixelPilot multimodal gateway over per-instance verified TLS.

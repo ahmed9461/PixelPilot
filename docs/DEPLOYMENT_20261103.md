@@ -30,20 +30,20 @@ and SQLite database. Never replace the installation or its credentials.
 Search sequential network stages, each scanning 80/48/32/24 GB pools (restricted
 appropriately for dedicated 48/80 menus): 3000/1000, 2000/1000, 1000/500 Mbps.
 Each query inspects up to `VAST_SEARCH_POOL_LIMIT=100` rows, ordered by download
-speed, then deduplicates exact Offer IDs and validates locally. Premium queries
+rate ($/GB), then deduplicates exact Offer IDs and validates locally. Premium queries
 can be empty without hiding lower tiers. Only when no eligible offer exists,
 slower offers appear separately without rental buttons; they cannot pass rental
 validation. Do not automatically relax the minimum network policy.
 
-The hard rental ceiling is **$0.60/hour**, validated by settings, query builder,
+The hard rental ceiling is **$0.70/hour**, validated by settings, query builder,
 discovery, detail view and exact-ID live pre-create checks. A confirmation carries
 the reviewed quote fingerprint; refreshing another card cannot silently change
 an old confirmation. Preserve unique labels, `cancel_unavail=true`, pending
 state and ambiguous-result reconciliation. Never substitute another offer.
 
-Ranking gives download 32 points, upload 12, DLPerf 26, VRAM 14, reliability 11,
+Ranking gives download speed 24 points, upload 12, DLPerf 26, VRAM 14, reliability 30,
 hourly value 10; small architecture/FLOPs/memory-bandwidth and datacenter bonuses
-and transfer-cost penalties refine it. These are relative heuristics using
+and a penalty proportional to the full estimated download fee refine it. Offers with known download quotes come first. These are relative heuristics using
 published data, not measured performance guarantees or a globally best offer.
 BF16 requires Ampere or later CUDA compute capability, with NVIDIA/amd64 queries.
 24/32 GB profiles require host RAM for offload; direct ports and disk are checked.

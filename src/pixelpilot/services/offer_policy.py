@@ -6,7 +6,7 @@ import hashlib
 import json
 from pixelpilot.config import Settings
 from pixelpilot.domain import GpuOffer
-from pixelpilot.pricing import download_rate_allowed, nonnegative_number
+from pixelpilot.pricing import MAX_VAST_HOURLY_USD, download_rate_allowed, nonnegative_number
 
 NETWORK_LABELS = {"excellent": "ممتاز جدًا", "preferred": "مفضل", "standard": "الحد الافتراضي", "fallback": "احتياطي بطيء"}
 
@@ -21,9 +21,9 @@ def network_tier(offer: GpuOffer) -> str:
     return "fallback"
 
 def eligible(offer: GpuOffer, settings: Settings, *, network: bool = True) -> bool:
-    if not isfinite(offer.price_per_hour) or not 0 < offer.price_per_hour <= min(0.60, settings.vast_max_price_usd_hour): return False
+    if not isfinite(offer.price_per_hour) or not 0 < offer.price_per_hour <= min(MAX_VAST_HOURLY_USD, settings.vast_max_price_usd_hour): return False
     if not isfinite(offer.gpu_ram_gb) or offer.gpu_ram_gb < settings.vast_min_gpu_ram_gb: return False
-    if not isfinite(offer.reliability or 0) or (offer.reliability or 0) < settings.vast_min_reliability: return False
+    if not isfinite(offer.reliability or 0) or not settings.vast_min_reliability <= (offer.reliability or 0) <= 1: return False
     if settings.vast_verified_only and offer.verified is not True: return False
     if not download_rate_allowed(offer, settings.vast_max_download_usd_per_tb): return False
     if network and (not isfinite(offer.inet_down_mbps or 0) or not isfinite(offer.inet_up_mbps or 0) or (offer.inet_down_mbps or 0) < settings.vast_min_inet_down_mbps or (offer.inet_up_mbps or 0) < settings.vast_min_inet_up_mbps): return False

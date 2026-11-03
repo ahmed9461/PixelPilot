@@ -8,6 +8,8 @@ if TYPE_CHECKING:
     from pixelpilot.domain import GpuOffer
 
 # Explicit decimal display convention: 1 TB = 1,000 GB.
+MAX_VAST_HOURLY_USD = 0.70
+
 GB_PER_TB = 1000.0
 
 
@@ -106,11 +108,11 @@ def offer_quality_rank(
     preferred_down_mbps: float,
     preferred_up_mbps: float,
 ) -> tuple[float, ...]:
-    """Performance-first offer selection inside a separately enforced hourly cap.
+    """Balance host reliability, performance and startup cost inside a separately enforced hourly cap.
 
     Vast's dlperf is a published estimate, not a benchmark performed by the
     bot. Speeds are advertised host values, not measured throughput. Unknown
-    data rates receive a penalty and never silently count as free.
+    download rates sort after known rates and never silently count as free.
     """
     download = max(0.0, offer.inet_down_mbps or 0.0)
     upload = max(0.0, offer.inet_up_mbps or 0.0)
@@ -118,25 +120,26 @@ def offer_quality_rank(
     reliability = max(0.0, min(1.0, offer.reliability or 0.0))
     vram = max(0.0, offer.gpu_ram_gb)
     estimate = session_estimate(offer, download_gb, billed_hours)
-    cost_penalty = 8.0 if estimate is None else min(15.0, max(0.0, estimate - offer.price_per_hour * billed_hours) * 20.0)
+    transfer_cost = download_estimate(offer, download_gb)
+    cost_penalty = 0.0 if transfer_cost is None else transfer_cost * 40.0
 
     quality = (
         26.0 * min(perf / 150.0, 1.0)
         + 14.0 * min(vram / 80.0, 1.0)
-        + 32.0 * min(download / max(5000.0, preferred_down_mbps), 1.5)
+        + 24.0 * min(download / max(5000.0, preferred_down_mbps), 1.5)
         + 12.0 * min(upload / max(2000.0, preferred_up_mbps), 1.5)
-        + 11.0 * min(1.0, max(0.0, (reliability - 0.97) / 0.03))
+        + 30.0 * min(1.0, max(0.0, (reliability - 0.98) / 0.02))
         + 10.0 * max(0.0, (hourly_cap - offer.price_per_hour) / hourly_cap)
-        + (5.0 if (offer.raw or {}).get("datacenter") is True else 0.0)
+        + (8.0 if offer.datacenter else 0.0)
         + 3.0 * min((offer.compute_cap or 0) / 1200, 1.0)
         + 3.0 * min((offer.total_flops or 0) / 150, 1.0)
         + 2.0 * min((offer.gpu_mem_bw or 0) / 2000, 1.0)
         - cost_penalty
     )
-    # Quality first, then prefer known cheaper transfer-inclusive estimates.
+    # Show known transfer quotes first, then balance quality and costs.
     return (
-        -quality,
         1.0 if estimate is None else 0.0,
+        -quality,
         float("inf") if estimate is None else estimate,
         offer.price_per_hour,
         -download,

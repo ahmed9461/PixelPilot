@@ -127,7 +127,7 @@ class Orchestrator:
         for down, up in dict.fromkeys(levels):
             stage_queries = [self._offer_query_for(n, down=down, up=up) for n in floors]
             queries.extend(stage_queries)
-            results = await asyncio.gather(*(self.vast.search_offers(q, self.settings.vast_search_pool_limit, storage_gb=float(self.settings.vast_disk_gb), order="inet_down-") for q in stage_queries), return_exceptions=True)
+            results = await asyncio.gather(*(self.vast.search_offers(q, self.settings.vast_search_pool_limit, storage_gb=float(self.settings.vast_disk_gb), order="inet_down_cost") for q in stage_queries), return_exceptions=True)
             count = 0
             for result in results:
                 if isinstance(result, BaseException): failures.append(result); continue

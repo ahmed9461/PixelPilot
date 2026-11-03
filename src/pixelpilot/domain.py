@@ -39,6 +39,7 @@ class GpuOffer:
     compute_cap: float | None = None
     total_flops: float | None = None
     gpu_mem_bw: float | None = None
+    datacenter: bool = False
 
     def __post_init__(self) -> None:
         # Normalize live raw rates once and preserve them in public snapshots.

@@ -5,6 +5,7 @@ import json
 import re
 from typing import Any
 
+from pixelpilot.pricing import MAX_VAST_HOURLY_USD
 from pixelpilot.domain import GpuOffer, InstanceRef
 
 
@@ -37,8 +38,8 @@ def build_offer_query(
     # (for example: gpu_ram>=48), even though raw offer payloads expose
     # gpu_ram in MB. Do not multiply the query threshold by 1000 here.
     from math import isfinite
-    if not isfinite(max_price_usd_hour) or not 0 < max_price_usd_hour <= 0.60:
-        raise ValueError("Hourly rental cap must be > 0 and <= $0.60")
+    if not isfinite(max_price_usd_hour) or not 0 < max_price_usd_hour <= MAX_VAST_HOURLY_USD:
+        raise ValueError(f"Hourly rental cap must be > 0 and <= ${MAX_VAST_HOURLY_USD:.2f}")
     min_ram_gb = int(min_gpu_ram_gb)
     terms = [
         "num_gpus=1",
@@ -102,7 +103,7 @@ def normalize_offer(raw: dict[str, Any]) -> GpuOffer:
         offer_id=int(raw.get("id") or raw.get("ask_id") or 0),
         gpu_name=str(raw.get("gpu_name") or raw.get("gpu_display_name") or "Unknown GPU"),
         gpu_ram_gb=gpu_ram_mb / 1000 if gpu_ram_mb else _num(raw, "gpu_ram_gb"),
-        price_per_hour=_num(raw, "dph_total", "dph_base", "price"),
+        price_per_hour=_num(raw, "dph_total"),
         reliability=reliability,
         dlperf=_num(raw, "dlperf", default=0.0) or None,
         location=raw.get("geolocation") or raw.get("location"),
@@ -114,6 +115,7 @@ def normalize_offer(raw: dict[str, Any]) -> GpuOffer:
         compute_cap=_num(raw, "compute_cap") or None,
         total_flops=_num(raw, "total_flops") or None,
         gpu_mem_bw=_num(raw, "gpu_mem_bw") or None,
+        datacenter=raw.get("datacenter") is True,
         raw=raw,
     )
 

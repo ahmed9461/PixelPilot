@@ -224,7 +224,7 @@ async def _search_offers(
         "🚀 أبحث عن أفضل سيرفرات 80GB+..."
         if premium_only else (
             "🔥 أبحث عن سيرفرات 48GB+ المتاحة..."
-            if preferred_only else "🔎 أقارن قوة الكروت وسرعة الشبكة حتى $0.60/ساعة..."
+            if preferred_only else f"🔎 أقارن موثوقية المضيف والشبكة ورسوم التنزيل حتى ${orch().settings.vast_max_price_usd_hour:.2f}/ساعة..."
         )
     )
     await safe_edit_text(callback.message, loading)
@@ -255,7 +255,7 @@ async def _search_offers(
 
     if not offers:
         scope = (
-            "لا توجد عروض 80GB+ تحت سقف $0.60 حاليًا."
+            f"لا توجد عروض 80GB+ تحت سقف ${orch().settings.vast_max_price_usd_hour:.2f} حاليًا."
             if premium_only else (
                 "لا توجد عروض 48GB+ مطابقة للفلاتر والسقف."
                 if preferred_only else "لا توجد عروض مناسبة ضمن الميزانية وجودة الشبكة المحددة."
@@ -352,7 +352,14 @@ async def offer_details(callback: CallbackQuery) -> None:
     )
     lines.append(f"ملف التشغيل: <b>{profile}</b>")
     lines.append(f"جودة الشبكة: <b>{NETWORK_LABELS[network_tier(offer)]}</b> (معلنة)")
-    score = -offer_quality_rank(offer, hourly_cap=0.60, download_gb=orch().settings.vast_estimated_download_gb, billed_hours=orch().settings.vast_cost_comparison_hours, preferred_down_mbps=2000, preferred_up_mbps=1000)[0]
+    settings = orch().settings
+    score = -offer_quality_rank(
+        offer, hourly_cap=settings.vast_max_price_usd_hour,
+        download_gb=settings.vast_estimated_download_gb,
+        billed_hours=settings.vast_cost_comparison_hours,
+        preferred_down_mbps=settings.vast_preferred_inet_down_mbps,
+        preferred_up_mbps=settings.vast_preferred_inet_up_mbps,
+    )[1]
     lines.append(f"تقييم المقارنة التقريبي: <b>{score:.1f}</b> نقطة (ليس اختبار أداء فعليًا)")
     if offer.inet_down_mbps:
         lines.append(f"⬇️ سرعة التنزيل المعلنة: <b>{offer.inet_down_mbps:.0f} Mbps</b>")
