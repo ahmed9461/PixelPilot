@@ -53,6 +53,16 @@ def load_chat_model(model_id: str) -> tuple[Any, Any]:
     return model, processor
 
 
+def _strip_fabricated_turns(text: str) -> str:
+    """Discard simulated chat roles leaked into a single model response."""
+    return re.split(
+        r"\r?\n[ \t]*(?:user|assistant)[ \t]*\r?\n",
+        text,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0].strip()
+
+
 def run_chat(
     model: Any,
     processor: Any,
@@ -98,16 +108,41 @@ def run_chat(
         messages = messages[2:] if len(messages) > 2 else messages[1:]
     encoded = encoded.to(model.device)
 
+    generation_kwargs: dict[str, Any] = {
+        "max_new_tokens": max_new_tokens,
+        "do_sample": False,
+    }
+    if text_only:
+        # This community checkpoint can continue fabricating user/assistant
+        # turns under greedy decoding, burning the full token allowance.
+        # Follow Qwen's non-thinking chat sampling recommendations, and stop
+        # generation at a real assistant EOS or any fabricated next turn.
+        eos_id = getattr(processor, "eos_token_id", None)
+        if not isinstance(eos_id, int):
+            raise RuntimeError("Community chat tokenizer has no valid EOS token")
+        generation_kwargs.update(
+            do_sample=True,
+            temperature=0.7,
+            top_p=0.8,
+            top_k=20,
+            repetition_penalty=1.1,
+            eos_token_id=eos_id,
+            pad_token_id=getattr(processor, "pad_token_id", None) or eos_id,
+            stop_strings=["<|im_start|>", "\nuser\n", "\nassistant\n"],
+            tokenizer=processor,
+        )
+
     with torch.inference_mode():
         tokens = model.generate(
             **encoded,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
+            **generation_kwargs,
         )
     prompt_tokens = encoded["input_ids"].shape[-1]
     response = processor.decode(
         tokens[0][prompt_tokens:], skip_special_tokens=True
     ).strip()
+    if text_only:
+        response = _strip_fabricated_turns(response)
     # Prevent raw internal thinking markup from reaching Telegram in case a
     # checkpoint ignores enable_thinking=False.
     response = re.sub(r"<think>.*?</think>\s*", "", response, flags=re.DOTALL).strip()
