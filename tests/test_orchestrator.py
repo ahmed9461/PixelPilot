@@ -141,7 +141,7 @@ def test_orchestrator_full_fake_lifecycle(tmp_path):
         assert await db.get("instance.phase") == "ready"
         env = vast.create_kwargs["env"]
         assert "MODEL_ID=Qwen/Qwen-Image-2.1" in env
-        assert "CHAT_MODEL_ID=Qwen/Qwen3.5-9B" in env
+        assert "CHAT_MODEL_ID=lukey03/Qwen3.5-9B-abliterated" in env
         assert "IMAGE_MEMORY_MODE=auto" in env
         assert "IMAGE_MAX_REFERENCE_IMAGES=10" in env
         assert "PROMPT_ENHANCER_T2I_ID=Qwen/Qwen-Image-2.1-PE-T2I" in env
