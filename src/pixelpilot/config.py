@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     model_id: str = "Qwen/Qwen-Image-2.1"
     chat_model_id: str = "Qwen/Qwen3.5-9B"
     chat_max_images: int = 3
-    chat_max_new_tokens: int = 384
+    chat_max_new_tokens: int = 1024
     chat_context_turns: int = 8
     chat_max_input_tokens: int = 8192
     chat_image_max_pixels: int = 1048576
