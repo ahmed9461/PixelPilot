@@ -1,8 +1,8 @@
-"""On-demand local Qwen vision/chat runtime.
+"""On-demand local Qwen chat/vision runtime.
 
-Images are decoded in the authenticated gateway. The model and processor are
-loaded lazily; they never share GPU residency with the diffusion pipeline on
-ordinary single-GPU instances.
+The default community checkpoint is text-only. The official multimodal model
+remains selectable through CHAT_MODEL_ID; neither shares GPU residency with
+the image generation/editing pipeline.
 """
 from __future__ import annotations
 
@@ -11,14 +11,35 @@ import os
 from typing import Any
 
 
+COMMUNITY_TEXT_MODEL_ID = "lukey03/Qwen3.5-9B-abliterated"
+
+
+def is_text_only_chat_model(model_id: str) -> bool:
+    return model_id == COMMUNITY_TEXT_MODEL_ID
+
+
 def load_chat_model(model_id: str) -> tuple[Any, Any]:
     import torch
-    from transformers import Qwen3_5ForConditionalGeneration, AutoProcessor
     from pixelpilot.services.model_cache import prepare_model
 
     if not torch.cuda.is_available():
-        raise RuntimeError("PixelPilot chat/vision requires a CUDA GPU")
+        raise RuntimeError("PixelPilot chat requires a CUDA GPU")
     local = prepare_model(model_id)
+    if is_text_only_chat_model(model_id):
+        # The community checkpoint uses qwen3_5_text/Qwen3_5ForCausalLM:
+        # loading it with Qwen3_5ForConditionalGeneration is incompatible.
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(local)
+        model = AutoModelForCausalLM.from_pretrained(
+            local,
+            dtype=torch.bfloat16,
+            device_map="auto",
+            low_cpu_mem_usage=True,
+        ).eval()
+        return model, tokenizer
+
+    from transformers import Qwen3_5ForConditionalGeneration, AutoProcessor
     processor = AutoProcessor.from_pretrained(local)
     # Prevent the default very large vision-token allocation on 24GB GPUs.
     if getattr(processor, 'image_processor', None) is not None:
@@ -40,20 +61,28 @@ def run_chat(
     prompt: str,
     images: list[Any],
     max_new_tokens: int,
+    text_only: bool = False,
 ) -> str:
-    """Generate one reply from bounded text history and current visual input."""
+    """Generate one reply with the checkpoint's matching chat template."""
     import torch
+
+    if text_only and images:
+        raise ValueError("The selected community chat model supports text, not image understanding")
 
     messages: list[dict[str, Any]] = []
     for turn in history:
         role = turn.get("role")
         text = turn.get("content")
         if role in {"user", "assistant"} and isinstance(text, str) and text:
-            messages.append({"role": role, "content": [{"type": "text", "text": text}]})
+            content = text if text_only else [{"type": "text", "text": text}]
+            messages.append({"role": role, "content": content})
 
-    parts: list[dict[str, Any]] = [{"type": "image", "image": img} for img in images]
-    parts.append({"type": "text", "text": prompt})
-    messages.append({"role": "user", "content": parts})
+    if text_only:
+        messages.append({"role": "user", "content": prompt})
+    else:
+        parts: list[dict[str, Any]] = [{"type": "image", "image": img} for img in images]
+        parts.append({"type": "text", "text": prompt})
+        messages.append({"role": "user", "content": parts})
 
     budget = int(os.environ.get('CHAT_MAX_INPUT_TOKENS', '8192'))
     while True:
