@@ -51,7 +51,7 @@ class ChatRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=12000)
     history: list[dict[str, str]] = Field(default_factory=list, max_length=20)
     images: list[str] = Field(default_factory=list, max_length=3)
-    max_new_tokens: int = Field(default=384, ge=32, le=1024)
+    max_new_tokens: int = Field(default=1024, ge=32, le=1024)
 
 
 @dataclass(slots=True)
