@@ -15,7 +15,7 @@ from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from pixelpilot.services.prompt_enhancer import PromptEnhancement, enhance_i2i, enhance_t2i
-from pixelpilot.services.vision_runtime import load_chat_model, run_chat
+from pixelpilot.services.vision_runtime import is_text_only_chat_model, load_chat_model, run_chat
 from pixelpilot.services.model_cache import prepare_model, phase, status as cache_status
 
 
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 TOKEN = os.environ.get("PIXELPILOT_INFERENCE_TOKEN", "")
 MODEL_ID = os.environ.get("MODEL_ID", "Qwen/Qwen-Image-2.1")
-CHAT_MODEL_ID = os.environ.get("CHAT_MODEL_ID", "Qwen/Qwen3.5-9B")
+CHAT_MODEL_ID = os.environ.get("CHAT_MODEL_ID", "lukey03/Qwen3.5-9B-abliterated")
 CHAT_MAX_IMAGES = int(os.environ.get("CHAT_MAX_IMAGES", "3"))
 MODEL_DTYPE = os.environ.get("MODEL_DTYPE", "bfloat16").strip().lower()
 MEMORY_MODE = os.environ.get("IMAGE_MEMORY_MODE", "auto").strip().lower()
@@ -530,7 +530,7 @@ async def health(authorization: str | None = Header(default=None)) -> dict[str, 
     return {
         "status": "ok" if state.pipe is not None or state.chat_model is not None else "loading",
         "progress": cache_status(),
-        "capabilities": {"chat": state.chat_model is not None, "vision": state.chat_model is not None, "image": state.pipe is not None},
+        "capabilities": {"chat": state.chat_model is not None, "vision": state.chat_model is not None and not is_text_only_chat_model(CHAT_MODEL_ID), "image": state.pipe is not None},
         "model": CHAT_MODEL_ID if state.active_model == "chat" else MODEL_ID,
         "active_model": state.active_model,
         "device": state.device,
@@ -632,6 +632,8 @@ async def chat_completions(
     _check_auth(authorization)
     if len(request.images) > CHAT_MAX_IMAGES:
         raise HTTPException(status_code=422, detail=f"At most {CHAT_MAX_IMAGES} images supported")
+    if request.images and is_text_only_chat_model(CHAT_MODEL_ID):
+        raise HTTPException(status_code=422, detail="The selected chat model is text-only; image understanding is unavailable")
     if sum(len(str(turn.get("content", ""))) for turn in request.history) > 16000:
         raise HTTPException(status_code=413, detail="Chat history too long")
 
@@ -660,6 +662,7 @@ async def chat_completions(
                 prompt=request.prompt,
                 images=images,
                 max_new_tokens=request.max_new_tokens,
+                text_only=is_text_only_chat_model(CHAT_MODEL_ID),
             )
         except Exception as exc:
             logger.exception("Multimodal chat request failed")
