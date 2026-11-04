@@ -15,6 +15,7 @@ from pixelpilot.bot.keyboards import main_menu
 from pixelpilot.domain import InstancePhase, ReferenceImage
 from pixelpilot.services.image_settings import get_state
 from pixelpilot.services.orchestrator import Orchestrator
+from pixelpilot.services.vision_runtime import is_text_only_chat_model
 
 
 router = Router(name="multimodal")
@@ -161,6 +162,9 @@ async def _create_image(
 async def _reply(message: Message, prompt: str, images: tuple[ReferenceImage, ...] = ()) -> None:
     if not await _ensure_ready(message):
         return
+    if images and is_text_only_chat_model(orch().settings.chat_model_id):
+        await message.answer("🧠 النموذج المجتمعي الحالي للدردشة النصية فقط؛ فهم الصور غير متاح في هذه التجربة. يمكنك استخدام /image أو /edit لإنشاء الصور وتعديلها.")
+        return
     if len(images) > orch().settings.chat_max_images:
         await message.answer(
             f"يمكن تحليل {orch().settings.chat_max_images} صور كحد أقصى في رسالة واحدة."
@@ -242,6 +246,9 @@ async def set_mode(callback: CallbackQuery) -> None:
     if value not in MODES:
         await safe_callback_answer(callback, "وضع غير صالح", show_alert=True)
         return
+    if value == "vision" and is_text_only_chat_model(orch().settings.chat_model_id):
+        await safe_callback_answer(callback, "فهم الصور غير متاح مع نموذج الدردشة النصي الحالي", show_alert=True)
+        return
     await orch().db.set("chat.mode", value)
     await safe_callback_answer(callback, "تم اختيار الوضع")
     help_text = {
@@ -258,7 +265,7 @@ async def chat_help(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback)
     await callback.message.answer(
         "🧠 <b>طريقة الاستخدام</b>\n\n"
-        "• أرسل نصًا للدردشة أو أرسل صورة لفهمها.\n"
+        "• أرسل نصًا للدردشة. فهم الصور يتطلب نموذج دردشة متعدد الوسائط.\n"
         "• /image وصف — إنشاء صورة جديدة دون تغيير وضع الدردشة.\n"
         "• أرسل صورة ووصفها يبدأ بـ /edit لتعديلها.\n"
         "• يمكنك اختيار وضع تعديل الصور من القائمة.\n"
