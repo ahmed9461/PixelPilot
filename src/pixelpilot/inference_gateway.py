@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 TOKEN = os.environ.get("PIXELPILOT_INFERENCE_TOKEN", "")
 MODEL_ID = os.environ.get("MODEL_ID", "Qwen/Qwen-Image-2.1")
-CHAT_MODEL_ID = os.environ.get("CHAT_MODEL_ID", "lukey03/Qwen3.5-9B-abliterated")
+CHAT_MODEL_ID = os.environ.get("CHAT_MODEL_ID", "Qwen/Qwen3.5-9B")
 CHAT_MAX_IMAGES = int(os.environ.get("CHAT_MAX_IMAGES", "3"))
 MODEL_DTYPE = os.environ.get("MODEL_DTYPE", "bfloat16").strip().lower()
 MEMORY_MODE = os.environ.get("IMAGE_MEMORY_MODE", "auto").strip().lower()

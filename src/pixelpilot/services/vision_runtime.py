@@ -1,8 +1,8 @@
 """On-demand local Qwen chat/vision runtime.
 
-The default community checkpoint is text-only. The official multimodal model
-remains selectable through CHAT_MODEL_ID; neither shares GPU residency with
-the image generation/editing pipeline.
+The official multimodal checkpoint is the default. An optional community
+checkpoint is text-only; neither shares GPU residency with the image
+generation/editing pipeline.
 """
 from __future__ import annotations
 

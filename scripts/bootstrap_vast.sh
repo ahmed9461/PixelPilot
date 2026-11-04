@@ -78,7 +78,7 @@ if [[ -r /proc/1/environ ]]; then
   done < /proc/1/environ
 fi
 
-CHAT_MODEL_ID="${CHAT_MODEL_ID:-lukey03/Qwen3.5-9B-abliterated}"
+CHAT_MODEL_ID="${CHAT_MODEL_ID:-Qwen/Qwen3.5-9B}"
 
 if [[ -z "${PIXELPILOT_INFERENCE_TOKEN:-}" ]]; then
   echo "[PixelPilot] ERROR: PIXELPILOT_INFERENCE_TOKEN is unavailable" >&2

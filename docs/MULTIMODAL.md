@@ -4,11 +4,11 @@
 
 This branch changes the owner-only PixelPilot bot from *image-only* to *chat + image understanding + generation + editing*. It preserves existing Vast lifecycle, billed-time estimation, exact Offer-ID confirmation, cost guard and image settings.
 
-The current text-only community chat default is `lukey03/Qwen3.5-9B-abliterated` (Transformers / Safetensors). The official `Qwen/Qwen3.5-9B` remains selectable via `CHAT_MODEL_ID` for image understanding. The existing Qwen-Image-2.1 image pipeline is retained for editing and transparent PNG generation. It is **not** replaced by the chat model (which cannot edit pixels by itself).
+The official chat/vision default is `Qwen/Qwen3.5-9B`. The community text-only checkpoint `lukey03/Qwen3.5-9B-abliterated` remains optional via `CHAT_MODEL_ID` for explicit testing. The existing Qwen-Image-2.1 image pipeline is retained for editing and transparent PNG generation. It is **not** replaced by the chat model (which cannot edit pixels by itself).
 
 ## GPU memory strategy
 
-1. Instance boot loads the selected Qwen3.5 checkpoint for chat, then announces readiness. The community default is text-only; vision requires the official multimodal checkpoint.
+1. Instance boot loads the selected Qwen3.5 checkpoint for chat, then announces readiness. The official default supports vision; the optional community checkpoint is text-only.
 2. Chat and visual questions run on that model with a short history window.
 3. On the first image generation/edit request, the gateway releases the chat model and loads Qwen-Image-2.1 on the same GPU.
 4. When chat resumes, the worker releases the image pipeline and reloads the chat model.
@@ -31,7 +31,7 @@ Storage and traffic may result in extra charges, and speed is not measured by th
 1. Back up SQLite and your private `.env`. Never commit keys.
 2. Run all CPU/controller tests before controller deployment. The owner authorized this deployment without a new paid rental; record GPU acceptance as pending until a specific offer is approved.
 3. Install controller update. Check `OWNER_TELEGRAM_ID`, `VAST_API_KEY`, `TELEGRAM_BOT_TOKEN`.
-4. Edit an existing `.env`: `VAST_MAX_PRICE_USD_HOUR=0.70`, `CHAT_MODEL_ID=lukey03/Qwen3.5-9B-abliterated`, `CHAT_MAX_IMAGES=3`, `VAST_MIN_INET_DOWN_MBPS=1000`, `VAST_MIN_INET_UP_MBPS=500`.
+4. Edit an existing `.env`: `VAST_MAX_PRICE_USD_HOUR=0.70`, `CHAT_MODEL_ID=Qwen/Qwen3.5-9B`, `CHAT_MAX_IMAGES=3`, `VAST_MIN_INET_DOWN_MBPS=1000`, `VAST_MIN_INET_UP_MBPS=500`.
 5. Keep `PIXELPILOT_REPO_REF=main`; while a reviewed repair PR is pending, pin `PIXELPILOT_WORKER_COMMIT` to its tested full SHA.
 6. Run `pytest` and `python -m compileall -q src` on the controller.
 7. Only after explicit owner approval of the specific offer, rent a verified GPU with adequate disk and known transfer fees; verify: `/start`, normal chat, image recognition, `/image ...`, and photo caption `/edit ...`.

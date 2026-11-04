@@ -131,10 +131,10 @@ def test_gateway_only_advertises_loaded_models(monkeypatch):
     async def scenario():
         models=await g.models('Bearer test'); info=await g.health('Bearer test')
         assert [x['id'] for x in models['data']]==[g.CHAT_MODEL_ID]
-        assert info['capabilities']=={'chat':True,'vision':False,'image':False}
+        assert info['capabilities']=={'chat':True,'vision':True,'image':False}
     asyncio.run(scenario())
-    monkeypatch.setattr(g,'CHAT_MODEL_ID','Qwen/Qwen3.5-9B')
-    assert asyncio.run(g.health('Bearer test'))['capabilities']['vision'] is True
+    monkeypatch.setattr(g,'CHAT_MODEL_ID','lukey03/Qwen3.5-9B-abliterated')
+    assert asyncio.run(g.health('Bearer test'))['capabilities']['vision'] is False
 
 def test_cancelled_thread_keeps_lock_until_work_finishes():
     from pixelpilot.inference_gateway import _blocking

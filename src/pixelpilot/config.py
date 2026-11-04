@@ -63,7 +63,7 @@ class Settings(BaseSettings):
 
     # Qwen-Image-2.1 runtime.
     model_id: str = "Qwen/Qwen-Image-2.1"
-    chat_model_id: str = "lukey03/Qwen3.5-9B-abliterated"
+    chat_model_id: str = "Qwen/Qwen3.5-9B"
     chat_max_images: int = 3
     chat_max_new_tokens: int = 1024
     chat_context_turns: int = 8
