@@ -117,6 +117,9 @@ def test_text_only_chat_uses_string_messages_without_hidden_system_prompt(monkey
             return self
 
     class Tokenizer:
+        eos_token_id = 248044
+        pad_token_id = 248045
+
         def apply_chat_template(self, messages, **kwargs):
             assert kwargs["enable_thinking"] is False
             assert messages == [
@@ -135,6 +138,15 @@ def test_text_only_chat_uses_string_messages_without_hidden_system_prompt(monkey
 
         def generate(self, **kwargs):
             assert kwargs["max_new_tokens"] == 1024
+            assert kwargs["do_sample"] is True
+            assert kwargs["temperature"] == 0.7
+            assert kwargs["top_p"] == 0.8
+            assert kwargs["top_k"] == 20
+            assert kwargs["repetition_penalty"] == 1.1
+            assert kwargs["eos_token_id"] == 248044
+            assert kwargs["pad_token_id"] == 248045
+            assert kwargs["stop_strings"] == ["<|im_start|>", "\nuser\n", "\nassistant\n"]
+            assert isinstance(kwargs["tokenizer"], Tokenizer)
             return [[10, 11, 13]]
 
     assert run_chat(Model(), Tokenizer(), history=[
@@ -144,6 +156,41 @@ def test_text_only_chat_uses_string_messages_without_hidden_system_prompt(monkey
     with pytest.raises(ValueError, match="image"):
         run_chat(Model(), Tokenizer(), history=[], prompt="ما الصورة؟",
                  images=[object()], max_new_tokens=1024, text_only=True)
+
+
+def test_text_only_chat_drops_fake_conversation_before_saving_history(monkeypatch):
+    """A bad checkpoint response should not poison subsequent dialogue turns."""
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(
+        inference_mode=contextlib.nullcontext,
+    ))
+
+    class Inputs(dict):
+        def to(self, device):
+            return self
+
+    class Tokenizer:
+        eos_token_id = 248044
+        pad_token_id = 248045
+
+        def apply_chat_template(self, messages, **kwargs):
+            return Inputs(input_ids=SimpleNamespace(shape=(1, 2)))
+
+        def decode(self, ids, **kwargs):
+            return "يا ريتي... هذا مفاجئ.\nuser\nايه\nassistant\nيا ريتي... هذا مفاجئ."
+
+    class Model:
+        device = "cuda"
+
+        def generate(self, **kwargs):
+            assert kwargs["do_sample"] is True
+            assert kwargs["eos_token_id"] == 248044
+            assert kwargs["stop_strings"]
+            return [[10, 11, 13]]
+
+    actual = run_chat(Model(), Tokenizer(), history=[], prompt="ايه",
+                      images=[], max_new_tokens=1024, text_only=True)
+    assert actual == "يا ريتي... هذا مفاجئ."
+    assert "user" not in actual
 
 
 def test_gateway_declines_vision_for_community_model(monkeypatch):
