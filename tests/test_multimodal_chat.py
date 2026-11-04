@@ -9,7 +9,9 @@ import pytest
 from pixelpilot.domain import GpuOffer, ReferenceImage
 from pixelpilot.pricing import offer_quality_rank
 from pixelpilot.services.inference_client import InferenceClient, InferenceError
-from pixelpilot.services.vision_runtime import run_chat
+from pixelpilot.services.vision_runtime import (
+    COMMUNITY_TEXT_MODEL_ID, is_text_only_chat_model, load_chat_model, run_chat,
+)
 
 
 def test_chat_client_sends_image_bytes_and_uses_authenticated_endpoint(monkeypatch):
@@ -70,6 +72,94 @@ def test_vision_runtime_removes_thinking_markup(monkeypatch):
     )
     assert reply == "نعم، هذه صورة."
     assert "private scratch" not in reply
+
+
+def test_community_checkpoint_loads_with_text_only_transformers(monkeypatch):
+    """The community qwen3_5_text checkpoint needs AutoModelForCausalLM."""
+    loaded = []
+    model = SimpleNamespace(eval=lambda: None)
+
+    class FakeCausalLM:
+        @staticmethod
+        def from_pretrained(path, **kwargs):
+            loaded.append(("model", path, kwargs))
+            return SimpleNamespace(eval=lambda: model)
+
+    class FakeTokenizer:
+        @staticmethod
+        def from_pretrained(path):
+            loaded.append(("tokenizer", path))
+            return "text-tokenizer"
+
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(
+        bfloat16="bf16", cuda=SimpleNamespace(is_available=lambda: True),
+    ))
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(
+        AutoModelForCausalLM=FakeCausalLM, AutoTokenizer=FakeTokenizer,
+    ))
+    monkeypatch.setattr("pixelpilot.services.model_cache.prepare_model", lambda model_id: "/cache/community")
+    assert is_text_only_chat_model(COMMUNITY_TEXT_MODEL_ID)
+    assert not is_text_only_chat_model("Qwen/Qwen3.5-9B")
+    actual_model, tokenizer = load_chat_model(COMMUNITY_TEXT_MODEL_ID)
+    assert actual_model is model and tokenizer == "text-tokenizer"
+    assert loaded[0] == ("tokenizer", "/cache/community")
+    assert loaded[1][0:2] == ("model", "/cache/community")
+    assert loaded[1][2]["device_map"] == "auto"
+
+
+def test_text_only_chat_uses_string_messages_without_hidden_system_prompt(monkeypatch):
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(
+        inference_mode=contextlib.nullcontext,
+    ))
+
+    class Inputs(dict):
+        def to(self, device):
+            return self
+
+    class Tokenizer:
+        def apply_chat_template(self, messages, **kwargs):
+            assert kwargs["enable_thinking"] is False
+            assert messages == [
+                {"role": "user", "content": "السلام عليكم"},
+                {"role": "assistant", "content": "وعليكم السلام"},
+                {"role": "user", "content": "اشرح باختصار"},
+            ]
+            return Inputs(input_ids=SimpleNamespace(shape=(1, 2)))
+
+        def decode(self, ids, **kwargs):
+            assert ids == [13]
+            return "هذا شرح مختصر"
+
+    class Model:
+        device = "cuda"
+
+        def generate(self, **kwargs):
+            assert kwargs["max_new_tokens"] == 1024
+            return [[10, 11, 13]]
+
+    assert run_chat(Model(), Tokenizer(), history=[
+        {"role": "user", "content": "السلام عليكم"},
+        {"role": "assistant", "content": "وعليكم السلام"},
+    ], prompt="اشرح باختصار", images=[], max_new_tokens=1024, text_only=True) == "هذا شرح مختصر"
+    with pytest.raises(ValueError, match="image"):
+        run_chat(Model(), Tokenizer(), history=[], prompt="ما الصورة؟",
+                 images=[object()], max_new_tokens=1024, text_only=True)
+
+
+def test_gateway_declines_vision_for_community_model(monkeypatch):
+    from fastapi import HTTPException
+    from pixelpilot import inference_gateway as g
+    monkeypatch.setattr(g, "TOKEN", "test-token")
+    monkeypatch.setattr(g, "CHAT_MODEL_ID", COMMUNITY_TEXT_MODEL_ID)
+    async def scenario():
+        with pytest.raises(HTTPException) as exc:
+            await g.chat_completions(
+                g.ChatRequest(prompt="اشرح الصورة", images=["AA=="]),
+                authorization="Bearer test-token",
+            )
+        assert exc.value.status_code == 422
+        assert "text-only" in exc.value.detail
+    asyncio.run(scenario())
 
 
 def test_quality_rank_prefers_fast_premium_offer_under_equal_acceptable_price():

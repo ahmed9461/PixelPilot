@@ -1,29 +1,29 @@
 # PixelPilot — Personal multimodal Telegram assistant
 
-PixelPilot is an **owner-only** Telegram bot for **chat, image understanding, image creation and image editing**. A VPS runs the Telegram controller and stores recent **text** history. An on-demand Vast.ai GPU hosts both neural engines behind a bearer-token protected endpoint.
+PixelPilot is an **owner-only** Telegram bot for **chat, image creation and image editing**; image understanding is available when a multimodal chat model is selected. A VPS runs the Telegram controller and stores recent **text** history. An on-demand Vast.ai GPU hosts both neural engines behind a bearer-token protected endpoint.
 
 ## Models
 
 | Job | Default | Notes |
 | --- | --- | --- |
-| Chat / image understanding | [Qwen3.5-9B](https://huggingface.co/Qwen/Qwen3.5-9B) | Image + text and Arabic; configurable via `CHAT_MODEL_ID` |
-| Image generation / image editing | [Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1) | Up to 10 references, original/optional enhancement, PNG and transparency when supported |
+| Chat (text-only default) | [Qwen3.5-9B Abliterated](https://huggingface.co/lukey03/Qwen3.5-9B-abliterated) | Community checkpoint in Safetensors, using Transformers `AutoModelForCausalLM`; configurable via `CHAT_MODEL_ID` |
+| Image generation / image editing | [Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1) | Unchanged: up to 10 references, original/optional enhancement, PNG and transparency when supported |
 
 Both models run locally **on the rented GPU**, not via a paid LLM API. To avoid requiring two models in VRAM simultaneously, the worker **loads chat first**, unloads it when an image generation/edit is requested, then reloads chat when needed. Model switching can take time; weights remain cached on the Vast storage until the instance is destroyed.
 
-Advanced (optional): `CHAT_MODEL_ID=Qwen/Qwen3.5-27B` for larger GPUs; increase instance disk and select sufficient VRAM. The default 9B is less costly to provision and works on more offers.
+**Community test mode:** the default community chat model is **text-only**, so image understanding is unavailable and the bot reports this clearly; image generation and editing remain available through Qwen-Image-2.1. To restore vision in chat, set `CHAT_MODEL_ID=Qwen/Qwen3.5-9B` (official multimodal weights). This community checkpoint is about 18 GB on disk, is not yet GPU-validated in PixelPilot, and its refusal/quality claims are not independent benchmarks. No hidden system prompt was added. Advanced (optional): `CHAT_MODEL_ID=Qwen/Qwen3.5-27B` for larger GPUs; increase instance disk and select sufficient VRAM.
 
 ## Telegram commands and modes
 
 - Send ordinary text for **chat** with recent text context.
-- Send a picture or image document with a question for **visual understanding**. Sending without caption asks the bot to describe it.
+- **Visual understanding** requires a multimodal chat checkpoint (such as `Qwen/Qwen3.5-9B`). The text-only community default responds that image understanding is unavailable.
 - `/image a bird on a wooden bridge` creates an image without changing the mode.
 - Caption a photo with `/edit change the background to a beach`, or reply to a photo with `/edit ...`, to **edit it**.
 - Menu buttons: **Chat**, **Understand Images**, **Create Images**, **Edit Images**; image generation mode also accepts direct text prompts.
 - `/clear` deletes the recent text history. Images themselves are not saved in history.
 - Image settings preserve aspect ratio, Standard/2K presets, steps, and the optional Qwen prompt enhancer.
 
-A maximum of 3 images can be submitted at once to visual chat; the image editor accepts up to 10 references. Chat context is intentionally bounded to avoid VRAM exhaustion. The vision model's prior image pixels are **not** retained between messages, so follow-up questions rely on its previous text explanation, not the original pixels.
+When a multimodal checkpoint is selected, up to 3 images can be submitted at once to visual chat; the image editor independently accepts up to 10 references. Chat context is bounded to avoid VRAM exhaustion. Prior image pixels are **not** retained between chat messages.
 
 ## Vast.ai offers and safeguards
 
@@ -54,7 +54,7 @@ python -m pixelpilot.main
 
 For the GPU worker, `scripts/bootstrap_vast.sh` installs Diffusers/Transformers and launches `pixelpilot.inference_gateway:app` on the mapped port. The worker starts the Qwen3.5 chat model and lazily switches to the image pipeline when requested.
 
-**Existing VPS configurations:** old `.env` values override new code defaults, so explicitly change `VAST_MAX_PRICE_USD_HOUR=0.50` to `0.60` if desired, add the chat model settings, and deploy the same Git branch/ref to both controller and new worker. Pushing a commit does not restart a running VPS or upgrade an already rented worker.
+**Existing VPS configurations:** old `.env` values override code defaults. Set `CHAT_MODEL_ID=lukey03/Qwen3.5-9B-abliterated` on the VPS before renting, and ensure `PIXELPILOT_WORKER_COMMIT` is empty or points to the updated tested commit. Keep `CHAT_MAX_NEW_TOKENS=1024`. Deploy the same reviewed source to the controller and new worker; a GitHub merge does not restart the VPS or upgrade a rented worker.
 
 See [Runbook](docs/RUNBOOK.md), [Security](docs/SECURITY.md), and [the multimodal migration notes](docs/MULTIMODAL.md).
 
@@ -64,6 +64,6 @@ See [Runbook](docs/RUNBOOK.md), [Security](docs/SECURITY.md), and [the multimoda
 - **Text chat history** resides in the controller's SQLite DB. Images are processed in memory, not written into SQLite. Telegram and the hosting provider still have their respective data-handling policies.
 - The public worker endpoint currently uses HTTP by default unless HTTPS is configured; bearer authentication is **not encryption**. Use a private tunnel/reverse proxy with TLS for sensitive images. Never publish secrets in Git.
 - No automatic server destruction unless explicitly enabled in the cost guard; monitor real Vast billing.
-- Qwen3.5-9B: [Apache 2.0](https://huggingface.co/Qwen/Qwen3.5-9B). Qwen-Image-2.1: [Qwen Research License](https://huggingface.co/Qwen/Qwen-Image-2.1) — review terms, especially for commercial use.
+- Community Qwen3.5-9B Abliterated: [Apache 2.0 declared by its publisher](https://huggingface.co/lukey03/Qwen3.5-9B-abliterated). Qwen-Image-2.1: [Qwen Research License](https://huggingface.co/Qwen/Qwen-Image-2.1) — review terms, especially for commercial use.
 
 This is a code-level migration; performance and model-loading latency must still be validated against a rented GPU before declaring production readiness.

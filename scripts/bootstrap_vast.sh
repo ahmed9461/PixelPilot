@@ -9,7 +9,7 @@ RUNTIME_VERSION="pixelpilot-multimodal-tls-v2"
 
 INFERENCE_PORT="${INFERENCE_PORT:-8190}"
 MODEL_ID="${MODEL_ID:-Qwen/Qwen-Image-2.1}"
-CHAT_MODEL_ID="${CHAT_MODEL_ID:-Qwen/Qwen3.5-9B}"
+CHAT_MODEL_ID="${CHAT_MODEL_ID:-}"
 CHAT_MAX_IMAGES="${CHAT_MAX_IMAGES:-3}"
 CHAT_MAX_INPUT_TOKENS="${CHAT_MAX_INPUT_TOKENS:-8192}"
 CHAT_IMAGE_MAX_PIXELS="${CHAT_IMAGE_MAX_PIXELS:-1048576}"
@@ -77,6 +77,8 @@ if [[ -r /proc/1/environ ]]; then
     esac
   done < /proc/1/environ
 fi
+
+CHAT_MODEL_ID="${CHAT_MODEL_ID:-lukey03/Qwen3.5-9B-abliterated}"
 
 if [[ -z "${PIXELPILOT_INFERENCE_TOKEN:-}" ]]; then
   echo "[PixelPilot] ERROR: PIXELPILOT_INFERENCE_TOKEN is unavailable" >&2
