@@ -64,9 +64,10 @@ def test_link_url_safety_and_untrusted_raw_html():
 
 
 def test_long_replies_split_with_valid_entity_intersections():
-    source = "**" + ("🔥نص " * 2000) + "**"
+    repeated = ("🔥نص " * 1999) + "🔥نص"
+    source = "**" + repeated + "**"
     text, parts = _render(source)
-    assert text == "🔥نص " * 2000
+    assert text == repeated
     assert len(parts) > 1
     assert all(0 < len(p.text.encode("utf-16-le")) // 2 <= MAX_TELEGRAM_UTF16 for p in parts)
     for part in parts:
