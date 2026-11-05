@@ -46,11 +46,14 @@ class Database:
         if os.name != "nt":
             self.path.chmod(0o600)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
         return conn
 
     def _init_sync(self) -> None:
         with self._connect() as conn:
             conn.executescript(SCHEMA)
+            from pixelpilot.services.conversations import SCHEMA as CHAT_SCHEMA
+            conn.executescript(CHAT_SCHEMA)
             columns = {row[1] for row in conn.execute("PRAGMA table_info(generations)")}
             if "updated_at" not in columns:
                 conn.execute("ALTER TABLE generations ADD COLUMN updated_at TEXT")

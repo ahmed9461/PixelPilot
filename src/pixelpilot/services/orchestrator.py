@@ -24,6 +24,7 @@ from pixelpilot.services.billing import (
     sync_billing_status,
 )
 from pixelpilot.services.inference_client import InferenceClient
+from pixelpilot.services.conversations import ConversationStore
 from pixelpilot.services.vast_gateway import VastCreateRejected, VastSdkGateway, build_offer_query
 
 
@@ -61,6 +62,7 @@ class Orchestrator:
         self._inference_factory = inference_factory or self._default_inference_factory
         self._inference_lock = asyncio.Lock()
         self._chat_lock = self._inference_lock
+        self.conversations = ConversationStore(db, settings.owner_telegram_id)
         self._offers_lock = asyncio.Lock()
         self._rent_lock = asyncio.Lock()
         self._control_lock = asyncio.Lock()
@@ -754,6 +756,7 @@ class Orchestrator:
         prompt: str,
         *,
         reference_images: tuple[ReferenceImage, ...] = (),
+        conversation_id: int | None = None,
     ) -> str:
         if not prompt.strip():
             raise OrchestratorError("اكتب رسالة أو سؤالًا عن الصورة")
@@ -768,18 +771,15 @@ class Orchestrator:
             instance_id = await self.db.get("instance.id")
             if phase != InstancePhase.READY.value or not instance_id:
                 raise OrchestratorError("شغّل السيرفر قبل بدء الدردشة")
-            history_key = f"chat.history.{self.settings.owner_telegram_id}"
-            stored = await self.db.get(history_key, [])
-            turns = [
-                {"role": row["role"], "content": row["content"][:4000]}
-                for row in stored if isinstance(row, dict)
-                and row.get("role") in {"user", "assistant"}
-                and isinstance(row.get("content"), str)
-            ] if isinstance(stored, list) else []
-            history = turns[-self.settings.chat_context_turns * 2:]
+            conversation = (await self.conversations.get("conversation", conversation_id)
+                            if conversation_id is not None else await self.conversations.active())
+            context = await self.conversations.context(conversation["id"], self.settings.chat_context_turns)
+            history = context["history"]
             # Bound the payload before the worker applies its exact token cap.
-            while history and sum(len(x["content"]) for x in history) > 12000:
+            while history and sum(len(x["content"]) for x in history) + len(context["system"]) > 12000:
                 history = history[2:]
+            if context["system"]:
+                history = [{"role": "system", "content": context["system"]}] + history
             await self.db.set("inference.active", True)
             await self._touch_activity()
             try:
@@ -793,13 +793,7 @@ class Orchestrator:
                 # Images remain ephemeral: only texts and generated explanations
                 # are persisted to SQLite on the always-on controller.
                 user_text = prompt + (" [تم إرفاق صورة]" if reference_images else "")
-                await self.db.set(
-                    history_key,
-                    (history + [
-                        {"role": "user", "content": user_text[:4000]},
-                        {"role": "assistant", "content": answer[:4000]},
-                    ])[-self.settings.chat_context_turns * 2:],
-                )
+                await self.conversations.append(conversation["id"], user_text, answer)
                 await self.db.event("chat.completed", {
                     "instance_id": int(instance_id),
                     "images": len(reference_images),
@@ -813,8 +807,9 @@ class Orchestrator:
 
     async def clear_chat_history(self) -> None:
         async with self._chat_lock:
-            await self.db.set_many({f"chat.history.{self.settings.owner_telegram_id}": [], "chat.history": []})
-            await self.db.event("chat.cleared", {})
+            conversation = await self.conversations.active()
+            await self.conversations.clear(conversation["id"])
+            await self.db.event("chat.cleared", {"conversation_id": conversation["id"]})
 
     async def recover_current(self) -> None:
         await self.db.set_many({"inference.active": False, "generation.active": False})

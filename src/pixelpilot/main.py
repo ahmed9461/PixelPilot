@@ -6,9 +6,10 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import SimpleEventIsolation
 
 from pixelpilot.bot.middleware import OwnerOnlyMiddleware
-from pixelpilot.bot.routers import chat, home, servers, settings as image_settings_router
+from pixelpilot.bot.routers import chat, conversations, home, servers, settings as image_settings_router
 from pixelpilot.config import get_settings
 from pixelpilot.db import Database
 from pixelpilot.services.cost_guard import cost_guard_loop
@@ -31,19 +32,24 @@ async def main() -> None:
 
     vast = VastSdkGateway(settings.vast_api_key, worker_proxy_port=settings.inference_port)
     orchestrator = Orchestrator(settings, db, vast)
+    await orchestrator.conversations.init()
     servers.configure(orchestrator)
     chat.configure(orchestrator)
+    conversations.configure(orchestrator)
     image_settings_router.configure(orchestrator)
 
     bot = Bot(
         settings.telegram_bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-    dp = Dispatcher()
+    dp = Dispatcher(events_isolation=SimpleEventIsolation())
     dp.update.middleware(OwnerOnlyMiddleware(settings.owner_telegram_id))
+    dp.callback_query.outer_middleware(conversations.CancelDraftNavigation())
+    dp.message.outer_middleware(conversations.CancelDraftNavigation())
     dp.include_router(home.router)
     dp.include_router(servers.router)
     dp.include_router(image_settings_router.router)
+    dp.include_router(conversations.router)
     dp.include_router(chat.router)
 
     recovery_task = asyncio.create_task(
