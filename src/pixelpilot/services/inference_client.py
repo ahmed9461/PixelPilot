@@ -97,6 +97,10 @@ class InferenceClient:
     ) -> str:
         if not prompt.strip():
             raise InferenceError("Chat prompt cannot be empty")
+        if history and history[0].get("role") == "system":
+            info = await self.status()
+            if info.get("features", {}).get("system_instructions") is not True:
+                raise InferenceError("GPU worker needs an update to support system instructions")
         response = await self._request(
             "POST",
             "/v1/chat/completions",

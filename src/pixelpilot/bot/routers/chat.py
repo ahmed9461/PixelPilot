@@ -25,13 +25,15 @@ logger = logging.getLogger(__name__)
 _orchestrator: Orchestrator | None = None
 _album_messages: dict[str, list[Message]] = {}
 _album_tasks: dict[str, asyncio.Task[None]] = {}
+_album_conversations: dict[str, int] = {}
 
 MODES = {"chat", "generate", "edit", "vision"}
 
 def _error_text(exc: Exception) -> str:
     raw = str(exc).lower()
+    if "system instructions" in raw: return "عامل GPU الحالي يحتاج تحديث الكود لدعم تعليمات system؛ لن نتجاهل تعليماتك أو نغيّر العامل تلقائيًا."
     if "out of memory" in raw: return "نفدت ذاكرة GPU. استخدم الجودة القياسية أو صورًا مرجعية أقل أو GPU أكبر."
-    if "context" in raw or "too long" in raw: return "تجاوز الطلب حد السياق الآمن. قلّل النص أو عدد الصور."
+    if "context" in raw or "too long" in raw: return "تجاوز الطلب حد السياق الآمن. قلّل النص أو التعليمات المخصصة أو عدد الصور."
     if "12000" in raw: return "حد الرسالة 12000 حرف؛ قسّمها إلى رسالتين."
     if "tls" in raw or "مشفر" in raw: return "تعذر التحقق من الاتصال المشفر بخادم GPU."
     if "failed to load" in raw or "model startup" in raw: return "فشل تحميل النموذج؛ افحص مساحة القرص والتنزيل واعتمادات العامل."
@@ -161,7 +163,7 @@ async def _create_image(
     )
 
 
-async def _reply(message: Message, prompt: str, images: tuple[ReferenceImage, ...] = ()) -> None:
+async def _reply(message: Message, prompt: str, images: tuple[ReferenceImage, ...] = (), *, conversation_id: int | None = None) -> None:
     if not await _ensure_ready(message):
         return
     if images and is_text_only_chat_model(orch().settings.chat_model_id):
@@ -174,7 +176,8 @@ async def _reply(message: Message, prompt: str, images: tuple[ReferenceImage, ..
         return
     status = await message.answer("👁️ جاري فهم الصورة..." if images else "🧠 جاري التفكير...")
     try:
-        answer = await orch().chat(prompt, reference_images=images)
+        options = {"conversation_id":conversation_id} if conversation_id is not None else {}
+        answer = await orch().chat(prompt, reference_images=images, **options)
     except Exception as exc:
         logger.exception("Multimodal chat failed")
         await safe_edit_text(status,
@@ -209,6 +212,7 @@ def _edit_caption(caption: str | None) -> str | None:
 
 async def _handle_images(
     message: Message, caption: str | None, images: tuple[ReferenceImage, ...],
+    *, conversation_id: int | None = None,
 ) -> None:
     explicit_edit = _edit_caption(caption)
     mode = await _mode()
@@ -219,7 +223,11 @@ async def _handle_images(
             return
         await _create_image(message, prompt, images)
         return
-    await _reply(message, (caption or "").strip() or "اشرح لي ما الذي يظهر في الصورة بالتفصيل.", images)
+    prompt = (caption or "").strip() or "اشرح لي ما الذي يظهر في الصورة بالتفصيل."
+    if conversation_id is None:
+        await _reply(message, prompt, images)
+    else:
+        await _reply(message, prompt, images, conversation_id=conversation_id)
 
 
 async def _flush_album(group_id: str) -> None:
@@ -245,9 +253,10 @@ async def _flush_album(group_id: str) -> None:
             logger.exception("Telegram album download failed")
             await anchor.answer("❌ تعذر تحميل الصور المرجعية.")
             return
-        await _handle_images(anchor, caption, references)
+        await _handle_images(anchor, caption, references, conversation_id=_album_conversations.get(group_id))
     finally:
         _album_tasks.pop(group_id, None)
+        _album_conversations.pop(group_id, None)
 
 
 @router.callback_query(lambda q: q.data and q.data.startswith("chat:mode:"))
@@ -279,9 +288,9 @@ async def chat_help(callback: CallbackQuery) -> None:
         "• /image وصف — إنشاء صورة جديدة دون تغيير وضع الدردشة.\n"
         "• أرسل صورة ووصفها يبدأ بـ /edit لتعديلها.\n"
         "• يمكنك اختيار وضع تعديل الصور من القائمة.\n"
-        "• /clear يمسح ذاكرة الدردشة النصية.\n"
+        "• /clear يمسح رسائل المحادثة النشطة فقط.\n"
         "• إعدادات الصور تتيح التحكم بالجودة والنسبة والخطوات.\n\n"
-        "الصور لا تُحفظ في سجل المحادثة؛ يحفظ البوت نصوص آخر الرسائل فقط.",
+        "الصور لا تُحفظ في سجل المحادثة؛ تُحفظ الرسائل النصية، ويُرسل للنموذج سياق محدود من المحادثة النشطة فقط.",
         reply_markup=main_menu(),
     )
 
@@ -289,7 +298,7 @@ async def chat_help(callback: CallbackQuery) -> None:
 @router.message(F.text, Command("clear"))
 async def clear_chat(message: Message) -> None:
     await orch().clear_chat_history()
-    await message.answer("🧹 تم مسح ذاكرة الدردشة النصية.", reply_markup=main_menu())
+    await message.answer("🧹 تم مسح رسائل المحادثة النشطة فقط، مع الاحتفاظ بإعداداتها وبقية المحادثات.", reply_markup=main_menu())
 
 
 @router.message(F.text, Command("image"))
@@ -322,6 +331,7 @@ async def receive_photo(message: Message) -> None:
         group_id = f"{message.chat.id}:{message.media_group_id}"
         _album_messages.setdefault(group_id, []).append(message)
         if group_id not in _album_tasks:
+            _album_conversations[group_id] = (await orch().conversations.active())["id"]
             _album_tasks[group_id] = asyncio.create_task(
                 _flush_album(group_id), name=f"pixelpilot-album-{group_id}"
             )
@@ -343,6 +353,7 @@ async def receive_document(message: Message) -> None:
         group_id = f"{message.chat.id}:{message.media_group_id}"
         _album_messages.setdefault(group_id, []).append(message)
         if group_id not in _album_tasks:
+            _album_conversations[group_id] = (await orch().conversations.active())["id"]
             _album_tasks[group_id] = asyncio.create_task(_flush_album(group_id), name=f"pixelpilot-album-{group_id}")
         return
     try:

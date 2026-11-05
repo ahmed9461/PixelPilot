@@ -83,7 +83,7 @@ def run_chat(
     for turn in history:
         role = turn.get("role")
         text = turn.get("content")
-        if role in {"user", "assistant"} and isinstance(text, str) and text:
+        if role in {"system", "user", "assistant"} and isinstance(text, str) and text:
             content = text if text_only else [{"type": "text", "text": text}]
             messages.append({"role": role, "content": content})
 
@@ -102,10 +102,14 @@ def run_chat(
         )
         if encoded['input_ids'].shape[-1] <= budget:
             break
-        if len(messages) <= 1:
+        # Preserve user-selected system instructions and the current multimodal
+        # message. Only remove old dialogue; never silently drop instructions.
+        start = 1 if messages[0]["role"] == "system" else 0
+        if len(messages) - start <= 1:
             raise ValueError('The message and images exceed the safe context budget; shorten the message or send fewer images')
         # Never truncate image tokens or an interleaved vision sequence.
-        messages = messages[2:] if len(messages) > 2 else messages[1:]
+        end = min(start + 2, len(messages) - 1)
+        messages = messages[:start] + messages[end:]
     encoded = encoded.to(model.device)
 
     generation_kwargs: dict[str, Any] = {

@@ -162,9 +162,10 @@ def test_orchestrator_full_fake_lifecycle(tmp_path):
         reply = await orch.chat("ماذا ترى؟", reference_images=(ReferenceImage(b"x"),))
         assert "شجرة" in reply
         assert inference.chat_request[1]["images"][0].data == b"x"
-        assert await db.get("chat.history.1")
+        active = await orch.conversations.active()
+        assert (await orch.conversations.messages(active["id"]))[1] == 2
         await orch.clear_chat_history()
-        assert await db.get("chat.history.1") == []
+        assert (await orch.conversations.messages(active["id"]))[1] == 0
         assert inference.request[0] == prompt
         assert inference.request[1]["enhance_prompt"] is True
 
@@ -361,6 +362,9 @@ def test_timed_out_status_does_not_spawn_overlapping_sdk_reads(tmp_path):
                 await orch._show_instance_bounded(1)
         assert vast.calls == 1
         vast.release.set()
+        # The timeout behavior is already proven above. Allow Windows' coarse
+        # event-loop clock to deliver the released task without a 10ms race.
+        settings.vast_status_timeout_seconds = 1
         await orch._show_instance_bounded(1)
 
     asyncio.run(scenario())
@@ -759,12 +763,13 @@ def test_single_status_timeout_is_retried_during_provisioning(tmp_path):
         settings = Settings(_env_file=None, telegram_bot_token="t", owner_telegram_id=1,
                             vast_api_key="v", pixelpilot_repo_url="https://example.invalid/repo",
                             database_path=tmp_path / "db.sqlite3", vast_status_timeout_seconds=0.01,
-                            provision_poll_seconds=0.001, inference_ready_timeout_seconds=1)
+                            provision_poll_seconds=0.001, inference_ready_timeout_seconds=3)
         db = Database(settings.database_path)
         await db.init()
         await db.set("instance.id", 55)
 
         await db.set("inference.token", "test-worker-token")
+        release_probe = asyncio.Event()
 
         class SlowOnceVast(FakeVast):
             def __init__(self):
@@ -779,7 +784,7 @@ def test_single_status_timeout_is_retried_during_provisioning(tmp_path):
                 self.max_inflight = max(self.max_inflight, self.inflight)
                 try:
                     if self.probes == 1:
-                        await asyncio.sleep(0.1)
+                        await release_probe.wait()
                     return InstanceRef(instance_id=instance_id, status="running",
                                        public_ip="203.0.113.5", mapped_port=45678)
                 finally:
@@ -791,6 +796,9 @@ def test_single_status_timeout_is_retried_during_provisioning(tmp_path):
         notices = []
         async def record(notice):
             notices.append(notice)
+            if "مهلة" in notice:
+                release_probe.set()
+                settings.vast_status_timeout_seconds = 1
 
         await orch.wait_until_ready(55, progress=record)
         assert vast.max_inflight == 1  # a retry never overlaps the previous SDK call

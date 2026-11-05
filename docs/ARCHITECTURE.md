@@ -49,8 +49,16 @@ Telegram text/caption
   -> QwenImage21Pipeline
 ```
 
-There is no chat history, persona layer or tone layer. Prompt rewriting occurs only when the owner explicitly selects the official Qwen Prompt Enhancer; Original mode sends the prompt unchanged.
+Image requests do not use chat history or assistant personalities. Prompt rewriting occurs only when the owner explicitly selects the official Qwen Prompt Enhancer; Original mode sends the prompt unchanged.
 PE weights prefetch in the background after image readiness. Uncached or failed enhancement uses the original prompt; PE inference temporarily yields GPU memory and restores diffusion placement before image generation.
+
+## Persistent conversations and instructions
+
+See [CONVERSATIONS.md](CONVERSATIONS.md). The controller archives text exchanges in indexed SQLite tables, and queries only the active conversation's last configured turns for inference. The worker receives at most one leading `system` message, composed solely from owner-selected settings. Its tokenizer counts system, dialogue and current image/text tokens together; old dialogue pairs are removed first and an oversized system/current request is rejected without dropping the instructions.
+
+Persona instructions, effective traits (conversation overrides persona per trait), conversation custom instructions, persona prompt and conversation prompt are composed in that order. Identical blocks and a prompt linked twice are deduplicated. Empty settings produce no system message. Profile names/descriptions are metadata. Image generation/editing remains independent.
+
+Optimistic revisions and SQLite transactions protect edits. Aiogram event isolation serializes owner updates; manager writes also use the existing inference lock, so a conversation cannot be cleared or deleted during its response. FSM drafts are not persisted. A content-free pending-editor flag prevents an unfinished edit after restart from being sent to inference as ordinary chat text. Navigation cancels drafts; old preview nonces cannot save a newer draft.
 
 ## Reference images
 

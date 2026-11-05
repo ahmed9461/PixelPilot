@@ -49,7 +49,7 @@ class GenerationRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=12000)
-    history: list[dict[str, str]] = Field(default_factory=list, max_length=20)
+    history: list[dict[str, str]] = Field(default_factory=list, max_length=21)
     images: list[str] = Field(default_factory=list, max_length=3)
     max_new_tokens: int = Field(default=1024, ge=32, le=1024)
 
@@ -530,6 +530,7 @@ async def health(authorization: str | None = Header(default=None)) -> dict[str, 
     return {
         "status": "ok" if state.pipe is not None or state.chat_model is not None else "loading",
         "progress": cache_status(),
+        "features": {"system_instructions": True},
         "capabilities": {"chat": state.chat_model is not None, "vision": state.chat_model is not None and not is_text_only_chat_model(CHAT_MODEL_ID), "image": state.pipe is not None},
         "model": CHAT_MODEL_ID if state.active_model == "chat" else MODEL_ID,
         "active_model": state.active_model,
@@ -634,8 +635,11 @@ async def chat_completions(
         raise HTTPException(status_code=422, detail=f"At most {CHAT_MAX_IMAGES} images supported")
     if request.images and is_text_only_chat_model(CHAT_MODEL_ID):
         raise HTTPException(status_code=422, detail="The selected chat model is text-only; image understanding is unavailable")
-    if sum(len(str(turn.get("content", ""))) for turn in request.history) > 16000:
+    if sum(len(str(turn.get("content", ""))) for turn in request.history) > 25000:
         raise HTTPException(status_code=413, detail="Chat history too long")
+    roles = [turn.get("role") for turn in request.history]
+    if any(role not in {"system", "user", "assistant"} for role in roles) or "system" in roles[1:]:
+        raise HTTPException(status_code=422, detail="System instructions must be a single leading message")
 
     images: list[Any] = []
     for encoded in request.images:
@@ -664,6 +668,9 @@ async def chat_completions(
                 max_new_tokens=request.max_new_tokens,
                 text_only=is_text_only_chat_model(CHAT_MODEL_ID),
             )
+        except ValueError as exc:
+            # Input/context validation should not evict a healthy loaded model.
+            raise HTTPException(status_code=422, detail=str(exc)[:250]) from exc
         except Exception as exc:
             logger.exception("Multimodal chat request failed")
             state.chat_model = None
