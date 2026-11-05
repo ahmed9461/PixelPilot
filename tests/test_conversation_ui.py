@@ -77,9 +77,12 @@ def test_conversation_persona_prompt_workflows_dispatch(tmp_path):
             assert 'رسالة نصية' in session.messages[-1].text
             await send(text='Renamed')
             assert (await orch.conversations.active())['title'] != 'Renamed'
+            assert 'عنوان المحادثة: Renamed' in session.messages[-1].text
+            assert 'title:' not in session.messages[-1].text
             save=button('mgr:save:')
             await send(callback=save)
             assert (await orch.conversations.active())['title'] == 'Renamed'
+            assert '<code>\u200e' in session.messages[-1].text
             await send(callback=save)
             assert 'انتهت صلاحية' in session.messages[-1].text
             # Create a prompt, cancel a replacement body, then save and restore.

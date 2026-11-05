@@ -20,6 +20,8 @@ from pixelpilot.services.conversations import ConversationError, LABELS, TRAITS,
 router = Router(name="conversations")
 _orchestrator = None
 NAMES = {"conversation": "المحادثات", "persona": "الشخصيات", "prompt": "البرومبتات"}
+FIELDS = {"title":"عنوان المحادثة", "name":"الاسم", "description":"الوصف",
+          "body":"نص التعليمات", "custom":"تعليمات المحادثة"}
 
 
 class Editor(StatesGroup):
@@ -70,6 +72,11 @@ def chunks(text, size=1600):
     return [text[i:i+size] for i in range(0,len(text),size)] or ["(فارغ)"]
 
 
+def timestamp(value):
+    # Keep the ISO date/time together when embedded in Arabic RTL text.
+    return "<code>\u200e"+escape(value[:16].replace("T"," "))+" UTC\u200e</code>"
+
+
 async def show_listing(message, kind, page=0):
     rows, count, page = await store().listing(kind, page)
     active = await store().active() if kind == "conversation" else None
@@ -80,7 +87,7 @@ async def show_listing(message, kind, page=0):
         title = row.get("title", row.get("name"))
         mark = " ✅" if (active and row["id"] == active["id"]) or row["id"] == default else ""
         if kind == "conversation":
-            text += f"\n{escape(title)}{mark}\nآخر نشاط: {escape(row['updated_at'][:16].replace('T',' '))} UTC\n"
+            text += f"\n{escape(title)}{mark}\nآخر نشاط: {timestamp(row['updated_at'])}\n"
         buttons.append([(title[:45]+mark, f"open:{kind}:{row['id']}")])
     navigation = []
     if page: navigation.append(("الأحدث",f"list:{kind}:{page-1}"))
@@ -106,7 +113,7 @@ async def show_item(message, kind, item_id):
         context = await store().context(item_id)
         persona = context["persona"]
         text += f"الشخصية: {escape(persona['name']) if persona else 'بلا شخصية'}\n"
-        text += f"آخر نشاط: {escape(row['updated_at'][:16])} UTC\n"
+        text += f"آخر نشاط: {timestamp(row['updated_at'])}\n"
         buttons += [[("▶️ متابعة هذه المحادثة",f"select:{item_id}")],
                     [("📜 الرسائل السابقة",f"messages:{item_id}:0")],
                     [("✏️ إعادة التسمية",f"edit:{kind}:{item_id}:title")],
@@ -158,7 +165,11 @@ async def stage(message, state, kind, item_id, revision, values):
 async def draft_preview(message, state, page):
     data = await state.get_data()
     kind, item_id, values = data["kind"],data["item_id"],data["values"]
-    lines = [f"{key}: {value}" for key,value in values.items() if key != "traits_json"]
+    lines = [f"{FIELDS[key]}: {value}" for key,value in values.items() if key in FIELDS]
+    for key,source,label in [("persona_id","persona","الشخصية"),("prompt_id","prompt","البرومبت")]:
+        if key in values:
+            linked = await store().get(source,values[key]) if values[key] else None
+            lines.append(label+": "+(linked["name"] if linked else "بلا ارتباط"))
     if "traits_json" in values:
         lines += [f"{TRAITS[k][0]}: {LABELS[v]}" for k,v in json.loads(values["traits_json"]).items()]
     if kind == "persona":
