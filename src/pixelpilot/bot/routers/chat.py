@@ -7,11 +7,13 @@ from html import escape
 from io import BytesIO
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 from pixelpilot.bot.callbacks import safe_callback_answer, safe_edit_text
 from pixelpilot.bot.keyboards import main_menu
+from pixelpilot.bot.telegram_markdown import format_model_reply
 from pixelpilot.domain import InstancePhase, ReferenceImage
 from pixelpilot.services.image_settings import get_state
 from pixelpilot.services.orchestrator import Orchestrator
@@ -183,9 +185,17 @@ async def _reply(message: Message, prompt: str, images: tuple[ReferenceImage, ..
         await status.delete()
     except Exception:
         pass
-    # Telegram text is limited to 4096 characters; escape untrusted model output.
-    for start in range(0, len(answer), 3500):
-        await message.answer(answer[start:start + 3500], parse_mode=None)
+    # Convert model Markdown to Telegram entities; never parse untrusted HTML.
+    # Split by Telegram UTF-16 limits, preserving formatting and emoji offsets.
+    for chunk in format_model_reply(answer):
+        try:
+            await message.answer(chunk.text, entities=list(chunk.entities), parse_mode=None)
+        except TelegramBadRequest as exc:
+            # An unexpected entity error should not discard an otherwise valid reply.
+            if "parse entities" not in str(exc).lower():
+                raise
+            logger.warning("Telegram rejected model formatting; sending plain text: %s", exc)
+            await message.answer(chunk.text, parse_mode=None)
 
 
 def _edit_caption(caption: str | None) -> str | None:
